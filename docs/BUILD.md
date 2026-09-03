@@ -1,130 +1,191 @@
 # Building RetroMatch Synth
 
-RetroMatch Synth is a C++20/JUCE project. JUCE contains the VST3 SDK support required by a modern JUCE VST3 build, so you do **not** need to install Steinberg's VST3 SDK separately for this project. Audio Unit builds are macOS-only.
+RetroMatch Synth is a C++20/JUCE project. JUCE provides the VST3 integration used by this repository, so a separate Steinberg VST3 SDK checkout is not required. Audio Unit builds are macOS-only.
 
-## 1. Required tools
+## 1. Recommended Windows build
 
-For a Windows-only VST3 build you do not need Xcode. For an AU build you must use macOS/Xcode.
-
-### Windows 10/11 — VST3 + Standalone
-Install:
-
-1. **Visual Studio 2026** (preferred) or Visual Studio 2022.
-2. In Visual Studio Installer select **Desktop development with C++**. Include MSVC, a current Windows SDK, and CMake tools.
-3. **Git for Windows**.
-4. **CMake**: 3.24+ is sufficient with Visual Studio 2022. Visual Studio 2026 requires **CMake 4.2+**, because the `Visual Studio 18 2026` generator was added in CMake 4.2.
-5. Internet access for the first build, unless you already have a local JUCE 9.0.1 checkout.
-
-### Optional one-command Windows tool bootstrap
-
-On a clean Windows 11 machine, open PowerShell and run:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\setup-windows.ps1
-```
-
-This uses `winget` to install/update Git, current CMake, and Visual Studio Community with the **Desktop development with C++** workload. Restart Windows if the Visual Studio installer requests it, then open a new PowerShell window.
-
-If you already have a suitable Visual Studio C++ toolchain and only want Git/CMake:
-
-```powershell
-.\scripts\setup-windows.ps1 -SkipVisualStudio
-```
-
-Verify from PowerShell:
-
-```powershell
-cd RetroMatchSynth
-.\scripts\check-tools.ps1
-```
-
-### macOS — AU + VST3 + Standalone
-Install:
-
-1. Current **Xcode** from Apple.
-2. Xcode Command Line Tools: `xcode-select --install` if not already installed.
-3. CMake 3.24+ (Homebrew: `brew install cmake`).
-4. Git (provided by Xcode CLT or Homebrew).
-
-## 2. Easiest Windows build
-
-Open PowerShell in the project root:
+Open PowerShell in the repository root and run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\build-windows.ps1
 ```
 
-To build and run the DSP/matcher smoke suite in the same build tree:
+The build script now performs a prerequisite scan before configuring CMake. It checks:
+
+- Git for Windows;
+- CMake 3.24+;
+- compatibility between CMake and the installed Visual Studio generator;
+- Visual Studio 2022/2026 C++ Build Tools with the MSVC C++ toolchain.
+
+If something is missing, the script prints the missing components and asks:
+
+```text
+Install the missing prerequisites automatically with winget? [Y/n]
+```
+
+Only missing components are installed. The automatic C++ toolchain install uses Visual Studio Build Tools 2022 with `Microsoft.VisualStudio.Workload.VCTools` and recommended components; it does not require the full Visual Studio IDE.
+
+For unattended setup/build:
+
+```powershell
+.\scripts\build-windows.ps1 -InstallMissing -NonInteractive
+```
+
+To bypass the prerequisite scan when the environment is managed externally:
+
+```powershell
+.\scripts\build-windows.ps1 -SkipPrerequisiteCheck
+```
+
+To build and run the DSP/matcher smoke suite:
 
 ```powershell
 .\scripts\build-windows.ps1 -RunTests
 ```
 
-The script:
+To copy the VST3 to JUCE's normal plug-in destination after the build:
 
-- checks CMake and Git;
-- detects Visual Studio 2026 first, then Visual Studio 2022;
-- clones the official JUCE **9.0.1** source into `extern/JUCE` if needed;
-- configures x64 Release;
-- builds the VST3 and Standalone targets.
+```powershell
+.\scripts\build-windows.ps1 -CopyPlugin
+```
 
-Expected output:
+Expected native Windows artifacts:
 
 ```text
 build-windows/RetroMatchSynth_artefacts/Release/VST3/RetroMatch Synth.vst3
 build-windows/RetroMatchSynth_artefacts/Release/Standalone/RetroMatch Synth.exe
 ```
 
-To copy the plug-in to JUCE's normal user/system destination after build:
+## 2. JUCE handling
 
-```powershell
-.\scripts\build-windows.ps1 -CopyPlugin
-```
+If `-JuceDir` is not supplied, the Windows build checks `extern/JUCE`. If JUCE 9.0.1 is not present, it clones the official JUCE 9.0.1 repository there.
 
-Or install the `.vst3` bundle manually into the standard Windows VST3 folder:
-
-```text
-C:\Program Files\Common Files\VST3\
-```
-
-Then rescan VST3 plug-ins in Cubase, REAPER, Ableton Live, Studio One, etc.
-
-## 3. Build with an existing JUCE checkout
-
-If JUCE is already installed, avoid all network dependency:
+Use an existing checkout to avoid the network dependency:
 
 ```powershell
 .\scripts\build-windows.ps1 -JuceDir C:\dev\JUCE
 ```
 
-Or configure manually:
+Or configure CMake manually with:
 
-```powershell
-cmake -S . -B build-windows -G "Visual Studio 18 2026" -A x64 `
-  -DRETROMATCH_JUCE_DIR=C:\dev\JUCE
-cmake --build build-windows --config Release --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
+```text
+-DRETROMATCH_JUCE_DIR=/path/to/JUCE
 ```
 
-If you use Visual Studio 2022 replace the generator with `Visual Studio 17 2022`.
+## 3. Docker clean-room builds
 
-## 4. macOS universal AU/VST3 build
+Docker support is included for users who want the host machine to remain free of CMake, Git, JUCE and Visual Studio Build Tools.
 
-From Terminal:
+There are two container images because native plug-in binaries are operating-system specific:
+
+| Docker file | Container OS | Output |
+|---|---|---|
+| `Dockerfile.windows` | Windows Server Core 2022 + VS Build Tools | Windows VST3 + Windows Standalone EXE |
+| `Dockerfile` | Ubuntu 24.04 + GCC/JUCE dependencies | Linux VST3 + Linux Standalone + smoke tests |
+
+### Native Windows VST3 in Docker
+
+From Windows PowerShell:
+
+```powershell
+.\scripts\build-windows.ps1 -UseDocker
+```
+
+or directly:
+
+```powershell
+.\scripts\build-docker.ps1 -Target Windows
+```
+
+The Docker helper:
+
+1. checks whether Docker Desktop is installed;
+2. asks to install Docker Desktop with `winget` if it is missing;
+3. starts Docker Desktop when possible;
+4. checks the active container engine;
+5. switches Docker Desktop to Windows containers when required;
+6. builds a Windows Server Core image containing Visual Studio Build Tools, CMake and JUCE;
+7. compiles the Windows VST3, Standalone executable and smoke tests inside the image;
+8. copies only the release artifacts back to `dist/docker-windows-release`;
+9. removes the temporary container and, by default, the build image.
+
+The only host prerequisite for this mode is Docker Desktop and the Windows container features it requires.
+
+To automatically install Docker Desktop without prompting:
+
+```powershell
+.\scripts\build-windows.ps1 -UseDocker -InstallMissing -NonInteractive
+```
+
+Keep the large build image between runs to make subsequent builds faster:
+
+```powershell
+.\scripts\build-docker.ps1 -Target Windows -KeepImage
+```
+
+Force a completely fresh image build:
+
+```powershell
+.\scripts\build-docker.ps1 -Target Windows -NoCache
+```
+
+### Windows-container requirements
+
+Native Windows containers require a supported Windows Pro/Enterprise host and Docker Desktop installed with Windows-container support. Docker Desktop can switch container engines from the CLI with `docker desktop engine use windows`; the helper uses this command automatically.
+
+Windows Home/Education systems cannot use the native Windows-container path. On those systems use either:
+
+```powershell
+.\scripts\build-docker.ps1 -Target Linux
+```
+
+for isolated validation/Linux binaries, or GitHub Actions for native Windows binaries.
+
+The Windows image is intentionally large because Visual Studio Build Tools and the Windows SDK are installed inside it. This trades disk/download size for a clean host. The helper removes the image after exporting artifacts unless `-KeepImage` is specified.
+
+### Linux clean-room build
+
+The Ubuntu image follows JUCE's Linux dependency requirements and builds the same synth engine plus smoke tests:
+
+```powershell
+.\scripts\build-docker.ps1 -Target Linux
+```
+
+Artifacts are copied to:
+
+```text
+dist/docker-linux-release/
+```
+
+These are **Linux binaries** and will not load in a Windows DAW. The Linux image is useful for clean-room compilation, static validation, test execution and Linux VST3 output.
+
+## 4. Why Docker cannot replace every native build
+
+Containers do not make plug-in formats platform-independent.
+
+- Windows VST3/EXE requires a Windows/MSVC environment. `Dockerfile.windows` provides that using Windows containers.
+- Linux Docker builds produce Linux VST3/Standalone binaries only.
+- Audio Units still require macOS/Xcode and cannot be produced by a Windows or Linux Docker image.
+
+For a machine with Docker configured only for Linux containers, GitHub Actions is usually the simplest way to obtain native Windows and macOS outputs without installing local build toolchains.
+
+## 5. macOS universal AU/VST3 build
+
+Install Xcode, Xcode Command Line Tools, CMake 3.24+ and Git, then run:
 
 ```bash
 chmod +x scripts/build-macos.sh
 ./scripts/build-macos.sh
 ```
 
-To include and run the DSP/matcher smoke suite:
+To include the smoke suite:
 
 ```bash
 RUN_TESTS=1 ./scripts/build-macos.sh
 ```
 
-The default script requests a Universal Binary containing Apple Silicon (`arm64`) and Intel (`x86_64`). Expected artifacts:
+Expected artifacts:
 
 ```text
 build-macos/RetroMatchSynth_artefacts/Release/VST3/RetroMatch Synth.vst3
@@ -132,18 +193,29 @@ build-macos/RetroMatchSynth_artefacts/Release/AU/RetroMatch Synth.component
 build-macos/RetroMatchSynth_artefacts/Release/Standalone/RetroMatch Synth.app
 ```
 
-Typical install locations:
+## 6. Manual Windows prerequisites
 
-```text
-~/Library/Audio/Plug-Ins/VST3/
-~/Library/Audio/Plug-Ins/Components/
+If you do not want automatic installation, install:
+
+1. Visual Studio 2026 or Visual Studio 2022 / Build Tools;
+2. the C++ workload (`Microsoft.VisualStudio.Workload.VCTools` or Desktop development with C++);
+3. a current Windows SDK;
+4. Git for Windows;
+5. CMake 3.24+.
+
+Visual Studio 2026 requires a CMake version that supports the `Visual Studio 18 2026` generator. The build script detects generator compatibility instead of assuming that any installed CMake is sufficient.
+
+The older bootstrap script remains available:
+
+```powershell
+.\scripts\setup-windows.ps1
 ```
 
-For distribution outside your own Mac, Apple signing/notarization should be added. A local development build does not require a paid Apple Developer account just to compile and test locally.
+but it is no longer required for the normal build because `build-windows.ps1` performs its own checks and optional installation.
 
-## 5. Create a Windows distribution ZIP
+## 7. Create a Windows distribution ZIP
 
-After a successful Windows Release build:
+After a successful native Windows Release build:
 
 ```powershell
 .\scripts\package-windows.ps1
@@ -151,52 +223,41 @@ After a successful Windows Release build:
 
 The package is written under `dist/`.
 
-## 6. Source integrity check
+## 8. Source integrity check
 
-Before configuring JUCE you can run the dependency-free project check:
+Before configuring JUCE:
 
 ```bash
 python3 scripts/static-check.py
 ```
 
-It checks project version/languages, delimiter balance and the key v1.0 DSP/parameter/UI/matcher plumbing. GitHub Actions runs this gate before either native build job.
+This validates project version/languages, delimiter balance and important v1.0 DSP/parameter/UI/matcher plumbing. GitHub Actions runs the source gate before native build jobs.
 
-## 7. Recommended validation tools
+## 9. GitHub Actions clean-machine builds
 
-Before treating a build as release-ready:
+`.github/workflows/ci-build.yml` builds on native hosted runners and publishes:
 
-- run JUCE/Tracktion **pluginval** against the VST3;
-- scan/load in Cubase and at least one second VST3 host;
+- `RetroMatchSynth-Windows-x64` — Windows VST3 + Standalone EXE;
+- `RetroMatchSynth-macOS-Universal` — macOS VST3 + AU + Standalone app.
+
+This is the recommended fallback when local native prerequisites or Windows-container support are unavailable.
+
+## 10. Release validation
+
+Before distributing binaries:
+
+- run `pluginval` against the VST3;
+- load/scan in Cubase and at least one additional VST3 host;
 - test 44.1/48/96 kHz and buffer sizes 32–2048;
-- automate parameters from the DAW;
-- save/reload a DAW session;
+- exercise DAW automation and project recall;
 - test `.rmsynth` patch save/load;
-- test mono MIDI, chords, repeated note stealing and long FX tails;
-- on macOS validate both VST3 and AU and run `auval` for the AU.
+- test note stealing, chords and FX tails;
+- on macOS validate the AU with `auval`.
 
-Example AU validation once installed:
+See [`VERIFICATION.md`](VERIFICATION.md) for the current verification status.
 
-```bash
-auval -a | grep -i RetroMatch
-```
+## 11. Licensing notes
 
-## 8. JUCE licensing
+JUCE licensing depends on distribution and monetization. Review the current JUCE licence before shipping commercial binaries.
 
-JUCE licensing depends on how you distribute and monetize the plug-in. Review the current JUCE licence terms before publishing a commercial binary. The source build itself uses the official JUCE repository; no third-party binary SDK is embedded in this repository.
-
-## 9. Why there is no single cross-platform compiled bundle
-
-A Windows `.vst3` must be compiled with a Windows toolchain, while an Audio Unit must be compiled on macOS/Xcode. A Linux build machine cannot produce a native, properly validated AU, and this project intentionally avoids unsupported cross-compilation tricks for release artifacts.
-
-## 10. Build binaries automatically with GitHub Actions
-
-The repository contains `.github/workflows/ci-build.yml`. After you push this project to GitHub, open **Actions → Build plug-ins → Run workflow**. It builds on native hosted runners, runs the v1.0 DSP/matcher smoke tests, and publishes two downloadable workflow artifacts:
-
-- `RetroMatchSynth-Windows-x64` — VST3 + Standalone EXE;
-- `RetroMatchSynth-macOS-Universal` — AU + VST3 + Standalone app.
-
-This is also a useful way to prove that a clean machine can build the project and removes dependency on your workstation configuration.
-
-## 11. Verification notes
-
-See [`VERIFICATION.md`](VERIFICATION.md) for the static audit and the exact reason a native binary could not be emitted from the generation container.
+Docker Desktop also has its own licence/subscription terms. The Docker setup is optional; native scripts and GitHub Actions remain supported alternatives.
