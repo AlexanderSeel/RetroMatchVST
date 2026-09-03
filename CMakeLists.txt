@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(RETROMATCH_COPY_PLUGIN "Copy plug-in into the user's plug-in folder after build" OFF)
+option(RETROMATCH_VST3_AUTO_MANIFEST "Generate VST3 moduleinfo.json by executing JUCE's post-build helper" ON)
 set(RETROMATCH_JUCE_DIR "" CACHE PATH "Optional path to a local JUCE source checkout")
 
 if(RETROMATCH_JUCE_DIR AND EXISTS "${RETROMATCH_JUCE_DIR}/CMakeLists.txt")
@@ -41,6 +42,7 @@ juce_add_plugin(RetroMatchSynth
   IS_MIDI_EFFECT FALSE
   AU_MAIN_TYPE kAudioUnitType_MusicDevice
   VST3_CATEGORIES Instrument Synth
+  VST3_AUTO_MANIFEST ${RETROMATCH_VST3_AUTO_MANIFEST}
   EDITOR_WANTS_KEYBOARD_FOCUS FALSE
   COPY_PLUGIN_AFTER_BUILD ${RETROMATCH_COPY_PLUGIN})
 
@@ -50,7 +52,7 @@ target_sources(RetroMatchSynth PRIVATE
   Source/PluginProcessor.cpp
   Source/PluginEditor.cpp
   Source/Engine/SynthEngine.cpp
-    Source/Engine/ReferenceWavetable.cpp
+  Source/Engine/ReferenceWavetable.cpp
   Source/Analysis/SampleAnalyzer.cpp
   Source/Matching/OfflineRenderer.cpp
   Source/Matching/SimilarityScorer.cpp
