@@ -1,4 +1,39 @@
 #include "PluginEditor.h"
+#include <algorithm>
+
+namespace
+{
+const juce::StringArray synthOscKnobs {
+    "osc1Mix", "osc2Mix", "subMix", "noise", "ringMix", "additiveMix",
+    "masterTune", "osc2Semi", "osc2Detune", "pulseWidth"
+};
+
+const juce::StringArray synthTextureKnobs {
+    "wavetableMix", "referenceWavetableMix", "wavetablePosition", "wavetableWarp",
+    "supersawMix", "unisonDetune", "unisonSpread", "wavefold", "harmonicTilt", "oddEven"
+};
+
+const juce::StringArray fmCoreKnobs { "fmAmount", "fmRatio", "fmMix", "fmFeedback" };
+const juce::StringArray filterKnobs { "cutoff", "resonance" };
+const juce::StringArray ampKnobs { "attack", "decay", "sustain", "release", "drive", "outputGain" };
+const juce::StringArray modLfoKnobs { "lfoRate", "lfoPitch", "lfoCutoff", "lfoAmp" };
+const juce::StringArray chorusKnobs { "chorusMix", "chorusRate", "chorusDepth" };
+const juce::StringArray delayKnobs { "delayMix", "delayTime", "delayFeedback" };
+const juce::StringArray reverbKnobs { "reverbMix", "reverbSize", "reverbDamping", "stereoWidth" };
+
+juce::StringArray makeFmOperatorKnobs()
+{
+    juce::StringArray ids;
+    for (int i = 1; i <= VoiceParameters::fmOperatorCount; ++i)
+    {
+        ids.add ("fmOp" + juce::String (i) + "Ratio");
+        ids.add ("fmOp" + juce::String (i) + "Level");
+    }
+    return ids;
+}
+
+const juce::StringArray fmOperatorKnobs = makeFmOperatorKnobs();
+}
 
 RetroMatchSynthAudioProcessorEditor::MatchThread::MatchThread (RetroMatchSynthAudioProcessorEditor& ownerIn)
     : juce::Thread ("RetroMatch optimizer"), owner (ownerIn)
@@ -25,12 +60,15 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     setLookAndFeel (&laf);
 
     title.setText ("RETRO MATCH // HYBRID SYNTHESIS LAB", juce::dontSendNotification);
-    title.setFont (juce::Font (juce::FontOptions (25.0f, juce::Font::bold)));
-    title.setColour (juce::Label::textColourId, juce::Colour (0xffe2c57f));
+    title.setFont (juce::Font (juce::FontOptions (24.0f, juce::Font::bold)));
+    title.setColour (juce::Label::textColourId, juce::Colour (0xffe5c878));
+    title.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (title);
 
-    status.setText ("Drop WAV / AIFF / FLAC into the analyzer or load a reference sample.", juce::dontSendNotification);
-    status.setColour (juce::Label::textColourId, juce::Colour (0xff9fb9b0));
+    status.setText ("Drop a reference sample or use LOAD SAMPLE.", juce::dontSendNotification);
+    status.setColour (juce::Label::textColourId, juce::Colour (0xffa8bbb6));
+    status.setJustificationType (juce::Justification::centredLeft);
+    status.setMinimumHorizontalScale (0.65f);
     addAndMakeVisible (status);
 
     load.onClick = [this] { chooseFile(); };
@@ -40,22 +78,44 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     loadPatch.onClick = [this] { chooseLoadPatch(); };
     exportPreview.onClick = [this] { chooseExportPreview(); };
     for (auto* b : { &load, &match, &refine, &savePatch, &loadPatch, &exportPreview }) addAndMakeVisible (*b);
-    makeCandidates.onClick = [this] { auto bank = proc.buildCandidateBank(); status.setText ("A/B/C built: " + juce::String (bank[0].confidence*100.0f,1) + "% / " + juce::String (bank[1].confidence*100.0f,1) + "% / " + juce::String (bank[2].confidence*100.0f,1) + "%", juce::dontSendNotification); repaint(); };
+
+    makeCandidates.onClick = [this]
+    {
+        auto bank = proc.buildCandidateBank();
+        status.setText ("A/B/C: " + juce::String (bank[0].confidence * 100.0f, 1) + "% | "
+                        + juce::String (bank[1].confidence * 100.0f, 1) + "% | "
+                        + juce::String (bank[2].confidence * 100.0f, 1) + "%", juce::dontSendNotification);
+        repaint();
+    };
     candidateA.onClick = [this] { proc.selectCandidate (0); candidateMorph.setValue (0.0, juce::dontSendNotification); repaint(); };
     candidateB.onClick = [this] { proc.selectCandidate (1); candidateMorph.setValue (0.5, juce::dontSendNotification); repaint(); };
     candidateC.onClick = [this] { proc.selectCandidate (2); candidateMorph.setValue (1.0, juce::dontSendNotification); repaint(); };
     for (auto* b : { &makeCandidates, &candidateA, &candidateB, &candidateC }) addAndMakeVisible (*b);
-    candidateMorph.setSliderStyle (juce::Slider::LinearHorizontal); candidateMorph.setRange (0.0, 1.0, 0.001); candidateMorph.setValue (0.0); candidateMorph.setTextBoxStyle (juce::Slider::TextBoxRight, false, 54, 20);
-    candidateMorph.onValueChange = [this] { const float v=(float)candidateMorph.getValue(); if(v <= 0.5f) proc.morphCandidates(0,1,v*2.0f); else proc.morphCandidates(1,2,(v-0.5f)*2.0f); repaint(); };
-    candidateMorphLabel.setText ("A  ◀  MORPH  ▶  C", juce::dontSendNotification); candidateMorphLabel.setColour (juce::Label::textColourId, juce::Colour (0xffc6a865));
-    addAndMakeVisible(candidateMorph); addAndMakeVisible(candidateMorphLabel);
 
-    const juce::String lockNames[] { "LOCK PITCH", "LOCK OSC", "LOCK FM", "LOCK ENV", "LOCK FILTER", "LOCK MOD", "LOCK FX" };
+    candidateMorph.setSliderStyle (juce::Slider::LinearHorizontal);
+    candidateMorph.setRange (0.0, 1.0, 0.001);
+    candidateMorph.setValue (0.0, juce::dontSendNotification);
+    candidateMorph.setNumDecimalPlacesToDisplay (2);
+    candidateMorph.setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 20);
+    candidateMorph.onValueChange = [this]
+    {
+        const float v = (float) candidateMorph.getValue();
+        if (v <= 0.5f) proc.morphCandidates (0, 1, v * 2.0f);
+        else proc.morphCandidates (1, 2, (v - 0.5f) * 2.0f);
+        repaint();
+    };
+    candidateMorphLabel.setText ("A  <  MORPH  >  C", juce::dontSendNotification);
+    candidateMorphLabel.setColour (juce::Label::textColourId, juce::Colour (0xffd1b86e));
+    candidateMorphLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (candidateMorph);
+    addAndMakeVisible (candidateMorphLabel);
+
+    const juce::String lockNames[] { "PITCH", "OSC", "FM", "ENVELOPE", "FILTER", "MOD", "FX" };
     for (size_t i = 0; i < matchLockButtons.size(); ++i)
     {
         matchLockButtons[i] = std::make_unique<juce::TextButton> (lockNames[i]);
         matchLockButtons[i]->setClickingTogglesState (true);
-        matchLockButtons[i]->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff6b5130));
+        matchLockButtons[i]->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff5e4b2b));
         matchLockButtons[i]->onClick = [this] { syncMatchLocks(); };
         addAndMakeVisible (*matchLockButtons[i]);
     }
@@ -74,11 +134,12 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     osc1Label.setText ("OSC 1 WAVE", juce::dontSendNotification);
     osc2Label.setText ("OSC 2 WAVE", juce::dontSendNotification);
     filterLabel.setText ("FILTER MODE", juce::dontSendNotification);
-    fmAlgorithmLabel.setText ("6-OP FM ALGORITHM", juce::dontSendNotification);
+    fmAlgorithmLabel.setText ("ALGORITHM", juce::dontSendNotification);
     for (auto* l : { &osc1Label, &osc2Label, &filterLabel, &fmAlgorithmLabel })
     {
         l->setColour (juce::Label::textColourId, juce::Colour (0xffaeb9b8));
         l->setJustificationType (juce::Justification::centredLeft);
+        l->setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
         addAndMakeVisible (*l);
     }
 
@@ -86,18 +147,22 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     osc2Choice.addItemList ({ "Sine", "Saw", "Square", "Triangle", "Pulse" }, 1);
     filterChoice.addItemList ({ "Low-pass", "High-pass", "Band-pass" }, 1);
     fmAlgorithmChoice.addItemList ({ "Stack", "Dual Stack", "Triple Pair", "Star", "Branch", "Six Carriers" }, 1);
-    addAndMakeVisible (osc1Choice); addAndMakeVisible (osc2Choice); addAndMakeVisible (filterChoice); addAndMakeVisible (fmAlgorithmChoice);
+    addAndMakeVisible (osc1Choice);
+    addAndMakeVisible (osc2Choice);
+    addAndMakeVisible (filterChoice);
+    addAndMakeVisible (fmAlgorithmChoice);
     osc1Attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "osc1Wave", osc1Choice);
     osc2Attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "osc2Wave", osc2Choice);
     filterAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "filterType", filterChoice);
     fmAlgorithmAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "fmAlgorithm", fmAlgorithmChoice);
 
-    fmOperatorEditLabel.setText ("FM OPERATOR EDIT", juce::dontSendNotification);
-    fmModeLabel.setText ("FREQ MODE", juce::dontSendNotification);
+    fmOperatorEditLabel.setText ("EDIT OPERATOR", juce::dontSendNotification);
+    fmModeLabel.setText ("FREQUENCY", juce::dontSendNotification);
     for (auto* l : { &fmOperatorEditLabel, &fmModeLabel })
     {
-        l->setColour (juce::Label::textColourId, juce::Colour (0xffc6a865));
-        l->setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+        l->setColour (juce::Label::textColourId, juce::Colour (0xffc9b16d));
+        l->setFont (juce::Font (juce::FontOptions (10.5f, juce::Font::bold)));
+        l->setJustificationType (juce::Justification::centredLeft);
         addAndMakeVisible (*l);
     }
     fmOperatorEditChoice.addItemList ({ "OP 1", "OP 2", "OP 3", "OP 4", "OP 5", "OP 6" }, 1);
@@ -122,6 +187,7 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
         slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
         slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 72, 18);
         slider.setTextValueSuffix (fmDetailSuffix[i]);
+        slider.setNumDecimalPlacesToDisplay (i == 0 ? 0 : ((i == 1 || i == 2 || i == 4) ? 3 : 2));
         addAndMakeVisible (slider);
     }
 
@@ -130,9 +196,9 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
         { "ringMix", "RING", "" }, { "additiveMix", "ADDITIVE", "" }, { "wavetableMix", "WAVETABLE", "" }, { "referenceWavetableMix", "REF WT", "" }, { "wavetablePosition", "WT POSITION", "" }, { "wavetableWarp", "WT WARP", "" },
         { "supersawMix", "SUPERSAW", "" }, { "unisonDetune", "UNI DETUNE", " ct" }, { "unisonSpread", "UNI SPREAD", "" }, { "wavefold", "WAVEFOLD", "" },
         { "masterTune", "TUNE", " ct" }, { "osc2Semi", "OSC2 SEMI", " st" }, { "osc2Detune", "OSC2 FINE", " ct" }, { "pulseWidth", "PULSE", "" },
-        { "fmAmount", "PM AMOUNT", "" }, { "fmRatio", "PM RATIO", "" }, { "fmMix", "6-OP FM", "" }, { "fmFeedback", "FM FEEDBACK", "" }, { "harmonicTilt", "HARM TILT", "" }, { "oddEven", "ODD/EVEN", "" }, { "cutoff", "CUTOFF", " Hz" }, { "resonance", "RESO", "" },
+        { "fmAmount", "PM AMOUNT", "" }, { "fmRatio", "PM RATIO", " x" }, { "fmMix", "6-OP FM", "" }, { "fmFeedback", "FM FEEDBACK", "" }, { "harmonicTilt", "HARM TILT", "" }, { "oddEven", "ODD/EVEN", "" }, { "cutoff", "CUTOFF", " Hz" }, { "resonance", "RESONANCE", "" },
         { "attack", "ATTACK", " s" }, { "decay", "DECAY", " s" }, { "sustain", "SUSTAIN", "" }, { "release", "RELEASE", " s" },
-        { "lfoRate", "LFO RATE", " Hz" }, { "lfoPitch", "LFO→PITCH", " st" }, { "lfoCutoff", "LFO→FILTER", "" }, { "lfoAmp", "LFO→AMP", "" },
+        { "lfoRate", "LFO RATE", " Hz" }, { "lfoPitch", "LFO TO PITCH", " st" }, { "lfoCutoff", "LFO TO FILTER", "" }, { "lfoAmp", "LFO TO AMP", "" },
         { "drive", "DRIVE", "" }, { "chorusMix", "CHORUS", "" }, { "chorusRate", "CHR RATE", " Hz" }, { "chorusDepth", "CHR DEPTH", "" },
         { "delayMix", "DELAY", "" }, { "delayTime", "DLY TIME", " s" }, { "delayFeedback", "DLY FDBK", "" },
         { "reverbMix", "REVERB", "" }, { "reverbSize", "ROOM", "" }, { "reverbDamping", "DAMPING", "" }, { "stereoWidth", "WIDTH", "" }, { "outputGain", "OUTPUT", " dB" }
@@ -151,8 +217,8 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     {
         const auto index = juce::String (i + 1);
         modSlotLabels[(size_t) i].setText ("MOD " + index, juce::dontSendNotification);
-        modSlotLabels[(size_t) i].setColour (juce::Label::textColourId, juce::Colour (0xffc6a865));
-        modSlotLabels[(size_t) i].setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+        modSlotLabels[(size_t) i].setColour (juce::Label::textColourId, juce::Colour (0xffc9b16d));
+        modSlotLabels[(size_t) i].setFont (juce::Font (juce::FontOptions (10.5f, juce::Font::bold)));
         addAndMakeVisible (modSlotLabels[(size_t) i]);
 
         modSourceChoices[(size_t) i].addItemList (modSources, 1);
@@ -162,7 +228,8 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
 
         auto& amount = modAmountSliders[(size_t) i];
         amount.setSliderStyle (juce::Slider::LinearHorizontal);
-        amount.setTextBoxStyle (juce::Slider::TextBoxRight, false, 54, 20);
+        amount.setTextBoxStyle (juce::Slider::TextBoxRight, false, 62, 20);
+        amount.setNumDecimalPlacesToDisplay (2);
         addAndMakeVisible (amount);
 
         modSourceAttachments[(size_t) i] = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "mod" + index + "Source", modSourceChoices[(size_t) i]);
@@ -171,13 +238,103 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     }
 
     rebindFmOperatorEditor();
+    configurePages();
 
-    // setSize() invokes resized() immediately. Defer all size/resizable setup until
-    // every lazily-created control exists, especially matchLockButtons.
+    // Size changes call resized() synchronously, so do this only after all dynamic
+    // components, attachments and tab pages have been created.
     setResizable (true, true);
-    setResizeLimits (1260, 1200, 2048, 1720);
-    setSize (1500, 1240);
+    setResizeLimits (1080, 720, 2200, 1400);
+    setSize (1400, 860);
     startTimerHz (20);
+}
+
+void RetroMatchSynthAudioProcessorEditor::configureSectionLabel (juce::Label& label, const juce::String& text, juce::Component& parent)
+{
+    label.setText (text, juce::dontSendNotification);
+    label.setJustificationType (juce::Justification::centredLeft);
+    label.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+    label.setColour (juce::Label::textColourId, juce::Colour (0xffd5bd75));
+    label.setColour (juce::Label::backgroundColourId, juce::Colour (0xff141b1d));
+    parent.addAndMakeVisible (label);
+}
+
+void RetroMatchSynthAudioProcessorEditor::configurePages()
+{
+    addAndMakeVisible (tabs);
+    tabs.setTabBarDepth (36);
+    tabs.addTab ("SYNTH", juce::Colour (0xff172221), &synthPage, false);
+    tabs.addTab ("FM", juce::Colour (0xff211c16), &fmPage, false);
+    tabs.addTab ("FILTER + AMP", juce::Colour (0xff171e20), &filterAmpPage, false);
+    tabs.addTab ("MOD", juce::Colour (0xff151d20), &modPage, false);
+    tabs.addTab ("FX", juce::Colour (0xff191b20), &fxPage, false);
+    tabs.addTab ("MATCH", juce::Colour (0xff17221f), &matchPage, false);
+    tabs.setCurrentTabIndex (0);
+
+    configureSectionLabel (synthOscSection, "OSCILLATORS + PITCH", synthPage);
+    configureSectionLabel (synthTextureSection, "WAVETABLE + UNISON + HARMONICS", synthPage);
+    configureSectionLabel (fmCoreSection, "FM / PHASE MOD CORE", fmPage);
+    configureSectionLabel (fmOperatorsSection, "6-OP OVERVIEW", fmPage);
+    configureSectionLabel (fmDetailSection, "SELECTED OPERATOR DETAIL", fmPage);
+    configureSectionLabel (filterSection, "FILTER", filterAmpPage);
+    configureSectionLabel (ampSection, "AMPLITUDE + OUTPUT", filterAmpPage);
+    configureSectionLabel (modLfoSection, "LFO", modPage);
+    configureSectionLabel (modMatrixSection, "MODULATION MATRIX", modPage);
+    configureSectionLabel (fxChorusSection, "CHORUS", fxPage);
+    configureSectionLabel (fxDelaySection, "DELAY", fxPage);
+    configureSectionLabel (fxReverbSection, "REVERB + STEREO", fxPage);
+    configureSectionLabel (matchCandidatesSection, "CANDIDATES + MORPH", matchPage);
+    configureSectionLabel (matchLocksSection, "MATCH LOCKS", matchPage);
+
+    matchHelp.setText ("Load a reference on the left, build A/B/C alternatives, then lock the parts you want Refine Match to preserve.", juce::dontSendNotification);
+    matchHelp.setColour (juce::Label::textColourId, juce::Colour (0xff9fb5ae));
+    matchHelp.setJustificationType (juce::Justification::centredLeft);
+    matchHelp.setMinimumHorizontalScale (0.7f);
+    matchPage.addAndMakeVisible (matchHelp);
+
+    synthPage.addAndMakeVisible (osc1Label);
+    synthPage.addAndMakeVisible (osc1Choice);
+    synthPage.addAndMakeVisible (osc2Label);
+    synthPage.addAndMakeVisible (osc2Choice);
+
+    fmPage.addAndMakeVisible (fmAlgorithmLabel);
+    fmPage.addAndMakeVisible (fmAlgorithmChoice);
+    fmPage.addAndMakeVisible (fmOperatorEditLabel);
+    fmPage.addAndMakeVisible (fmOperatorEditChoice);
+    fmPage.addAndMakeVisible (fmModeLabel);
+    fmPage.addAndMakeVisible (fmModeChoice);
+    for (size_t i = 0; i < fmDetailSliders.size(); ++i)
+    {
+        fmPage.addAndMakeVisible (fmDetailLabels[i]);
+        fmPage.addAndMakeVisible (fmDetailSliders[i]);
+    }
+
+    filterAmpPage.addAndMakeVisible (filterLabel);
+    filterAmpPage.addAndMakeVisible (filterChoice);
+
+    for (int i = 0; i < VoiceParameters::modSlotCount; ++i)
+    {
+        modPage.addAndMakeVisible (modSlotLabels[(size_t) i]);
+        modPage.addAndMakeVisible (modSourceChoices[(size_t) i]);
+        modPage.addAndMakeVisible (modDestinationChoices[(size_t) i]);
+        modPage.addAndMakeVisible (modAmountSliders[(size_t) i]);
+    }
+
+    for (auto* b : { &makeCandidates, &candidateA, &candidateB, &candidateC }) matchPage.addAndMakeVisible (*b);
+    matchPage.addAndMakeVisible (candidateMorphLabel);
+    matchPage.addAndMakeVisible (candidateMorph);
+    for (auto& button : matchLockButtons)
+        if (button != nullptr) matchPage.addAndMakeVisible (*button);
+
+    for (const auto& id : synthOscKnobs) moveKnobToPage (id, synthPage);
+    for (const auto& id : synthTextureKnobs) moveKnobToPage (id, synthPage);
+    for (const auto& id : fmCoreKnobs) moveKnobToPage (id, fmPage);
+    for (const auto& id : fmOperatorKnobs) moveKnobToPage (id, fmPage);
+    for (const auto& id : filterKnobs) moveKnobToPage (id, filterAmpPage);
+    for (const auto& id : ampKnobs) moveKnobToPage (id, filterAmpPage);
+    for (const auto& id : modLfoKnobs) moveKnobToPage (id, modPage);
+    for (const auto& id : chorusKnobs) moveKnobToPage (id, fxPage);
+    for (const auto& id : delayKnobs) moveKnobToPage (id, fxPage);
+    for (const auto& id : reverbKnobs) moveKnobToPage (id, fxPage);
 }
 
 void RetroMatchSynthAudioProcessorEditor::rebindFmOperatorEditor()
@@ -195,6 +352,7 @@ void RetroMatchSynthAudioProcessorEditor::rebindFmOperatorEditor()
 
 RetroMatchSynthAudioProcessorEditor::~RetroMatchSynthAudioProcessorEditor()
 {
+    stopTimer();
     if (worker != nullptr)
     {
         worker->signalThreadShouldExit();
@@ -206,65 +364,293 @@ RetroMatchSynthAudioProcessorEditor::~RetroMatchSynthAudioProcessorEditor()
 void RetroMatchSynthAudioProcessorEditor::addKnob (const juce::String& id, const juce::String& name, const juce::String& suffix)
 {
     auto knob = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow);
-    knob->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 74, 18);
+    knob->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 72, 20);
     knob->setTextValueSuffix (suffix);
+    knob->setMouseDragSensitivity (180);
+
+    int decimals = 2;
+    if (suffix == " s") decimals = 3;
+    else if (suffix == " ct" || suffix == " st" || suffix == " dB") decimals = 1;
+    else if (suffix == " Hz") decimals = (id == "cutoff" ? 0 : 2);
+    else if (suffix == " x") decimals = 2;
+    knob->setNumDecimalPlacesToDisplay (decimals);
     addAndMakeVisible (*knob);
 
     auto label = std::make_unique<juce::Label>();
     label->setText (name, juce::dontSendNotification);
     label->setJustificationType (juce::Justification::centred);
-    label->setColour (juce::Label::textColourId, juce::Colour (0xffaeb7b8));
-    label->setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+    label->setColour (juce::Label::textColourId, juce::Colour (0xffb8c3c0));
+    label->setFont (juce::Font (juce::FontOptions (10.5f, juce::Font::bold)));
+    label->setMinimumHorizontalScale (0.72f);
     addAndMakeVisible (*label);
 
     attachments.push_back (std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, id, *knob));
+    knobIds.push_back (id);
     knobs.push_back (std::move (knob));
     labels.push_back (std::move (label));
 }
 
-void RetroMatchSynthAudioProcessorEditor::drawPanel (juce::Graphics& g, juce::Rectangle<float> r, const juce::String& text)
+int RetroMatchSynthAudioProcessorEditor::findKnobIndex (const juce::String& id) const
 {
-    g.setColour (juce::Colour (0xff090c0e));
-    g.fillRoundedRectangle (r, 8.0f);
-    g.setColour (juce::Colour (0xff364044));
-    g.drawRoundedRectangle (r, 8.0f, 1.0f);
-    g.setColour (juce::Colour (0xff8e9a97));
-    g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
-    g.drawText (text, r.removeFromTop (18).reduced (8, 0), juce::Justification::centredLeft);
+    for (size_t i = 0; i < knobIds.size(); ++i)
+        if (knobIds[i] == id) return (int) i;
+    return -1;
+}
+
+void RetroMatchSynthAudioProcessorEditor::moveKnobToPage (const juce::String& id, juce::Component& page)
+{
+    const int index = findKnobIndex (id);
+    if (! juce::isPositiveAndBelow (index, (int) knobs.size())) return;
+    page.addAndMakeVisible (*labels[(size_t) index]);
+    page.addAndMakeVisible (*knobs[(size_t) index]);
+}
+
+void RetroMatchSynthAudioProcessorEditor::layoutKnobGrid (const juce::StringArray& ids, juce::Rectangle<int> area, int maxColumns)
+{
+    if (ids.isEmpty() || area.isEmpty()) return;
+
+    const int count = ids.size();
+    const int suggestedColumns = juce::jmax (2, area.getWidth() / 122);
+    const int columns = juce::jmax (1, juce::jmin (count, juce::jmin (maxColumns, suggestedColumns)));
+    const int rows = (count + columns - 1) / columns;
+    const int cellW = juce::jmax (1, area.getWidth() / columns);
+    const int cellH = juce::jmax (1, area.getHeight() / rows);
+
+    for (int i = 0; i < count; ++i)
+    {
+        const int index = findKnobIndex (ids[i]);
+        if (! juce::isPositiveAndBelow (index, (int) knobs.size())) continue;
+
+        const int row = i / columns;
+        const int column = i % columns;
+        auto cell = juce::Rectangle<int> (area.getX() + column * cellW,
+                                          area.getY() + row * cellH,
+                                          column == columns - 1 ? area.getRight() - (area.getX() + column * cellW) : cellW,
+                                          cellH).reduced (4, 2);
+        labels[(size_t) index]->setBounds (cell.removeFromTop (19));
+        knobs[(size_t) index]->setBounds (cell.reduced (3, 0));
+    }
+}
+
+void RetroMatchSynthAudioProcessorEditor::layoutFmDetailGrid (juce::Rectangle<int> area)
+{
+    if (area.isEmpty()) return;
+    const int count = (int) fmDetailSliders.size();
+    const int columns = area.getWidth() >= 650 ? count : 4;
+    const int rows = (count + columns - 1) / columns;
+    const int cellW = juce::jmax (1, area.getWidth() / columns);
+    const int cellH = juce::jmax (1, area.getHeight() / rows);
+
+    for (int i = 0; i < count; ++i)
+    {
+        const int row = i / columns;
+        const int column = i % columns;
+        auto cell = juce::Rectangle<int> (area.getX() + column * cellW,
+                                          area.getY() + row * cellH,
+                                          column == columns - 1 ? area.getRight() - (area.getX() + column * cellW) : cellW,
+                                          cellH).reduced (4, 2);
+        fmDetailLabels[(size_t) i].setBounds (cell.removeFromTop (18));
+        fmDetailSliders[(size_t) i].setBounds (cell.reduced (3, 0));
+    }
+}
+
+void RetroMatchSynthAudioProcessorEditor::layoutPages()
+{
+    {
+        auto area = synthPage.getLocalBounds().reduced (14);
+        synthOscSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (6);
+
+        auto selectors = area.removeFromTop (36);
+        const int selectorW = selectors.getWidth() / 2;
+        auto osc1Area = selectors.removeFromLeft (selectorW).reduced (2, 3);
+        osc1Label.setBounds (osc1Area.removeFromLeft (86));
+        osc1Choice.setBounds (osc1Area);
+        auto osc2Area = selectors.reduced (2, 3);
+        osc2Label.setBounds (osc2Area.removeFromLeft (86));
+        osc2Choice.setBounds (osc2Area);
+        area.removeFromTop (6);
+
+        const int oscHeight = juce::jmin (240, juce::jmax (190, area.getHeight() / 2 - 16));
+        layoutKnobGrid (synthOscKnobs, area.removeFromTop (oscHeight), 5);
+        area.removeFromTop (8);
+        synthTextureSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (6);
+        layoutKnobGrid (synthTextureKnobs, area, 5);
+    }
+
+    {
+        auto area = fmPage.getLocalBounds().reduced (14);
+        fmCoreSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (6);
+
+        auto algorithmRow = area.removeFromTop (34).reduced (2, 2);
+        fmAlgorithmLabel.setBounds (algorithmRow.removeFromLeft (82));
+        fmAlgorithmChoice.setBounds (algorithmRow.removeFromLeft (juce::jmin (260, algorithmRow.getWidth())));
+        area.removeFromTop (6);
+        layoutKnobGrid (fmCoreKnobs, area.removeFromTop (105), 4);
+        area.removeFromTop (8);
+
+        fmOperatorsSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (6);
+        layoutKnobGrid (fmOperatorKnobs, area.removeFromTop (170), 6);
+        area.removeFromTop (8);
+
+        fmDetailSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (6);
+        auto detailSelectors = area.removeFromTop (34);
+        auto left = detailSelectors.removeFromLeft (juce::jmin (250, detailSelectors.getWidth() / 2)).reduced (2, 2);
+        fmOperatorEditLabel.setBounds (left.removeFromLeft (88));
+        fmOperatorEditChoice.setBounds (left);
+        auto mode = detailSelectors.removeFromLeft (juce::jmin (250, detailSelectors.getWidth())).reduced (8, 2);
+        fmModeLabel.setBounds (mode.removeFromLeft (78));
+        fmModeChoice.setBounds (mode);
+        area.removeFromTop (6);
+        layoutFmDetailGrid (area);
+    }
+
+    {
+        auto area = filterAmpPage.getLocalBounds().reduced (14);
+        filterSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (6);
+        auto filterRow = area.removeFromTop (34).reduced (2, 2);
+        filterLabel.setBounds (filterRow.removeFromLeft (92));
+        filterChoice.setBounds (filterRow.removeFromLeft (juce::jmin (300, filterRow.getWidth())));
+        area.removeFromTop (8);
+        layoutKnobGrid (filterKnobs, area.removeFromTop (175), 2);
+        area.removeFromTop (10);
+        ampSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (6);
+        layoutKnobGrid (ampKnobs, area, 3);
+    }
+
+    {
+        auto area = modPage.getLocalBounds().reduced (14);
+        modLfoSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (6);
+        layoutKnobGrid (modLfoKnobs, area.removeFromTop (165), 4);
+        area.removeFromTop (10);
+        modMatrixSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (6);
+
+        const int rowH = juce::jmax (54, area.getHeight() / VoiceParameters::modSlotCount);
+        for (int i = 0; i < VoiceParameters::modSlotCount; ++i)
+        {
+            auto row = juce::Rectangle<int> (area.getX(), area.getY() + i * rowH, area.getWidth(), rowH).reduced (4, 8);
+            modSlotLabels[(size_t) i].setBounds (row.removeFromLeft (58));
+            row.removeFromLeft (6);
+            const int choiceW = juce::jlimit (110, 170, row.getWidth() / 4);
+            modSourceChoices[(size_t) i].setBounds (row.removeFromLeft (choiceW));
+            row.removeFromLeft (8);
+            modDestinationChoices[(size_t) i].setBounds (row.removeFromLeft (choiceW + 20));
+            row.removeFromLeft (10);
+            modAmountSliders[(size_t) i].setBounds (row.withSizeKeepingCentre (row.getWidth(), juce::jmin (30, row.getHeight())));
+        }
+    }
+
+    {
+        auto area = fxPage.getLocalBounds().reduced (14);
+        const int groupHeight = juce::jmax (130, (area.getHeight() - 76) / 3);
+
+        fxChorusSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (4);
+        layoutKnobGrid (chorusKnobs, area.removeFromTop (groupHeight), 3);
+        area.removeFromTop (8);
+
+        fxDelaySection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (4);
+        layoutKnobGrid (delayKnobs, area.removeFromTop (groupHeight), 3);
+        area.removeFromTop (8);
+
+        fxReverbSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (4);
+        layoutKnobGrid (reverbKnobs, area, 4);
+    }
+
+    {
+        auto area = matchPage.getLocalBounds().reduced (16);
+        matchHelp.setBounds (area.removeFromTop (38));
+        area.removeFromTop (8);
+        matchCandidatesSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (10);
+
+        auto candidateRow = area.removeFromTop (36);
+        makeCandidates.setBounds (candidateRow.removeFromLeft (150));
+        candidateRow.removeFromLeft (10);
+        candidateA.setBounds (candidateRow.removeFromLeft (42));
+        candidateRow.removeFromLeft (6);
+        candidateB.setBounds (candidateRow.removeFromLeft (42));
+        candidateRow.removeFromLeft (6);
+        candidateC.setBounds (candidateRow.removeFromLeft (42));
+
+        area.removeFromTop (10);
+        auto morphRow = area.removeFromTop (34);
+        candidateMorphLabel.setBounds (morphRow.removeFromLeft (145));
+        candidateMorph.setBounds (morphRow.removeFromLeft (juce::jmin (430, morphRow.getWidth())));
+
+        area.removeFromTop (22);
+        matchLocksSection.setBounds (area.removeFromTop (24));
+        area.removeFromTop (10);
+
+        const int columns = juce::jlimit (2, 4, area.getWidth() / 165);
+        const int rows = ((int) matchLockButtons.size() + columns - 1) / columns;
+        const int cellW = area.getWidth() / columns;
+        const int cellH = juce::jmin (52, juce::jmax (38, area.getHeight() / juce::jmax (1, rows)));
+        for (size_t i = 0; i < matchLockButtons.size(); ++i)
+        {
+            if (matchLockButtons[i] == nullptr) continue;
+            const int row = (int) i / columns;
+            const int column = (int) i % columns;
+            matchLockButtons[i]->setBounds (area.getX() + column * cellW + 4,
+                                             area.getY() + row * cellH + 4,
+                                             cellW - 8, cellH - 8);
+        }
+    }
 }
 
 void RetroMatchSynthAudioProcessorEditor::drawAnalyzer (juce::Graphics& g, juce::Rectangle<float> display)
 {
-    g.setColour (juce::Colour (0xff061412));
-    g.fillRoundedRectangle (display, 7.0f);
-    g.setColour (juce::Colour (0xff315d53));
-    g.drawRoundedRectangle (display, 7.0f, 1.5f);
+    if (display.isEmpty()) return;
 
-    auto header = display.removeFromTop (28).reduced (12, 0);
-    g.setColour (juce::Colour (0xff63c8ae));
-    g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
-    g.drawText ("REFERENCE / RESYNTH ANALYZER", header, juce::Justification::centredLeft);
+    g.setColour (juce::Colour (0xff061412));
+    g.fillRoundedRectangle (display, 8.0f);
+    g.setColour (juce::Colour (0xff315d53));
+    g.drawRoundedRectangle (display, 8.0f, 1.5f);
+
+    auto header = display.removeFromTop (32.0f).reduced (11.0f, 0.0f);
+    g.setColour (juce::Colour (0xff67ceb4));
+    g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+    g.drawText ("REFERENCE ANALYZER", header.removeFromLeft (juce::jmax (120.0f, header.getWidth() - 80.0f)), juce::Justification::centredLeft);
+
+    if (proc.lastMatch.similarity.total > 0.0f)
+    {
+        g.setColour (juce::Colour (0xffe0c476));
+        g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        g.drawText (juce::String (proc.lastMatch.similarity.total * 100.0f, 1) + "%", header, juce::Justification::centredRight);
+    }
 
     if (! proc.currentFeatures)
     {
-        g.setColour (juce::Colour (0xff6f8c83));
-        g.drawText ("DROP REFERENCE AUDIO HERE", display, juce::Justification::centred);
+        g.setColour (juce::Colour (0xff78958c));
+        g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+        g.drawText ("DROP WAV / AIFF / FLAC HERE", display.reduced (12.0f), juce::Justification::centred);
         return;
     }
 
     const auto& ref = *proc.currentFeatures;
-    auto stats = display.removeFromTop (28).reduced (12, 0);
-    const juce::String statsText = juce::String::formatted (
-        "%s   F0 %.1fHz [%.0f%%]   CENT %.0fHz   FLAT %.2f   INH %.2f   MOTION %.2f   ATT %.3fs   WIDTH %.2f",
-        proc.loadedSampleName.toRawUTF8(), ref.fundamentalHz, ref.pitchConfidence * 100.0f,
-        ref.spectralCentroidHz, ref.spectralFlatness, ref.inharmonicity, ref.spectralMotion, ref.attackSeconds, ref.stereoWidth);
-    g.setColour (juce::Colour (0xffb7efdd));
-    g.setFont (juce::Font (juce::FontOptions (11.0f)));
-    g.drawText (statsText, stats, juce::Justification::centredLeft, true);
+    auto meta = display.removeFromTop (46.0f).reduced (10.0f, 2.0f);
+    g.setColour (juce::Colour (0xffd6e5df));
+    g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+    g.drawFittedText (proc.loadedSampleName, meta.removeFromTop (20.0f).toNearestInt(), juce::Justification::centredLeft, 1);
+    g.setColour (juce::Colour (0xff91aaa2));
+    g.setFont (juce::Font (juce::FontOptions (10.0f)));
+    const auto stats = "F0 " + juce::String (ref.fundamentalHz, 1) + " Hz   |   CENT "
+                     + juce::String (ref.spectralCentroidHz, 0) + " Hz   |   WIDTH " + juce::String (ref.stereoWidth, 2);
+    g.drawFittedText (stats, meta.toNearestInt(), juce::Justification::centredLeft, 1);
 
-    auto graph = display.reduced (12, 6);
-    auto waveArea = graph.removeFromTop (graph.getHeight() * 0.52f);
-    auto spectrumArea = graph.reduced (0, 4);
+    auto graph = display.reduced (10.0f, 7.0f);
+    auto waveArea = graph.removeFromTop (graph.getHeight() * 0.55f);
+    auto spectrumArea = graph.reduced (0.0f, 5.0f);
 
     g.setColour (juce::Colour (0xff15332d));
     g.drawHorizontalLine ((int) waveArea.getCentreY(), waveArea.getX(), waveArea.getRight());
@@ -281,6 +667,7 @@ void RetroMatchSynthAudioProcessorEditor::drawAnalyzer (juce::Graphics& g, juce:
         g.setColour (colour.withAlpha (alpha));
         g.strokePath (path, juce::PathStrokeType (1.35f));
     };
+
     drawWave (ref, juce::Colour (0xff70dfbf), 0.95f);
     if (proc.currentCandidateFeatures) drawWave (*proc.currentCandidateFeatures, juce::Colour (0xffd9b36d), 0.85f);
 
@@ -298,118 +685,70 @@ void RetroMatchSynthAudioProcessorEditor::drawAnalyzer (juce::Graphics& g, juce:
             g.fillRect (juce::Rectangle<float> (x + bandW * 0.28f, spectrumArea.getBottom() - ch, juce::jmax (1.0f, bandW * 0.44f), ch));
         }
     }
-
-    if (proc.lastMatch.similarity.total > 0.0f)
-    {
-        auto scoreBox = juce::Rectangle<float> (display.getRight() - 122.0f, display.getY() - 55.0f, 110.0f, 42.0f);
-        g.setColour (juce::Colour (0xff0a211c)); g.fillRoundedRectangle (scoreBox, 5.0f);
-        g.setColour (juce::Colour (0xffe0c476));
-        g.setFont (juce::Font (juce::FontOptions (17.0f, juce::Font::bold)));
-        g.drawText (juce::String (proc.lastMatch.similarity.total * 100.0f, 1) + "%", scoreBox, juce::Justification::centred);
-    }
 }
 
 void RetroMatchSynthAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colour (0xff090b0d));
-    auto body = getLocalBounds().toFloat().reduced (12.0f);
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2a3032), body.getTopLeft(),
-                                             juce::Colour (0xff15191b), body.getBottomLeft(), false));
-    g.fillRoundedRectangle (body, 13.0f);
-    g.setColour (juce::Colour (0xff495154));
-    g.drawRoundedRectangle (body, 13.0f, 1.0f);
+    g.fillAll (juce::Colour (0xff080b0d));
 
-    drawAnalyzer (g, juce::Rectangle<float> (28.0f, 88.0f, getWidth() - 56.0f, 190.0f));
+    auto outer = getLocalBounds().toFloat().reduced (6.0f);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff22292b), outer.getTopLeft(),
+                                             juce::Colour (0xff101416), outer.getBottomLeft(), false));
+    g.fillRoundedRectangle (outer, 12.0f);
+    g.setColour (juce::Colour (0xff3b4548));
+    g.drawRoundedRectangle (outer, 12.0f, 1.0f);
 
-    auto modFrame = juce::Rectangle<float> (24.0f, 405.0f, getWidth() - 48.0f, 108.0f);
-    drawPanel (g, modFrame, "MODULATION MATRIX // SOURCE → DESTINATION // BIPOLAR AMOUNT");
-    auto fmDetailFrame = juce::Rectangle<float> (24.0f, 522.0f, getWidth() - 48.0f, 132.0f);
-    drawPanel (g, fmDetailFrame, "FM OPERATOR DETAIL // PER-OP ENVELOPE // RATIO/FIXED // KEY & VELOCITY SCALING");
-    auto controlFrame = juce::Rectangle<float> (24.0f, 663.0f, getWidth() - 48.0f, getHeight() - 685.0f);
-    drawPanel (g, controlFrame, "HYBRID VOICE // WAVETABLE // SUPER/UNISON // WAVEFOLD // 6-OP FM // FILTER // FX");
+    g.setColour (juce::Colour (0xff30383b));
+    g.drawHorizontalLine (68, 16.0f, (float) getWidth() - 16.0f);
 
-    g.setColour (juce::Colour (0xffc6a865));
-    g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
-    g.drawText ("REFERENCE", getWidth() - 208, 105, 78, 15, juce::Justification::centredRight);
-    g.setColour (juce::Colour (0xff72d8bd)); g.fillEllipse ((float) getWidth() - 122.0f, 110.0f, 6.0f, 6.0f);
-    g.setColour (juce::Colour (0xffc6a865)); g.drawText ("SYNTH", getWidth() - 110, 105, 65, 15, juce::Justification::centredRight);
+    if (! sidebarBounds.isEmpty())
+    {
+        auto side = sidebarBounds.toFloat();
+        g.setColour (juce::Colour (0xff101719));
+        g.fillRoundedRectangle (side, 9.0f);
+        g.setColour (juce::Colour (0xff293538));
+        g.drawRoundedRectangle (side, 9.0f, 1.0f);
+        drawAnalyzer (g, analyzerBounds.toFloat());
+    }
 }
 
 void RetroMatchSynthAudioProcessorEditor::resized()
 {
-    title.setBounds (30, 22, getWidth() - 60, 34);
-    status.setBounds (30, 56, getWidth() - 60, 24);
+    auto bounds = getLocalBounds().reduced (14);
+    auto header = bounds.removeFromTop (48);
 
-    const int buttonY = 292;
-    load.setBounds (34, buttonY, 130, 34);
-    match.setBounds (172, buttonY, 130, 34);
-    refine.setBounds (310, buttonY, 140, 34);
-    savePatch.setBounds (466, buttonY, 120, 34);
-    loadPatch.setBounds (594, buttonY, 120, 34);
-    exportPreview.setBounds (722, buttonY, 118, 34);
-    progressBar.setBounds (852, buttonY + 3, getWidth() - 886, 28);
-    makeCandidates.setBounds (34, buttonY + 42, 120, 28); candidateA.setBounds (162, buttonY + 42, 34, 28); candidateB.setBounds (201, buttonY + 42, 34, 28); candidateC.setBounds (240, buttonY + 42, 34, 28);
-    candidateMorphLabel.setBounds (286, buttonY + 42, 126, 28); candidateMorph.setBounds (414, buttonY + 42, 260, 28);
+    auto patchActions = header.removeFromRight (232);
+    loadPatch.setBounds (patchActions.removeFromRight (112).reduced (2, 7));
+    savePatch.setBounds (patchActions.removeFromRight (112).reduced (2, 7));
+    title.setBounds (header);
 
-    const int lockY = 370;
-    const int lockW = juce::jmax (92, juce::jmin (120, (getWidth() - 76) / (int) matchLockButtons.size()));
-    for (size_t i = 0; i < matchLockButtons.size(); ++i)
-        if (matchLockButtons[i] != nullptr)
-            matchLockButtons[i]->setBounds (34 + (int) i * (lockW + 6), lockY, lockW, 25);
+    bounds.removeFromTop (10);
+    const int sidebarWidth = juce::jlimit (320, 430, (int) std::round (bounds.getWidth() * 0.28));
+    sidebarBounds = bounds.removeFromLeft (sidebarWidth);
+    bounds.removeFromLeft (12);
+    tabs.setBounds (bounds);
 
-    const int choiceY = 408;
-    const int choiceW = juce::jmax (200, (getWidth() - 100) / 4);
-    osc1Label.setBounds (40, choiceY, 90, 22); osc1Choice.setBounds (132, choiceY, choiceW - 112, 24);
-    osc2Label.setBounds (40 + choiceW, choiceY, 90, 22); osc2Choice.setBounds (132 + choiceW, choiceY, choiceW - 112, 24);
-    filterLabel.setBounds (40 + choiceW * 2, choiceY, 90, 22); filterChoice.setBounds (132 + choiceW * 2, choiceY, choiceW - 112, 24);
-    fmAlgorithmLabel.setBounds (40 + choiceW * 3, choiceY, 130, 22); fmAlgorithmChoice.setBounds (174 + choiceW * 3, choiceY, choiceW - 154, 24);
+    auto side = sidebarBounds.reduced (12);
+    const int analyzerHeight = juce::jlimit (240, 360, side.getHeight() - 210);
+    analyzerBounds = side.removeFromTop (analyzerHeight);
+    side.removeFromTop (10);
 
-    const int modTop = 468;
-    const int modColumnWidth = (getWidth() - 84) / VoiceParameters::modSlotCount;
-    for (int i = 0; i < VoiceParameters::modSlotCount; ++i)
-    {
-        const int x = 38 + i * modColumnWidth;
-        modSlotLabels[(size_t) i].setBounds (x, modTop, 46, 22);
-        modSourceChoices[(size_t) i].setBounds (x + 50, modTop, juce::jmax (82, modColumnWidth / 3), 24);
-        modDestinationChoices[(size_t) i].setBounds (x + 55 + juce::jmax (82, modColumnWidth / 3), modTop,
-                                                      juce::jmax (92, modColumnWidth / 3), 24);
-        modAmountSliders[(size_t) i].setBounds (x + 50, modTop + 31, modColumnWidth - 62, 24);
-    }
+    auto row = side.removeFromTop (36);
+    const int half = row.getWidth() / 2;
+    load.setBounds (row.removeFromLeft (half).reduced (2, 1));
+    match.setBounds (row.reduced (2, 1));
+    side.removeFromTop (7);
 
-    const int detailY = 584;
-    fmOperatorEditLabel.setBounds (38, detailY, 108, 22);
-    fmOperatorEditChoice.setBounds (146, detailY, 92, 24);
-    fmModeLabel.setBounds (250, detailY, 72, 22);
-    fmModeChoice.setBounds (322, detailY, 94, 24);
-    const int detailStartX = 430;
-    const int detailAvailableW = getWidth() - detailStartX - 42;
-    const int detailCellW = detailAvailableW / (int) fmDetailSliders.size();
-    for (size_t i = 0; i < fmDetailSliders.size(); ++i)
-    {
-        const int x = detailStartX + (int) i * detailCellW;
-        fmDetailLabels[i].setBounds (x, detailY - 2, detailCellW, 18);
-        fmDetailSliders[i].setBounds (x + 6, detailY + 15, detailCellW - 12, 76);
-    }
+    row = side.removeFromTop (36);
+    refine.setBounds (row.removeFromLeft (half).reduced (2, 1));
+    exportPreview.setBounds (row.reduced (2, 1));
+    side.removeFromTop (8);
 
-    const int cols = 9;
-    const int rows = juce::jmax (1, ((int) knobs.size() + cols - 1) / cols);
-    const int left = 34;
-    const int top = 726;
-    const int availableW = getWidth() - 68;
-    const int availableH = getHeight() - top - 28;
-    const int cellW = availableW / cols;
-    const int cellH = juce::jmax (64, availableH / rows);
+    progressBar.setBounds (side.removeFromTop (25).reduced (2, 1));
+    side.removeFromTop (6);
+    status.setBounds (side.removeFromTop (juce::jmax (30, side.getHeight())).reduced (2, 0));
 
-    for (size_t i = 0; i < knobs.size(); ++i)
-    {
-        const int row = (int) i / cols;
-        const int col = (int) i % cols;
-        const int x = left + col * cellW;
-        const int y = top + row * cellH;
-        labels[i]->setBounds (x, y, cellW, 18);
-        knobs[i]->setBounds (x + 8, y + 17, cellW - 16, cellH - 20);
-    }
-
+    layoutPages();
 }
 
 void RetroMatchSynthAudioProcessorEditor::chooseFile()
@@ -423,8 +762,7 @@ void RetroMatchSynthAudioProcessorEditor::chooseFile()
         const auto file = c.getResult();
         if (! file.existsAsFile()) return;
         const bool ok = safe->proc.loadReferenceSample (file);
-        safe->status.setText (ok ? "Reference analyzed. QUICK MATCH seeds the patch; REFINE MATCH runs the closed-loop optimizer."
-                                 : "Could not analyze this file.", juce::dontSendNotification);
+        safe->status.setText (ok ? "Reference ready. Quick Match or Refine Match." : "Could not analyze this file.", juce::dontSendNotification);
         safe->repaint();
     });
 }
@@ -434,8 +772,7 @@ void RetroMatchSynthAudioProcessorEditor::filesDropped (const juce::StringArray&
     if (files.isEmpty()) return;
     if (worker != nullptr && worker->isThreadRunning()) return;
     const auto file = juce::File (files[0]);
-    if (proc.loadReferenceSample (file))
-        status.setText ("Reference analyzed. Ready to match.", juce::dontSendNotification);
+    if (proc.loadReferenceSample (file)) status.setText ("Reference ready. Quick Match or Refine Match.", juce::dontSendNotification);
     repaint();
 }
 
@@ -443,7 +780,7 @@ void RetroMatchSynthAudioProcessorEditor::applyQuickMatch()
 {
     const auto result = proc.fitReference();
     status.setText (result.confidence > 0.0f
-                        ? "Quick match applied — rendered similarity " + juce::String (result.similarity.total * 100.0f, 1) + "%"
+                        ? "Quick Match: " + juce::String (result.similarity.total * 100.0f, 1) + "% similarity"
                         : "Load a reference first.",
                     juce::dontSendNotification);
     repaint();
@@ -465,8 +802,8 @@ void RetroMatchSynthAudioProcessorEditor::startRefine()
     match.setEnabled (false);
     load.setEnabled (false);
     loadPatch.setEnabled (false);
-    for (auto& b : matchLockButtons) b->setEnabled (false);
-    status.setText ("Refining: rendering and comparing candidate synth patches…", juce::dontSendNotification);
+    for (auto& b : matchLockButtons) if (b != nullptr) b->setEnabled (false);
+    status.setText ("Refining candidate population...", juce::dontSendNotification);
     worker = std::make_unique<MatchThread> (*this);
     worker->startThread();
 }
@@ -479,10 +816,10 @@ void RetroMatchSynthAudioProcessorEditor::finishRefine (MatchResult result)
     match.setEnabled (true);
     load.setEnabled (true);
     loadPatch.setEnabled (true);
-    for (auto& b : matchLockButtons) b->setEnabled (true);
+    for (auto& b : matchLockButtons) if (b != nullptr) b->setEnabled (true);
     progressBar.setVisible (false);
-    status.setText ("Refine complete — " + juce::String (result.evaluatedCandidates)
-                    + " candidates, similarity " + juce::String (result.similarity.total * 100.0f, 1) + "%",
+    status.setText ("Refine: " + juce::String (result.evaluatedCandidates) + " candidates | "
+                    + juce::String (result.similarity.total * 100.0f, 1) + "% similarity",
                     juce::dontSendNotification);
     repaint();
 }
@@ -515,14 +852,16 @@ void RetroMatchSynthAudioProcessorEditor::chooseLoadPatch()
     });
 }
 
-
 void RetroMatchSynthAudioProcessorEditor::chooseExportPreview()
 {
     auto chooser = std::make_shared<juce::FileChooser> ("Export synth preview", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("RetroMatch-Preview.wav"), "*.wav");
     juce::Component::SafePointer<RetroMatchSynthAudioProcessorEditor> safe (this);
-    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles, [safe, chooser] (const juce::FileChooser& c)
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safe, chooser] (const juce::FileChooser& c)
     {
-        if (safe == nullptr) return; auto file = c.getResult(); if (file.getFileExtension().isEmpty()) file = file.withFileExtension (".wav");
+        if (safe == nullptr) return;
+        auto file = c.getResult();
+        if (file.getFileExtension().isEmpty()) file = file.withFileExtension (".wav");
         safe->status.setText (safe->proc.exportPreviewWav (file) ? "Preview exported: " + file.getFileName() : "Could not export preview.", juce::dontSendNotification);
     });
 }
