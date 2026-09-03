@@ -23,9 +23,6 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     : AudioProcessorEditor (&p), proc (p)
 {
     setLookAndFeel (&laf);
-    setSize (1500, 1240);
-    setResizable (true, true);
-    setResizeLimits (1260, 1200, 2048, 1720);
 
     title.setText ("RETRO MATCH // HYBRID SYNTHESIS LAB", juce::dontSendNotification);
     title.setFont (juce::Font (juce::FontOptions (25.0f, juce::Font::bold)));
@@ -174,6 +171,12 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     }
 
     rebindFmOperatorEditor();
+
+    // setSize() invokes resized() immediately. Defer all size/resizable setup until
+    // every lazily-created control exists, especially matchLockButtons.
+    setResizable (true, true);
+    setResizeLimits (1260, 1200, 2048, 1720);
+    setSize (1500, 1240);
     startTimerHz (20);
 }
 
@@ -351,7 +354,8 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     const int lockY = 370;
     const int lockW = juce::jmax (92, juce::jmin (120, (getWidth() - 76) / (int) matchLockButtons.size()));
     for (size_t i = 0; i < matchLockButtons.size(); ++i)
-        matchLockButtons[i]->setBounds (34 + (int) i * (lockW + 6), lockY, lockW, 25);
+        if (matchLockButtons[i] != nullptr)
+            matchLockButtons[i]->setBounds (34 + (int) i * (lockW + 6), lockY, lockW, 25);
 
     const int choiceY = 408;
     const int choiceW = juce::jmax (200, (getWidth() - 100) / 4);
