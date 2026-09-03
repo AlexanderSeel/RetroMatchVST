@@ -44,6 +44,7 @@ private:
     public:
         CandidateButton (juce::String codeIn, juce::String familyIn)
             : juce::Button (codeIn), code (std::move (codeIn)), family (std::move (familyIn)) {}
+        CandidateButton (const CandidateButton&);
 
         void setResult (const MatchResult* newResult, bool isSelected);
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
