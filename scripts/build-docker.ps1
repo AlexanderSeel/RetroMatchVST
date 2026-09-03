@@ -187,16 +187,33 @@ Invoke-DockerMonitored -Arguments $buildArgs -Activity "$Target Docker image bui
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $container = "retromatch-export-$([guid]::NewGuid().ToString('N').Substring(0, 10))"
+$stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) "retromatch-export-$([guid]::NewGuid().ToString('N'))"
+$stagedOut = Join-Path $stagingRoot "out"
+New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
 try {
     & docker create --name $container $image | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not create export container." }
 
-    $containerPath = if ($Target -eq "Windows") { "${container}:C:/out/." } else { "${container}:/out/." }
-    & docker cp $containerPath $OutputDir
+    # Do not use C:/out/. for Windows containers. Docker resolves that to a
+    # Windows volume path ending in '\\out\\.', which CreateFile rejects.
+    # Copy the complete out directory to a staging folder, then move its
+    # contents into the requested artifact directory.
+    $containerPath = if ($Target -eq "Windows") { "${container}:C:/out" } else { "${container}:/out" }
+    & docker cp $containerPath $stagingRoot
     if ($LASTEXITCODE -ne 0) { throw "Could not copy build artifacts from the container." }
+    if (-not (Test-Path $stagedOut)) { throw "Docker artifact export completed but the staged 'out' directory was not created." }
+
+    Get-ChildItem -LiteralPath $stagedOut -Force | ForEach-Object {
+        $destination = Join-Path $OutputDir $_.Name
+        if (Test-Path -LiteralPath $destination) {
+            Remove-Item -LiteralPath $destination -Recurse -Force
+        }
+        Move-Item -LiteralPath $_.FullName -Destination $OutputDir -Force
+    }
 }
 finally {
     & docker rm -f $container *> $null
+    Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 if (-not $KeepImage) {
