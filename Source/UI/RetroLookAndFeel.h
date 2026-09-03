@@ -34,8 +34,6 @@ public:
         const auto centre = b.getCentre();
         const float angle = start + pos * (end - start);
 
-        // Soft hardware-style shadow. The knob body is always derived from a square,
-        // so it remains circular regardless of the cell aspect ratio.
         g.setColour (juce::Colour (0x90000000));
         g.fillEllipse (b.translated (1.5f, 3.0f));
 
@@ -92,7 +90,35 @@ public:
         g.fillRoundedRectangle (bounds.translated (0.0f, 2.0f), 5.0f);
         g.setColour (c);
         g.fillRoundedRectangle (bounds, 5.0f);
-        g.setColour (button.getToggleState() ? juce::Colour (0xffb9974f) : juce::Colour (0xff4a585c));
-        g.drawRoundedRectangle (bounds, 5.0f, 1.0f);
+
+        const bool active = button.getToggleState() || down;
+        const auto ledColour = active ? juce::Colour (0xff61d8bd)
+                                      : (highlighted ? juce::Colour (0xffd6b45e) : juce::Colour (0xff44514f));
+        g.setColour (active ? juce::Colour (0x4061d8bd) : juce::Colour (0x18000000));
+        g.fillEllipse (bounds.getX() + 7.0f, bounds.getCentreY() - 7.0f, 14.0f, 14.0f);
+        g.setColour (ledColour);
+        g.fillEllipse (bounds.getX() + 11.0f, bounds.getCentreY() - 3.0f, 6.0f, 6.0f);
+
+        g.setColour (active ? juce::Colour (0xff78bda9) : (highlighted ? juce::Colour (0xff9d844b) : juce::Colour (0xff4a585c)));
+        g.drawRoundedRectangle (bounds, 5.0f, active ? 1.5f : 1.0f);
+    }
+
+    void drawButtonText (juce::Graphics& g, juce::TextButton& button,
+                         bool highlighted, bool down) override
+    {
+        auto font = getTextButtonFont (button, button.getHeight());
+        font.setHeight (juce::jlimit (9.0f, 13.0f, (float) button.getHeight() * 0.38f));
+        font.setBold (true);
+        g.setFont (font);
+
+        auto textColour = button.findColour (button.getToggleState() ? juce::TextButton::textColourOnId
+                                                                     : juce::TextButton::textColourOffId);
+        if (! button.isEnabled()) textColour = textColour.withMultipliedAlpha (0.42f);
+        else if (highlighted || down) textColour = textColour.brighter (0.10f);
+        g.setColour (textColour);
+
+        const int leftInset = button.getWidth() >= 76 ? 22 : 5;
+        g.drawFittedText (button.getButtonText(), button.getLocalBounds().withTrimmedLeft (leftInset).reduced (4, 2),
+                          juce::Justification::centred, 1);
     }
 };
