@@ -76,6 +76,20 @@ int main()
     target.chorusMix = 0.12f;
     target.stereoWidth = 1.2f;
 
+    // Matching compares multiple offline renders of the same candidate. Noise and
+    // random-note modulation must therefore be reproducible for a stable score.
+    auto deterministicProbe = target;
+    deterministicProbe.noiseMix = 0.12f;
+    deterministicProbe.modSlots[2] = { (int) ModSource::randomNote, (int) ModDestination::cutoff, 0.08f };
+    const auto probeA = OfflineRenderer::renderPatch (deterministicProbe, sampleRate, 0.5f, fundamental, 128);
+    const auto probeB = OfflineRenderer::renderPatch (deterministicProbe, sampleRate, 0.5f, fundamental, 128);
+    float maxProbeDifference = 0.0f;
+    for (int ch = 0; ch < probeA.getNumChannels(); ++ch)
+        for (int i = 0; i < probeA.getNumSamples(); ++i)
+            maxProbeDifference = std::max (maxProbeDifference, std::abs (probeA.getSample (ch, i) - probeB.getSample (ch, i)));
+    if (maxProbeDifference > 1.0e-7f)
+        return fail ("offline renderer is not deterministic");
+
     auto referenceAudio = OfflineRenderer::renderPatch (target, sampleRate, 0.9f, fundamental, 128);
     const auto reference = SampleAnalyzer::analyzeBuffer (referenceAudio, sampleRate, fundamental);
 
@@ -101,7 +115,11 @@ int main()
     if (! std::isfinite (quick.similarity.total) || ! std::isfinite (refined.similarity.total))
         return fail ("matcher produced a non-finite score");
     if (refined.similarity.total + 1.0e-6f < quick.similarity.total)
-        return fail ("population optimizer regressed below its seed candidate");
+    {
+        std::cerr << "FAILED: population optimizer regressed below its seed candidate; quick="
+                  << quick.similarity.total << " refined=" << refined.similarity.total << '\n';
+        return 1;
+    }
     if (refined.evaluatedCandidates < 2)
         return fail ("optimizer did not evaluate a candidate population");
 
