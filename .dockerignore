@@ -1,0 +1,12 @@
+.git
+.github
+build*
+dist
+extern
+.vs
+.idea
+.vscode
+*.zip
+*.sha256
+.DS_Store
+Thumbs.db
