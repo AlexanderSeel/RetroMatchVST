@@ -78,7 +78,7 @@ required_tokens = {
     'variant cards': ['CandidateButton', 'NATURAL', 'FM / HARMONIC', 'WT / TEXTURE', 'createLocalVariants', 'finishVariantSearch'],
     'virtual keyboard': ['MidiKeyboardComponent', 'handleNoteOn', 'handleNoteOff', 'KEYS'],
     'AI provider settings': ['OpenAI', 'Google Gemini', 'OpenAI-compatible / Azure', 'GitHub Copilot bridge', 'SESSION API KEY'],
-    'AI local scoring': ['SoundMatcher::evaluateFit', 'features only', 'variants'],
+    'AI local scoring': ['buildPrompt', 'postJson', 'SoundMatcher::evaluateFit', 'generateVariants'],
     'v1 reference wavetable': ['referenceWavetableMix', 'ReferenceWavetableExtractor', 'referenceWavetable'],
     'v1 candidate bank': ['buildCandidateBank', 'morphCandidates', 'selectCandidate'],
 }
