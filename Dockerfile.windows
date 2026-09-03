@@ -16,12 +16,12 @@ RUN New-Item -ItemType Directory -Force C:\TEMP | Out-Null; Invoke-WebRequest -U
 # when needed, then verify the toolset before attempting project configuration.
 RUN $cl = Get-ChildItem 'C:\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe' -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1; if (-not $cl) { Write-Host 'MSVC compiler was not installed by the workload; adding Microsoft.VisualStudio.Component.VC.Tools.x86.x64 explicitly...'; Invoke-WebRequest -UseBasicParsing https://aka.ms/vs/17/release/vs_buildtools.exe -OutFile C:\TEMP\vs_buildtools.exe; $p = Start-Process C:\TEMP\vs_buildtools.exe -ArgumentList '--quiet','--wait','--norestart','--nocache','--installPath','C:\BuildTools','--add','Microsoft.VisualStudio.Component.VC.Tools.x86.x64' -Wait -PassThru; if ($p.ExitCode -notin @(0, 3010)) { exit $p.ExitCode }; Remove-Item C:\TEMP\vs_buildtools.exe -Force; $cl = Get-ChildItem 'C:\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe' -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1 }; if (-not $cl) { throw 'MSVC x64 compiler (cl.exe) is still missing after installing Microsoft.VisualStudio.Component.VC.Tools.x86.x64.' }; $vcTargets='C:\BuildTools\MSBuild\Microsoft\VC\v170\Microsoft.Cpp.Default.props'; if (-not (Test-Path $vcTargets)) { throw 'Visual C++ MSBuild targets are missing.' }; $version=(Get-Item $cl.FullName).VersionInfo.FileVersion; Write-Host 'MSVC compiler ready:' $cl.FullName 'version' $version
 
-# Server Core LTSC 2022 is Windows build 20348. Current VS 2022 Build Tools can
-# otherwise select Windows SDK 10.0.26100, whose rc.exe has been observed to
-# crash while linking even a CMake compiler probe in this LTSC 2022 container.
-# Install the matching SDK explicitly; the build script pins VsDevCmd to it.
+# Server Core LTSC 2022 is Windows build 20348. Newer SDK 26100 rc.exe has been
+# observed to crash in this container. Install Microsoft's serviced 20348 SDK
+# using the standalone SDK installer so headers, libraries and tools are added
+# together. The fwlink currently resolves to the serviced 10.0.20348.3330 SDK.
 ARG WINSDK_VERSION=10.0.20348.0
-RUN $sdkRc="C:\Program Files (x86)\Windows Kits\10\bin\${env:WINSDK_VERSION}\x64\rc.exe"; if (-not (Test-Path $sdkRc)) { Write-Host 'Installing Windows SDK 10.0.20348.0 for the LTSC 2022 container...'; Invoke-WebRequest -UseBasicParsing https://aka.ms/vs/17/release/vs_buildtools.exe -OutFile C:\TEMP\vs_buildtools.exe; $p = Start-Process C:\TEMP\vs_buildtools.exe -ArgumentList '--quiet','--wait','--norestart','--nocache','--installPath','C:\BuildTools','--add','Microsoft.VisualStudio.Component.Windows10SDK.20348' -Wait -PassThru; if ($p.ExitCode -notin @(0, 3010)) { exit $p.ExitCode }; Remove-Item C:\TEMP\vs_buildtools.exe -Force }; if (-not (Test-Path $sdkRc)) { throw 'Windows SDK 10.0.20348.0 resource compiler was not installed.' }; Write-Host 'Pinned Windows SDK resource compiler:' $sdkRc
+RUN $sdkRoot='C:\Program Files (x86)\Windows Kits\10'; $sdkHeader=Join-Path $sdkRoot "Include\${env:WINSDK_VERSION}\um\Windows.h"; $sdkLib=Join-Path $sdkRoot "Lib\${env:WINSDK_VERSION}\um\x64\kernel32.lib"; $sdkRc=Join-Path $sdkRoot "bin\${env:WINSDK_VERSION}\x64\rc.exe"; $complete=(Test-Path $sdkHeader) -and (Test-Path $sdkLib) -and (Test-Path $sdkRc); if (-not $complete) { Write-Host 'Installing complete serviced Windows SDK 20348 desktop C++ payload...'; Invoke-WebRequest -UseBasicParsing https://go.microsoft.com/fwlink/?linkid=2331862 -OutFile C:\TEMP\winsdksetup.exe; $p = Start-Process C:\TEMP\winsdksetup.exe -ArgumentList '/features','OptionId.DesktopCPPx64','OptionId.SigningTools','/quiet','/norestart' -Wait -PassThru; if ($p.ExitCode -notin @(0, 3010)) { exit $p.ExitCode }; Remove-Item C:\TEMP\winsdksetup.exe -Force }; if (-not (Test-Path $sdkHeader)) { throw 'Windows SDK 20348 header payload is incomplete: Windows.h missing.' }; if (-not (Test-Path $sdkLib)) { throw 'Windows SDK 20348 library payload is incomplete: kernel32.lib missing.' }; if (-not (Test-Path $sdkRc)) { throw 'Windows SDK 20348 tool payload is incomplete: rc.exe missing.' }; Write-Host 'Windows SDK 20348 ready:' $sdkHeader $sdkLib $sdkRc
 
 # Do not override PATH here. A Windows Docker ENV such as
 # ENV PATH="...;${PATH}" can leave a literal ${PATH} in the environment and
@@ -31,11 +31,8 @@ RUN Invoke-WebRequest -UseBasicParsing "https://github.com/juce-framework/JUCE/a
 WORKDIR C:\src
 COPY . .
 
-# A Visual Studio generator can locate the SDK in a Windows container while
-# still failing to discover a usable compiler instance. Initialize the actual
-# MSVC environment with VsDevCmd.bat and use NMake, which needs no VS instance
-# discovery. Keeping this logic in a .cmd file also avoids Docker/PowerShell
-# nested quoting issues.
+# Initialize the actual MSVC environment with VsDevCmd.bat and use NMake,
+# which avoids Visual Studio instance discovery inside Windows containers.
 RUN & C:\Windows\System32\cmd.exe /D /C C:\src\scripts\build-container-windows.cmd $env:CONFIG; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 RUN New-Item -ItemType Directory -Force C:\out | Out-Null; Copy-Item -Recurse -Force "C:\build\RetroMatchSynth_artefacts\${env:CONFIG}\VST3" C:\out\VST3; Copy-Item -Recurse -Force "C:\build\RetroMatchSynth_artefacts\${env:CONFIG}\Standalone" C:\out\Standalone
