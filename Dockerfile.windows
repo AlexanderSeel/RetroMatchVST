@@ -1,0 +1,22 @@
+# escape=`
+FROM mcr.microsoft.com/dotnet/framework/sdk:4.8-windowsservercore-ltsc2022 AS builder
+
+ARG JUCE_TAG=9.0.1
+ARG CONFIG=Release
+
+SHELL ["powershell", "-NoLogo", "-ExecutionPolicy", "Bypass", "-Command"]
+
+RUN New-Item -ItemType Directory -Force C:\TEMP | Out-Null; Invoke-WebRequest -UseBasicParsing https://aka.ms/vs/17/release/vs_buildtools.exe -OutFile C:\TEMP\vs_buildtools.exe; $p = Start-Process C:\TEMP\vs_buildtools.exe -ArgumentList '--quiet','--wait','--norestart','--nocache','--installPath','C:\BuildTools','--add','Microsoft.VisualStudio.Workload.VCTools','--add','Microsoft.VisualStudio.Component.VC.CMake.Project','--includeRecommended' -Wait -PassThru; if ($p.ExitCode -notin @(0, 3010)) { exit $p.ExitCode }; Remove-Item C:\TEMP\vs_buildtools.exe -Force
+
+ENV PATH="C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;C:\BuildTools\MSBuild\Current\Bin;${PATH}"
+
+RUN Invoke-WebRequest -UseBasicParsing "https://github.com/juce-framework/JUCE/archive/refs/tags/${env:JUCE_TAG}.zip" -OutFile C:\TEMP\juce.zip; Expand-Archive C:\TEMP\juce.zip -DestinationPath C:\TEMP; Move-Item "C:\TEMP\JUCE-${env:JUCE_TAG}" C:\JUCE; Remove-Item C:\TEMP\juce.zip -Force
+
+WORKDIR C:\src
+COPY . .
+
+RUN cmake -S C:\src -B C:\build -G "Visual Studio 17 2022" -A x64 "-DRETROMATCH_JUCE_DIR=C:\JUCE" -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; cmake --build C:\build --config ${env:CONFIG} --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone RetroMatchTests --parallel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; ctest --test-dir C:\build -C ${env:CONFIG} --output-on-failure; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+RUN New-Item -ItemType Directory -Force C:\out | Out-Null; Copy-Item -Recurse -Force "C:\build\RetroMatchSynth_artefacts\${env:CONFIG}\VST3" C:\out\VST3; Copy-Item -Recurse -Force "C:\build\RetroMatchSynth_artefacts\${env:CONFIG}\Standalone" C:\out\Standalone
+
+CMD ["powershell.exe", "-NoLogo"]
