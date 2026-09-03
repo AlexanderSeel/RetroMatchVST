@@ -41,6 +41,63 @@ function Wait-DockerDaemon {
     return $false
 }
 
+function Invoke-DockerMonitored {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Activity,
+        [int]$HeartbeatSeconds = 20
+    )
+
+    $dockerExe = (Get-Command docker -ErrorAction Stop).Source
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $dockerExe
+    $psi.UseShellExecute = $false
+    foreach ($arg in $Arguments) {
+        [void]$psi.ArgumentList.Add([string]$arg)
+    }
+
+    $process = [System.Diagnostics.Process]::Start($psi)
+    if ($null -eq $process) { throw "Could not start Docker for: $Activity" }
+
+    $nextHeartbeat = (Get-Date).AddSeconds($HeartbeatSeconds)
+    while (-not $process.HasExited) {
+        Start-Sleep -Seconds 2
+        $process.Refresh()
+        if ((Get-Date) -ge $nextHeartbeat) {
+            Write-Host ("[{0}] {1} is still running (docker PID {2}). Windows image layer extraction/registration can be silent after download completes." -f (Get-Date -Format "HH:mm:ss"), $Activity, $process.Id) -ForegroundColor DarkGray
+            $nextHeartbeat = (Get-Date).AddSeconds($HeartbeatSeconds)
+        }
+    }
+
+    if ($process.ExitCode -ne 0) {
+        throw "$Activity failed (docker exit code $($process.ExitCode))."
+    }
+}
+
+function Show-DockerDiagnostics {
+    Write-Host ""
+    Write-Host "Docker diagnostics:" -ForegroundColor Cyan
+    try {
+        $engine = (& docker info --format 'OS={{.OSType}}; Storage={{.Driver}}; Root={{.DockerRootDir}}' 2>$null | Out-String).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($engine)) { Write-Host "  $engine" }
+    } catch {}
+
+    try {
+        $systemDriveName = $env:SystemDrive.TrimEnd(':')
+        $drive = Get-PSDrive -Name $systemDriveName -ErrorAction Stop
+        $freeGb = [math]::Round($drive.Free / 1GB, 1)
+        Write-Host "  Host $($env:SystemDrive) free space: $freeGb GB"
+        if ($freeGb -lt 35) {
+            Write-Warning "Windows container images and Visual Studio Build Tools consume substantial disk space. Less than 35 GB is free on the system drive. Docker Desktop may use another data location, but check Docker storage before continuing."
+        }
+    } catch {}
+
+    try {
+        & docker system df | Out-Host
+    } catch {}
+    Write-Host ""
+}
+
 function Ensure-Docker {
     if (-not (Test-Command docker)) {
         Write-Host "Docker Desktop is not installed or docker.exe is not in PATH." -ForegroundColor Yellow
@@ -96,10 +153,21 @@ function Ensure-DockerEngine([string]$Desired) {
 Ensure-Docker
 $desiredEngine = if ($Target -eq "Windows") { "windows" } else { "linux" }
 Ensure-DockerEngine $desiredEngine
+Show-DockerDiagnostics
 
 $dockerfile = if ($Target -eq "Windows") { "Dockerfile.windows" } else { "Dockerfile" }
 $dockerfilePath = Join-Path $Root $dockerfile
 if (-not (Test-Path $dockerfilePath)) { throw "Dockerfile not found: $dockerfilePath" }
+
+$baseImage = if ($Target -eq "Windows") {
+    "mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2022"
+} else {
+    "ubuntu:24.04"
+}
+
+Write-Host "Pre-pulling base image: $baseImage" -ForegroundColor Cyan
+Write-Host "Windows base images are large. After all layers report 'Download complete', Docker may remain silent while it expands and registers those layers." -ForegroundColor DarkGray
+Invoke-DockerMonitored -Arguments @("pull", $baseImage) -Activity "Base image pull/extraction"
 
 $image = "retromatch-build-$($Target.ToLowerInvariant()):1.0.0"
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
@@ -107,12 +175,15 @@ if ([string]::IsNullOrWhiteSpace($OutputDir)) {
 }
 
 $buildArgs = @("build", "--file", $dockerfilePath, "--tag", $image, "--build-arg", "CONFIG=$Config")
+if ($Target -eq "Windows") {
+    # Microsoft recommends explicitly allocating memory for Visual Studio Build Tools container builds.
+    $buildArgs += @("--memory", "4g")
+}
 if ($NoCache) { $buildArgs += "--no-cache" }
 $buildArgs += $Root
 
 Write-Host "Building isolated $Target image '$image' ..." -ForegroundColor Cyan
-& docker @buildArgs
-if ($LASTEXITCODE -ne 0) { throw "Docker image build failed." }
+Invoke-DockerMonitored -Arguments $buildArgs -Activity "$Target Docker image build"
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $container = "retromatch-export-$([guid]::NewGuid().ToString('N').Substring(0, 10))"
