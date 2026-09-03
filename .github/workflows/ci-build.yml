@@ -1,0 +1,68 @@
+name: Build plug-ins
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+
+jobs:
+  source-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Static source integrity
+        run: python3 scripts/static-check.py
+
+  windows:
+    needs: source-check
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -A x64 -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON
+      - name: Build VST3 and Standalone
+        shell: pwsh
+        run: cmake --build build --config Release --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
+      - name: Build and run DSP smoke tests
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target RetroMatchTests --parallel
+          ctest --test-dir build -C Release --output-on-failure
+      - name: Upload Windows binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: RetroMatchSynth-Windows-x64
+          if-no-files-found: error
+          path: |
+            build/RetroMatchSynth_artefacts/Release/VST3/RetroMatch Synth.vst3/**
+            build/RetroMatchSynth_artefacts/Release/Standalone/RetroMatch Synth.exe
+
+  macos:
+    needs: source-check
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure universal build
+        run: >-
+          cmake -S . -B build -G Xcode
+          -DRETROMATCH_COPY_PLUGIN=OFF
+          -DRETROMATCH_BUILD_TESTS=ON
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+      - name: Build AU, VST3 and Standalone
+        run: cmake --build build --config Release --target RetroMatchSynth_AU RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
+      - name: Build and run DSP smoke tests
+        run: |
+          cmake --build build --config Release --target RetroMatchTests --parallel
+          ctest --test-dir build -C Release --output-on-failure
+      - name: Upload macOS binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: RetroMatchSynth-macOS-Universal
+          if-no-files-found: error
+          path: |
+            build/RetroMatchSynth_artefacts/Release/AU/RetroMatch Synth.component/**
+            build/RetroMatchSynth_artefacts/Release/VST3/RetroMatch Synth.vst3/**
+            build/RetroMatchSynth_artefacts/Release/Standalone/RetroMatch Synth.app/**
