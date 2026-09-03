@@ -92,6 +92,30 @@ function Install-WingetPackage([string]$Id, [string]$Override = "") {
     }
 }
 
+function Install-VsCppBuildTools {
+    $vswhere = Get-VsWherePath
+    $setup = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\setup.exe"
+    $existingBuildTools = ""
+    if ($vswhere) {
+        $existingBuildTools = (& $vswhere -latest -products Microsoft.VisualStudio.Product.BuildTools -property installationPath | Out-String).Trim()
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($existingBuildTools) -and (Test-Path $setup)) {
+        Write-Host "Visual Studio Build Tools exists but the C++ workload is missing. Adding it ..." -ForegroundColor Cyan
+        $process = Start-Process $setup -ArgumentList @(
+            "modify", "--installPath", $existingBuildTools,
+            "--add", "Microsoft.VisualStudio.Workload.VCTools",
+            "--includeRecommended", "--passive", "--norestart"
+        ) -Wait -PassThru
+        if ($process.ExitCode -notin @(0, 3010)) {
+            throw "Visual Studio Installer failed while adding the C++ workload (exit code $($process.ExitCode))."
+        }
+        return
+    }
+
+    Install-WingetPackage "Microsoft.VisualStudio.2022.BuildTools" "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+}
+
 function Ensure-Prerequisites {
     $missing = [System.Collections.Generic.List[string]]::new()
     $cmakeVersion = Get-CMakeVersion
@@ -127,7 +151,7 @@ function Ensure-Prerequisites {
         Install-WingetPackage "Kitware.CMake"
     }
     if ($missing -contains "Visual Studio C++ Build Tools (2022/2026)") {
-        Install-WingetPackage "Microsoft.VisualStudio.2022.BuildTools" "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+        Install-VsCppBuildTools
     }
 
     Refresh-ProcessPath
