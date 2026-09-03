@@ -24,9 +24,12 @@ RUN Invoke-WebRequest -UseBasicParsing "https://github.com/juce-framework/JUCE/a
 WORKDIR C:\src
 COPY . .
 
-# Use PowerShell argument-array splatting so values containing spaces, most
-# importantly the Visual Studio generator name, reach CMake as one argument.
-RUN $cmake='C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'; $ctest='C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe'; if (-not (Test-Path $cmake)) { throw "Visual Studio Build Tools CMake was not installed at $cmake" }; $configureArgs=@('-S','C:\src','-B','C:\build','-G','Visual Studio 17 2022','-A','x64','-DRETROMATCH_JUCE_DIR=C:\JUCE','-DRETROMATCH_COPY_PLUGIN=OFF','-DRETROMATCH_BUILD_TESTS=ON'); & $cmake @configureArgs; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $buildArgs=@('--build','C:\build','--config',$env:CONFIG,'--target','RetroMatchSynth_VST3','RetroMatchSynth_Standalone','RetroMatchTests','--parallel'); & $cmake @buildArgs; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $testArgs=@('--test-dir','C:\build','-C',$env:CONFIG,'--output-on-failure'); & $ctest @testArgs; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# A Visual Studio generator can locate the SDK in a Windows container while
+# still failing to discover a usable compiler instance. Initialize the actual
+# MSVC environment with VsDevCmd.bat and use NMake, which needs no VS instance
+# discovery. Keeping this logic in a .cmd file also avoids Docker/PowerShell
+# nested quoting issues.
+RUN & C:\Windows\System32\cmd.exe /D /C C:\src\scripts\build-container-windows.cmd $env:CONFIG; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 RUN New-Item -ItemType Directory -Force C:\out | Out-Null; Copy-Item -Recurse -Force "C:\build\RetroMatchSynth_artefacts\${env:CONFIG}\VST3" C:\out\VST3; Copy-Item -Recurse -Force "C:\build\RetroMatchSynth_artefacts\${env:CONFIG}\Standalone" C:\out\Standalone
 
