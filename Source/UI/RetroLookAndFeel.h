@@ -36,11 +36,20 @@ public:
         g.setColour (juce::Colour (0xff586266));
         g.drawEllipse (b, 1.25f);
 
-        auto arc = b.reduced (3.5f);
+        auto arcBounds = b.reduced (3.5f);
+        juce::Path backgroundArc;
+        backgroundArc.addCentredArc (arcBounds.getCentreX(), arcBounds.getCentreY(),
+                                     arcBounds.getWidth() * 0.5f, arcBounds.getHeight() * 0.5f,
+                                     0.0f, start, end, true);
         g.setColour (juce::Colour (0xff171d20));
-        g.drawArc (arc, start, end, 3.2f);
+        g.strokePath (backgroundArc, juce::PathStrokeType (3.2f));
+
+        juce::Path valueArc;
+        valueArc.addCentredArc (arcBounds.getCentreX(), arcBounds.getCentreY(),
+                                arcBounds.getWidth() * 0.5f, arcBounds.getHeight() * 0.5f,
+                                0.0f, start, angle, true);
         g.setColour (juce::Colour (0xffc9a45d));
-        g.drawArc (arc, start, angle, 3.2f);
+        g.strokePath (valueArc, juce::PathStrokeType (3.2f));
 
         juce::Path pointer;
         pointer.addRoundedRectangle (-1.5f, -radius + 7.0f, 3.0f, radius * 0.40f, 1.5f);
