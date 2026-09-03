@@ -67,7 +67,8 @@ required_tokens = {
     'FM detail parameters': ['"FixedHz"', '"Attack"', '"Decay"', '"Sustain"', '"Release"', '"KeyScale"', '"Velocity"'],
     'engine wavetable/unison/fold': ['wavetableWave', 'renderSupersaw', 'foldSample'],
     'matcher search dimensions': ['p.wavetableMix', 'p.supersawMix', 'p.wavefold', 'p.fmOpFixedMode', 'p.fmOpAttack'],
-    'operator UI': ['rebindFmOperatorEditor', 'FM OPERATOR DETAIL'],
+    'operator UI': ['rebindFmOperatorEditor', 'SELECTED OPERATOR DETAIL'],
+    'tabbed UI': ['tabs.addTab ("SYNTH"', 'tabs.addTab ("FM"', 'tabs.addTab ("FILTER + AMP"', 'tabs.addTab ("MOD"', 'tabs.addTab ("FX"', 'tabs.addTab ("MATCH"'],
     'v1 reference wavetable': ['referenceWavetableMix', 'ReferenceWavetableExtractor', 'referenceWavetable'],
     'v1 candidate bank': ['buildCandidateBank', 'morphCandidates', 'selectCandidate'],
 }
@@ -77,6 +78,7 @@ texts = {
     'engine wavetable/unison/fold': engine_cpp,
     'matcher search dimensions': matcher,
     'operator UI': editor,
+    'tabbed UI': editor,
     'v1 reference wavetable': processor + engine_cpp,
     'v1 candidate bank': processor + editor,
 }
@@ -98,4 +100,5 @@ print('RetroMatch static checks passed')
 print(' - C/C++ JUCE project configuration present')
 print(' - source delimiter balance passed')
 print(' - wavetable, supersaw/unison, wavefold and FM-detail plumbing present')
+print(' - responsive tabbed editor structure present')
 print(' - optimizer and operator-detail UI plumbing present')
