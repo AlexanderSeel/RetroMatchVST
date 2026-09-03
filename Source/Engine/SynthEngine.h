@@ -90,6 +90,7 @@ public:
     bool canPlaySound (juce::SynthesiserSound*) override { return true; }
     void prepare (double sampleRate, int samplesPerBlock, int channels);
     void setParameters (const VoiceParameters& p);
+    void setRandomSeed (int64 seed) { random.setSeed (seed); }
     void startNote (int midiNoteNumber, float velocity, juce::SynthesiserSound*, int) override;
     void stopNote (float velocity, bool allowTailOff) override;
     void pitchWheelMoved (int newValue) override;
@@ -137,6 +138,12 @@ public:
     SynthEngine();
     void prepare (double sampleRate, int samplesPerBlock, int channels);
     void setParameters (const VoiceParameters&);
+    void setRandomSeed (int64 baseSeed)
+    {
+        for (int i = 0; i < synth.getNumVoices(); ++i)
+            if (auto* v = dynamic_cast<HybridVoice*> (synth.getVoice (i)))
+                v->setRandomSeed (baseSeed + (int64) i * (int64) 0x1f123bb5);
+    }
     void render (juce::AudioBuffer<float>&, juce::MidiBuffer&);
     void reset();
 
