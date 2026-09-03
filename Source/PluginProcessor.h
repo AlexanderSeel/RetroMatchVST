@@ -53,6 +53,12 @@ public:
     bool loadPreset (const juce::File&);
     bool exportPreviewWav (const juce::File&, float seconds = 2.5f) const;
 
+    // Optional UI audition keyboard. These calls are only for manual testing;
+    // host MIDI continues to use the normal processBlock path.
+    void noteOnFromEditor (int midiNote, float velocity) { engine.noteOnFromUi (midiNote, velocity); }
+    void noteOffFromEditor (int midiNote, float velocity = 0.0f) { engine.noteOffFromUi (midiNote, velocity); }
+    void allEditorNotesOff() { engine.allNotesOffFromUi(); }
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
 private:
