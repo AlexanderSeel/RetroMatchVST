@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Fast source-integrity checks that do not require JUCE or a compiler."""
 from pathlib import Path
-import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,12 +54,18 @@ for source in list((ROOT / 'Source').rglob('*.cpp')) + list((ROOT / 'Source').rg
 cmake = (ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
 if 'VERSION 1.0.0 LANGUAGES C CXX' not in cmake:
     errors.append('CMakeLists.txt must enable C and CXX for JUCE 9.0.1 and declare v1.0.0')
+if 'Source/UI/RetroMatchEditorV3.cpp' not in cmake or 'Source/AI/AISeedProvider.cpp' not in cmake:
+    errors.append('CMakeLists.txt must build the workflow-first editor and AI seed provider')
 
 processor = (ROOT / 'Source/PluginProcessor.cpp').read_text(encoding='utf-8')
+processor_h = (ROOT / 'Source/PluginProcessor.h').read_text(encoding='utf-8')
 engine_h = (ROOT / 'Source/Engine/SynthEngine.h').read_text(encoding='utf-8')
 engine_cpp = (ROOT / 'Source/Engine/SynthEngine.cpp').read_text(encoding='utf-8')
 matcher = (ROOT / 'Source/Matching/SoundMatcher.cpp').read_text(encoding='utf-8')
-editor = (ROOT / 'Source/PluginEditor.cpp').read_text(encoding='utf-8')
+editor = (ROOT / 'Source/UI/RetroMatchEditorV3.cpp').read_text(encoding='utf-8')
+editor_h = (ROOT / 'Source/UI/RetroMatchEditorV3.h').read_text(encoding='utf-8')
+ai = (ROOT / 'Source/AI/AISeedProvider.cpp').read_text(encoding='utf-8')
+ai_settings = (ROOT / 'Source/AI/AISettings.cpp').read_text(encoding='utf-8')
 
 required_tokens = {
     'processor wavetable parameters': ['"wavetableMix"', '"wavetablePosition"', '"wavetableWarp"', '"supersawMix"', '"unisonDetune"', '"unisonSpread"', '"wavefold"'],
@@ -68,7 +73,12 @@ required_tokens = {
     'engine wavetable/unison/fold': ['wavetableWave', 'renderSupersaw', 'foldSample'],
     'matcher search dimensions': ['p.wavetableMix', 'p.supersawMix', 'p.wavefold', 'p.fmOpFixedMode', 'p.fmOpAttack'],
     'operator UI': ['rebindFmOperatorEditor', 'SELECTED OPERATOR DETAIL'],
-    'tabbed UI': ['tabs.addTab ("SYNTH"', 'tabs.addTab ("FM"', 'tabs.addTab ("FILTER + AMP"', 'tabs.addTab ("MOD"', 'tabs.addTab ("FX"', 'tabs.addTab ("MATCH"'],
+    'editing tabs': ['tabs.addTab ("SYNTH"', 'tabs.addTab ("FM"', 'tabs.addTab ("FILTER + AMP"', 'tabs.addTab ("MOD"', 'tabs.addTab ("FX"', 'tabs.addTab ("SETTINGS"'],
+    'reference matching workspace': ['REFERENCE + RESYNTH WORKSPACE', 'QUICK x3', 'REFINE x3', 'AI x3', 'ANALYZE', 'VARIANTS'],
+    'variant cards': ['CandidateButton', 'NATURAL', 'FM / HARMONIC', 'WT / TEXTURE', 'createLocalVariants', 'finishVariantSearch'],
+    'virtual keyboard': ['MidiKeyboardComponent', 'handleNoteOn', 'handleNoteOff', 'KEYS'],
+    'AI provider settings': ['OpenAI', 'Google Gemini', 'OpenAI-compatible / Azure', 'GitHub Copilot bridge', 'SESSION API KEY'],
+    'AI local scoring': ['SoundMatcher::evaluateFit', 'features only', 'variants'],
     'v1 reference wavetable': ['referenceWavetableMix', 'ReferenceWavetableExtractor', 'referenceWavetable'],
     'v1 candidate bank': ['buildCandidateBank', 'morphCandidates', 'selectCandidate'],
 }
@@ -78,7 +88,12 @@ texts = {
     'engine wavetable/unison/fold': engine_cpp,
     'matcher search dimensions': matcher,
     'operator UI': editor,
-    'tabbed UI': editor,
+    'editing tabs': editor,
+    'reference matching workspace': editor,
+    'variant cards': editor + editor_h,
+    'virtual keyboard': editor + editor_h + processor_h + engine_h,
+    'AI provider settings': editor + ai_settings,
+    'AI local scoring': ai,
     'v1 reference wavetable': processor + engine_cpp,
     'v1 candidate bank': processor + editor,
 }
@@ -90,6 +105,10 @@ if 'ModDestination::wavefold' not in engine_cpp or 'wavetablePosition' not in en
     errors.append('new modulation destinations are not wired through the engine')
 if 'presetVersion", "1.0"' not in processor:
     errors.append('preset version was not bumped to 1.0')
+if 'noteOnFromUi' not in engine_h or 'noteOnFromEditor' not in processor_h:
+    errors.append('virtual keyboard is not wired through a safe synth audition path')
+if 'sessionApiKey' not in ai_settings or 'setValue ("ai.' not in ai_settings:
+    errors.append('AI settings persistence/session-secret separation is missing')
 
 if errors:
     print('RetroMatch static checks FAILED')
@@ -100,5 +119,7 @@ print('RetroMatch static checks passed')
 print(' - C/C++ JUCE project configuration present')
 print(' - source delimiter balance passed')
 print(' - wavetable, supersaw/unison, wavefold and FM-detail plumbing present')
-print(' - responsive tabbed editor structure present')
-print(' - optimizer and operator-detail UI plumbing present')
+print(' - reference-to-variant workspace and editing tabs present')
+print(' - Quick/Refine/AI three-variant workflow present')
+print(' - optional virtual keyboard audition path present')
+print(' - AI provider settings and local candidate scoring present')
