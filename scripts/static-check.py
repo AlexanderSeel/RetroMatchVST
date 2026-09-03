@@ -66,6 +66,7 @@ editor = (ROOT / 'Source/UI/RetroMatchEditorV3.cpp').read_text(encoding='utf-8')
 editor_h = (ROOT / 'Source/UI/RetroMatchEditorV3.h').read_text(encoding='utf-8')
 ai = (ROOT / 'Source/AI/AISeedProvider.cpp').read_text(encoding='utf-8')
 ai_settings = (ROOT / 'Source/AI/AISettings.cpp').read_text(encoding='utf-8')
+editor_all = editor + editor_h
 
 required_tokens = {
     'processor wavetable parameters': ['"wavetableMix"', '"wavetablePosition"', '"wavetableWarp"', '"supersawMix"', '"unisonDetune"', '"unisonSpread"', '"wavefold"'],
@@ -87,15 +88,15 @@ texts = {
     'FM detail parameters': processor,
     'engine wavetable/unison/fold': engine_cpp,
     'matcher search dimensions': matcher,
-    'operator UI': editor,
-    'editing tabs': editor,
-    'reference matching workspace': editor,
-    'variant cards': editor + editor_h,
-    'virtual keyboard': editor + editor_h + processor_h + engine_h,
-    'AI provider settings': editor + ai_settings,
+    'operator UI': editor_all,
+    'editing tabs': editor_all,
+    'reference matching workspace': editor_all,
+    'variant cards': editor_all,
+    'virtual keyboard': editor_all + processor_h + engine_h,
+    'AI provider settings': editor_all + ai_settings,
     'AI local scoring': ai,
     'v1 reference wavetable': processor + engine_cpp,
-    'v1 candidate bank': processor + editor,
+    'v1 candidate bank': processor + editor_all,
 }
 for name, tokens in required_tokens.items():
     for token in tokens:
