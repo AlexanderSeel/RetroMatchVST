@@ -13,6 +13,9 @@ juce::AudioBuffer<float> OfflineRenderer::renderPatch (const VoiceParameters& pa
     out.clear();
 
     SynthEngine engine;
+    // Matching is an optimisation problem, so candidate scores must be reproducible.
+    // Keep live SynthEngine instances random, but seed offline renders deterministically.
+    engine.setRandomSeed ((int64) 0x524d534f);
     engine.prepare (sampleRate, blockSize, 2);
     engine.setParameters (params);
 
