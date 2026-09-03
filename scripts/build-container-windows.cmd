@@ -45,11 +45,12 @@ echo %WindowsSDKVersion% | findstr /C:"%WINSDK%" >nul
 if errorlevel 1 goto :wrong_sdk
 
 echo Configuring RetroMatch Synth with MSVC/NMake (%CONFIG%)...
-"%CMAKE%" -S C:\src -B C:\build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=%CONFIG% -DCMAKE_SYSTEM_VERSION=%WINSDK% -DRETROMATCH_JUCE_DIR=C:\JUCE -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON
+echo VST3 auto-manifest generation is disabled in the Server Core container.
+"%CMAKE%" -S C:\src -B C:\build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=%CONFIG% -DCMAKE_SYSTEM_VERSION=%WINSDK% -DRETROMATCH_JUCE_DIR=C:\JUCE -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON -DRETROMATCH_VST3_AUTO_MANIFEST=OFF
 if errorlevel 1 goto :configure_failed
 
 echo Building plug-in, standalone app and tests...
-"%CMAKE%" --build C:\build --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone RetroMatchTests --parallel
+"%CMAKE%" --build C:\build --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone RetroMatchTests
 if errorlevel 1 goto :build_failed
 
 echo Running tests...
