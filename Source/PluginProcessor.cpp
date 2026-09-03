@@ -298,7 +298,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
     return l;
 }
 
-bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file) const
+bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
 {
     auto xml = apvts.copyState().createXml();
     if (! xml) return false;
@@ -324,9 +324,15 @@ bool RetroMatchSynthAudioProcessor::exportPreviewWav (const juce::File& file, fl
     const double sr = getSampleRate() > 1000.0 ? getSampleRate() : 44100.0;
     const float f0 = currentFeatures && currentFeatures->fundamentalHz > 20.0f ? currentFeatures->fundamentalHz : 261.6256f;
     auto audio = OfflineRenderer::renderPatch (params, sr, juce::jlimit (0.25f, 12.0f, seconds), f0, 256);
-    auto stream = file.createOutputStream(); if (! stream) return false;
+    std::unique_ptr<juce::OutputStream> stream = file.createOutputStream();
+    if (! stream) return false;
+
     juce::WavAudioFormat format;
-    std::unique_ptr<juce::AudioFormatWriter> writer (format.createWriterFor (stream.release(), sr, (unsigned int) audio.getNumChannels(), 24, {}, 0));
+    const auto options = juce::AudioFormatWriter::Options {}
+                             .withSampleRate (sr)
+                             .withNumChannels (audio.getNumChannels())
+                             .withBitsPerSample (24);
+    auto writer = format.createWriterFor (stream, options);
     if (! writer) return false;
     return writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
 }
