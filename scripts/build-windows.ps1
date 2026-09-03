@@ -174,11 +174,20 @@ if ($UseDocker) {
     $dockerScript = Join-Path $PSScriptRoot "build-docker.ps1"
     if (-not (Test-Path $dockerScript)) { throw "Docker build helper not found: $dockerScript" }
 
-    $dockerArgs = @("-Target", "Windows", "-Config", $Config)
-    if ($InstallMissing) { $dockerArgs += "-InstallDocker" }
-    if ($NonInteractive) { $dockerArgs += "-NonInteractive" }
-    & $dockerScript @dockerArgs
-    exit $LASTEXITCODE
+    # Hashtable splatting is required here. An array like
+    # @("-Target", "Windows") is passed positionally to another PowerShell
+    # script, which makes the literal string "-Target" become the value of
+    # the first parameter and fails ValidateSet.
+    $dockerParams = @{
+        Target = "Windows"
+        Config = $Config
+    }
+    if ($InstallMissing) { $dockerParams.InstallDocker = $true }
+    if ($NonInteractive) { $dockerParams.NonInteractive = $true }
+
+    & $dockerScript @dockerParams
+    if ($LASTEXITCODE -ne 0) { throw "Docker build failed (exit code $LASTEXITCODE)." }
+    exit 0
 }
 
 if (-not $SkipPrerequisiteCheck) {
