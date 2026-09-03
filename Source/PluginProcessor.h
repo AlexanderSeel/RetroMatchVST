@@ -3,6 +3,7 @@
 #include "Engine/SynthEngine.h"
 #include "Analysis/SampleAnalyzer.h"
 #include "Matching/SoundMatcher.h"
+#include "Matching/OfflineRenderer.h"
 
 class RetroMatchSynthAudioProcessor : public juce::AudioProcessor
 {
@@ -48,7 +49,7 @@ public:
     void morphCandidates (int a, int b, float amount);
     VoiceParameters getCurrentVoiceParameters() const { return readParams(); }
 
-    bool savePreset (const juce::File&) const;
+    bool savePreset (const juce::File&);
     bool loadPreset (const juce::File&);
     bool exportPreviewWav (const juce::File&, float seconds = 2.5f) const;
 
