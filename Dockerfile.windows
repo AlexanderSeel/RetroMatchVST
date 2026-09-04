@@ -1,8 +1,7 @@
 # escape=`
-FROM mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2022 AS builder
+FROM mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2022 AS toolchain
 
 ARG JUCE_TAG=9.0.1
-ARG CONFIG=Release
 
 SHELL ["powershell", "-NoLogo", "-ExecutionPolicy", "Bypass", "-Command"]
 
@@ -28,13 +27,23 @@ RUN $sdkRoot='C:\Program Files (x86)\Windows Kits\10'; $sdkHeader=Join-Path $sdk
 # make powershell.exe unreachable in subsequent layers.
 RUN Invoke-WebRequest -UseBasicParsing "https://github.com/juce-framework/JUCE/archive/refs/tags/${env:JUCE_TAG}.zip" -OutFile C:\TEMP\juce.zip; Expand-Archive C:\TEMP\juce.zip -DestinationPath C:\TEMP; Move-Item "C:\TEMP\JUCE-${env:JUCE_TAG}" C:\JUCE; Remove-Item C:\TEMP\juce.zip -Force
 
+CMD ["powershell.exe", "-NoLogo"]
+
+# The source stage is intentionally small. The normal Windows Docker helper
+# builds only up to this target, then compiles inside a temporary container.
+# This avoids committing/importing the very large C:\build filesystem layer,
+# which can trigger hcsshim::ImportLayer failures in Docker Desktop.
+FROM toolchain AS source
+ARG CONFIG=Release
 WORKDIR C:\src
 COPY . .
+CMD ["powershell.exe", "-NoLogo"]
 
-# Initialize the actual MSVC environment with VsDevCmd.bat and use NMake,
-# which avoids Visual Studio instance discovery inside Windows containers.
+# Keep a conventional fully-built target for CI/manual Docker use. The local
+# build helper does not use this target because it would have to commit the
+# large compiler output layer after the build finishes.
+FROM source AS builder
+ARG CONFIG=Release
 RUN & C:\Windows\System32\cmd.exe /D /C C:\src\scripts\build-container-windows.cmd $env:CONFIG; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
 RUN New-Item -ItemType Directory -Force C:\out | Out-Null; Copy-Item -Recurse -Force "C:\build\RetroMatchSynth_artefacts\${env:CONFIG}\VST3" C:\out\VST3; Copy-Item -Recurse -Force "C:\build\RetroMatchSynth_artefacts\${env:CONFIG}\Standalone" C:\out\Standalone
-
 CMD ["powershell.exe", "-NoLogo"]
