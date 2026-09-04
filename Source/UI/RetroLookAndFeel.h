@@ -31,7 +31,6 @@ public:
         const float diameter = juce::jmax (30.0f, juce::jmin (available.getWidth(), available.getHeight()));
         auto outer = juce::Rectangle<float> (diameter, diameter).withCentre (available.getCentre());
         const auto centre = outer.getCentre();
-        const float radius = diameter * 0.5f;
         const float angle = start + pos * (end - start);
         const bool active = slider.isMouseOverOrDragging();
         const auto amber = juce::Colour (0xffe0b85e);
@@ -43,7 +42,7 @@ public:
         for (int i = 5; i >= 1; --i)
         {
             const float spread = (float) i * 1.25f;
-            g.setColour (juce::Colour (0x15000000 + (i * 0x06000000)).withAlpha (0.07f + 0.025f * (float) i));
+            g.setColour (juce::Colours::black.withAlpha (0.07f + 0.025f * (float) i));
             g.fillEllipse (outer.expanded (spread).translated (0.0f, 2.0f + spread * 0.24f));
         }
 
