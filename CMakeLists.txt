@@ -50,9 +50,12 @@ juce_generate_juce_header(RetroMatchSynth)
 
 target_sources(RetroMatchSynth PRIVATE
   Source/PluginProcessor.cpp
-  Source/PluginEditor.cpp
+  Source/UI/RetroMatchEditorV3.cpp
+  Source/AI/AISettings.cpp
+  Source/AI/AISeedProvider.cpp
   Source/Engine/SynthEngine.cpp
   Source/Engine/ReferenceWavetable.cpp
+  Source/Reference/ReferenceSamplePlayer.cpp
   Source/Analysis/SampleAnalyzer.cpp
   Source/Matching/OfflineRenderer.cpp
   Source/Matching/SimilarityScorer.cpp
@@ -67,6 +70,7 @@ target_link_libraries(RetroMatchSynth PRIVATE
   juce::juce_audio_utils
   juce::juce_dsp
   juce::juce_gui_extra
+  juce::juce_data_structures
   PUBLIC
   juce::juce_recommended_config_flags
   juce::juce_recommended_lto_flags

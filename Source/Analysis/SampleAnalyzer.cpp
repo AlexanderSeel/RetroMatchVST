@@ -49,7 +49,6 @@ PitchEstimate estimateFundamentalAutocorrelation (const float* x, int n, double 
     return out;
 }
 
-
 float estimateConfidenceAtFundamental (const float* x, int n, double sr, float hz)
 {
     if (n < 128 || hz < 20.0f || hz > sr * 0.45) return 0.0f;
@@ -134,8 +133,7 @@ void makeWaveformPreview (const float* x, int n, SoundFeatures& f)
 }
 }
 
-
-void analyseTemporalSpectrum (const float* x, int n, double sr, SoundFeatures& f)
+static void analyseTemporalSpectrum (const float* x, int n, double sr, SoundFeatures& f)
 {
     if (n < 64 || sr <= 0.0) return;
 
@@ -203,7 +201,7 @@ void analyseTemporalSpectrum (const float* x, int n, double sr, SoundFeatures& f
     f.spectralMotion = comparisons > 0 ? juce::jlimit (0.0f, 1.0f, (float) (motion / comparisons) * 2.0f) : 0.0f;
 }
 
-void makeTimbreCepstrum (SoundFeatures& f)
+static void makeTimbreCepstrum (SoundFeatures& f)
 {
     // DCT-II over the log-spaced global spectrum. This is intentionally a lightweight
     // timbre-envelope descriptor rather than a speech-specific MFCC implementation.
@@ -227,7 +225,7 @@ void makeTimbreCepstrum (SoundFeatures& f)
         f.timbreCepstrum[(size_t) k] = (float) (raw[(size_t) k] / norm);
 }
 
-std::optional<SoundFeatures> SampleAnalyzer::analyzeFile (const juce::File& file)
+std::optional<SoundFeatures> SampleAnalyzer::analyzeFile (const juce::File& file, float expectedFundamentalHz)
 {
     juce::AudioFormatManager fm;
     fm.registerBasicFormats();
@@ -240,7 +238,7 @@ std::optional<SoundFeatures> SampleAnalyzer::analyzeFile (const juce::File& file
     juce::AudioBuffer<float> decoded (channels, sampleCount);
     if (! reader->read (&decoded, 0, sampleCount, 0, true, true)) return std::nullopt;
 
-    return analyzeBuffer (decoded, reader->sampleRate);
+    return analyzeBuffer (decoded, reader->sampleRate, expectedFundamentalHz);
 }
 
 SoundFeatures SampleAnalyzer::analyzeBuffer (const juce::AudioBuffer<float>& audio, double sr, float expectedFundamentalHz)

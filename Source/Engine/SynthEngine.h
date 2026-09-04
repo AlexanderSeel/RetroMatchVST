@@ -147,6 +147,23 @@ public:
     void render (juce::AudioBuffer<float>&, juce::MidiBuffer&);
     void reset();
 
+    // Manual audition helpers for the editor's optional virtual keyboard.
+    // juce::Synthesiser serialises these calls against rendering internally.
+    void noteOnFromUi (int midiNote, float velocity)
+    {
+        synth.noteOn (1, juce::jlimit (0, 127, midiNote), juce::jlimit (0.0f, 1.0f, velocity));
+    }
+
+    void noteOffFromUi (int midiNote, float velocity = 0.0f)
+    {
+        synth.noteOff (1, juce::jlimit (0, 127, midiNote), juce::jlimit (0.0f, 1.0f, velocity), true);
+    }
+
+    void allNotesOffFromUi()
+    {
+        synth.allNotesOff (0, true);
+    }
+
 private:
     juce::Synthesiser synth;
     VoiceParameters current;
