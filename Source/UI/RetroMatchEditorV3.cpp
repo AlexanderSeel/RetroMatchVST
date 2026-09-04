@@ -1,5 +1,6 @@
 #include "RetroMatchEditorV3.h"
 #include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -46,6 +47,29 @@ juce::String midiNoteName (int midiNote)
 {
     return juce::MidiMessage::getMidiNoteName (juce::jlimit (0, 127, midiNote), true, true, 3);
 }
+
+float paramValue (RetroMatchSynthAudioProcessor& proc, const char* id, float fallback = 0.0f)
+{
+    if (auto* value = proc.apvts.getRawParameterValue (id)) return value->load();
+    return fallback;
+}
+
+void drawScopeFrame (juce::Graphics& g, juce::Rectangle<float> bounds, const juce::String& title, juce::Colour accent)
+{
+    if (bounds.getWidth() < 20.0f || bounds.getHeight() < 20.0f) return;
+    g.setColour (juce::Colour (0xa0000000));
+    g.fillRoundedRectangle (bounds.translated (0.0f, 2.0f), 7.0f);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff071113), bounds.getTopLeft(),
+                                             juce::Colour (0xff0d191b), bounds.getBottomRight(), false));
+    g.fillRoundedRectangle (bounds, 7.0f);
+    g.setColour (juce::Colour (0xff3a494c));
+    g.drawRoundedRectangle (bounds, 7.0f, 1.0f);
+    g.setColour (accent.withAlpha (0.65f));
+    g.drawLine (bounds.getX() + 8.0f, bounds.getY() + 20.0f, bounds.getRight() - 8.0f, bounds.getY() + 20.0f, 1.0f);
+    g.setColour (accent);
+    g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+    g.drawText (title, bounds.withHeight (20.0f).reduced (8.0f, 0.0f), juce::Justification::centredLeft);
+}
 }
 
 //==============================================================================
@@ -66,16 +90,23 @@ void RetroMatchSynthAudioProcessorEditor::CandidateButton::paintButton (juce::Gr
 
     g.setColour (juce::Colour (0x85000000));
     g.fillRoundedRectangle (r.translated (0.0f, 2.0f), 7.0f);
-    g.setColour (background);
+    g.setGradientFill (juce::ColourGradient (background.brighter (0.04f), r.getTopLeft(), background.darker (0.15f), r.getBottomRight(), false));
     g.fillRoundedRectangle (r, 7.0f);
     g.setColour (selected ? tealColour() : borderColour());
     g.drawRoundedRectangle (r, 7.0f, selected ? 1.7f : 1.0f);
 
     const auto led = juce::Rectangle<float> (r.getX() + 10.0f, r.getY() + 11.0f, 8.0f, 8.0f);
-    g.setColour (selected ? tealColour().withAlpha (0.22f) : juce::Colour (0xff1c2928));
-    g.fillEllipse (led.expanded (4.0f));
+    if (selected)
+    {
+        g.setColour (tealColour().withAlpha (0.16f));
+        g.fillEllipse (led.expanded (7.0f));
+        g.setColour (tealColour().withAlpha (0.24f));
+        g.fillEllipse (led.expanded (4.0f));
+    }
     g.setColour (selected ? tealColour() : juce::Colour (0xff43514f));
     g.fillEllipse (led);
+    g.setColour (juce::Colours::white.withAlpha (selected ? 0.45f : 0.15f));
+    g.fillEllipse (led.withSizeKeepingCentre (2.4f, 2.4f).translated (-1.2f, -1.2f));
 
     g.setColour (goldColour());
     g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
@@ -120,6 +151,224 @@ void RetroMatchSynthAudioProcessorEditor::CandidateButton::paintButton (juce::Gr
 }
 
 //==============================================================================
+void RetroMatchSynthAudioProcessorEditor::FilterResponseGraph::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+    drawScopeFrame (g, bounds, "FILTER RESPONSE", cyanColour());
+    auto plot = bounds.reduced (10.0f).withTrimmedTop (18.0f).withTrimmedBottom (8.0f);
+    if (plot.getWidth() < 20.0f || plot.getHeight() < 20.0f) return;
+
+    for (int i = 1; i < 5; ++i)
+    {
+        const float x = plot.getX() + plot.getWidth() * (float) i / 5.0f;
+        g.setColour (juce::Colour (0xff274044).withAlpha (0.55f));
+        g.drawVerticalLine ((int) x, plot.getY(), plot.getBottom());
+    }
+    for (int i = 1; i < 4; ++i)
+    {
+        const float y = plot.getY() + plot.getHeight() * (float) i / 4.0f;
+        g.setColour (juce::Colour (0xff274044).withAlpha (0.45f));
+        g.drawHorizontalLine ((int) y, plot.getX(), plot.getRight());
+    }
+
+    const float cutoff = juce::jlimit (20.0f, 20000.0f, paramValue (proc, "cutoff", 12000.0f));
+    const float resonance = juce::jlimit (0.01f, 0.99f, paramValue (proc, "resonance", 0.15f));
+    const int type = juce::jlimit (0, 2, (int) std::lround (paramValue (proc, "filterType", 0.0f)));
+
+    juce::Path response;
+    constexpr int points = 120;
+    for (int i = 0; i < points; ++i)
+    {
+        const float t = (float) i / (float) (points - 1);
+        const float frequency = 20.0f * std::pow (1000.0f, t);
+        const float ratio = juce::jmax (0.001f, frequency / cutoff);
+        float magnitude = 1.0f;
+        if (type == 0) magnitude = 1.0f / std::sqrt (1.0f + std::pow (ratio, 4.0f));
+        else if (type == 1) magnitude = 1.0f / std::sqrt (1.0f + std::pow (1.0f / ratio, 4.0f));
+        else
+        {
+            const float octaveDistance = std::log2 (ratio);
+            const float width = 0.32f + (1.0f - resonance) * 1.25f;
+            magnitude = std::exp (-0.5f * octaveDistance * octaveDistance / (width * width));
+        }
+
+        const float octaveDistance = std::log2 (juce::jmax (0.001f, ratio));
+        const float resonanceBump = resonance * 10.0f * std::exp (-0.5f * octaveDistance * octaveDistance / 0.12f);
+        const float db = juce::jlimit (-36.0f, 9.0f, 20.0f * std::log10 (juce::jmax (0.001f, magnitude)) + resonanceBump);
+        const float x = juce::jmap (t, 0.0f, 1.0f, plot.getX(), plot.getRight());
+        const float y = juce::jmap (db, -36.0f, 9.0f, plot.getBottom(), plot.getY());
+        if (i == 0) response.startNewSubPath (x, y); else response.lineTo (x, y);
+    }
+
+    g.setColour (cyanColour().withAlpha (0.18f));
+    g.strokePath (response, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (cyanColour());
+    g.strokePath (response, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    const float cutoffNorm = std::log (cutoff / 20.0f) / std::log (1000.0f);
+    const float cutoffX = juce::jmap (juce::jlimit (0.0f, 1.0f, cutoffNorm), 0.0f, 1.0f, plot.getX(), plot.getRight());
+    g.setColour (goldColour().withAlpha (0.75f));
+    g.drawVerticalLine ((int) cutoffX, plot.getY(), plot.getBottom());
+    g.setFont (juce::Font (juce::FontOptions (8.5f, juce::Font::bold)));
+    g.drawText ((cutoff >= 1000.0f ? juce::String (cutoff / 1000.0f, 1) + " kHz" : juce::String (cutoff, 0) + " Hz"),
+                juce::Rectangle<float> (plot.getX(), plot.getY(), plot.getWidth() - 3.0f, 14.0f), juce::Justification::topRight);
+}
+
+void RetroMatchSynthAudioProcessorEditor::EnvelopeGraph::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+    drawScopeFrame (g, bounds, "AMP ENVELOPE", goldColour());
+    auto plot = bounds.reduced (10.0f).withTrimmedTop (18.0f).withTrimmedBottom (8.0f);
+    if (plot.getWidth() < 20.0f || plot.getHeight() < 20.0f) return;
+
+    const float attack = juce::jmax (0.001f, paramValue (proc, "attack", 0.01f));
+    const float decay = juce::jmax (0.001f, paramValue (proc, "decay", 0.25f));
+    const float sustain = juce::jlimit (0.0f, 1.0f, paramValue (proc, "sustain", 0.75f));
+    const float release = juce::jmax (0.001f, paramValue (proc, "release", 0.35f));
+
+    const auto timeWeight = [] (float seconds)
+    {
+        return 0.10f + std::log1p (seconds * 8.0f) / std::log (65.0f);
+    };
+    float aw = timeWeight (attack), dw = timeWeight (decay), rw = timeWeight (release), sw = 0.28f;
+    const float total = aw + dw + sw + rw;
+    aw /= total; dw /= total; sw /= total; rw /= total;
+
+    const float x0 = plot.getX();
+    const float x1 = x0 + plot.getWidth() * aw;
+    const float x2 = x1 + plot.getWidth() * dw;
+    const float x3 = x2 + plot.getWidth() * sw;
+    const float x4 = plot.getRight();
+    const float bottom = plot.getBottom();
+    const float peak = plot.getY() + 3.0f;
+    const float sustainY = juce::jmap (sustain, 0.0f, 1.0f, bottom, peak);
+
+    juce::Path fill;
+    fill.startNewSubPath (x0, bottom);
+    fill.lineTo (x1, peak);
+    fill.lineTo (x2, sustainY);
+    fill.lineTo (x3, sustainY);
+    fill.lineTo (x4, bottom);
+    fill.lineTo (x0, bottom);
+    fill.closeSubPath();
+    g.setGradientFill (juce::ColourGradient (goldColour().withAlpha (0.18f), plot.getX(), plot.getY(),
+                                             goldColour().withAlpha (0.02f), plot.getX(), plot.getBottom(), false));
+    g.fillPath (fill);
+
+    juce::Path line;
+    line.startNewSubPath (x0, bottom); line.lineTo (x1, peak); line.lineTo (x2, sustainY); line.lineTo (x3, sustainY); line.lineTo (x4, bottom);
+    g.setColour (goldColour().withAlpha (0.18f));
+    g.strokePath (line, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (goldColour());
+    g.strokePath (line, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    const std::array<std::pair<float, const char*>, 4> marks {{ { x1, "A" }, { x2, "D" }, { x3, "S" }, { x4, "R" } }};
+    g.setFont (juce::Font (juce::FontOptions (8.0f, juce::Font::bold)));
+    for (const auto& mark : marks)
+    {
+        g.setColour (tealColour().withAlpha (0.75f));
+        g.fillEllipse (mark.first - 2.0f, plot.getBottom() - 3.0f, 4.0f, 4.0f);
+        g.setColour (juce::Colour (0xff8fa8a1));
+        g.drawText (mark.second, juce::Rectangle<float> (mark.first - 7.0f, plot.getBottom() - 15.0f, 14.0f, 11.0f), juce::Justification::centred);
+    }
+}
+
+void RetroMatchSynthAudioProcessorEditor::LfoScope::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+    drawScopeFrame (g, bounds, "LFO SCOPE", tealColour());
+    auto plot = bounds.reduced (10.0f).withTrimmedTop (18.0f).withTrimmedBottom (23.0f);
+    if (plot.getWidth() < 20.0f || plot.getHeight() < 20.0f) return;
+
+    const float rate = juce::jlimit (0.02f, 30.0f, paramValue (proc, "lfoRate", 1.5f));
+    const float pitch = juce::jlimit (0.0f, 2.0f, paramValue (proc, "lfoPitch")) / 2.0f;
+    const float cutoff = juce::jlimit (0.0f, 3.0f, paramValue (proc, "lfoCutoff")) / 3.0f;
+    const float amp = juce::jlimit (0.0f, 1.0f, paramValue (proc, "lfoAmp"));
+    const double seconds = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    const float phase = (float) std::fmod (seconds * (double) rate * (double) juce::MathConstants<float>::twoPi,
+                                          (double) juce::MathConstants<float>::twoPi);
+
+    g.setColour (juce::Colour (0xff244044));
+    g.drawHorizontalLine ((int) plot.getCentreY(), plot.getX(), plot.getRight());
+    for (int i = 1; i < 4; ++i)
+        g.drawVerticalLine ((int) (plot.getX() + plot.getWidth() * (float) i / 4.0f), plot.getY(), plot.getBottom());
+
+    juce::Path wave;
+    constexpr int points = 128;
+    for (int i = 0; i < points; ++i)
+    {
+        const float t = (float) i / (float) (points - 1);
+        const float x = juce::jmap (t, 0.0f, 1.0f, plot.getX(), plot.getRight());
+        const float y = plot.getCentreY() - std::sin (phase + t * juce::MathConstants<float>::twoPi * 2.0f) * plot.getHeight() * 0.38f;
+        if (i == 0) wave.startNewSubPath (x, y); else wave.lineTo (x, y);
+    }
+    g.setColour (tealColour().withAlpha (0.17f));
+    g.strokePath (wave, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (tealColour());
+    g.strokePath (wave, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    auto destinations = bounds.reduced (10.0f).removeFromBottom (17.0f);
+    const std::array<std::pair<const char*, float>, 3> values {{ { "PITCH", pitch }, { "FILTER", cutoff }, { "AMP", amp } }};
+    const int cellW = (int) destinations.getWidth() / 3;
+    for (int i = 0; i < 3; ++i)
+    {
+        auto cell = juce::Rectangle<float> (destinations.getX() + (float) i * (float) cellW, destinations.getY(), (float) cellW, destinations.getHeight()).reduced (2.0f, 2.0f);
+        g.setColour (juce::Colour (0xff223033)); g.fillRoundedRectangle (cell, 2.0f);
+        g.setColour (i == 1 ? goldColour() : cyanColour()); g.fillRoundedRectangle (cell.withWidth (cell.getWidth() * values[(size_t) i].second), 2.0f);
+        g.setColour (juce::Colour (0xffc2cfca)); g.setFont (juce::Font (juce::FontOptions (7.5f, juce::Font::bold)));
+        g.drawText (values[(size_t) i].first, cell, juce::Justification::centred);
+    }
+
+    g.setColour (goldColour());
+    g.setFont (juce::Font (juce::FontOptions (8.5f, juce::Font::bold)));
+    g.drawText (juce::String (rate, rate < 10.0f ? 2 : 1) + " Hz", bounds.withHeight (20.0f).reduced (8.0f, 0.0f), juce::Justification::centredRight);
+}
+
+void RetroMatchSynthAudioProcessorEditor::StereoMeter::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+    drawScopeFrame (g, bounds, "OUTPUT", goldColour());
+    auto meterArea = bounds.reduced (10.0f).withTrimmedTop (20.0f).withTrimmedBottom (17.0f);
+    if (meterArea.getWidth() < 20.0f || meterArea.getHeight() < 30.0f) return;
+
+    const std::array<float, 2> peaks { proc.getOutputPeakLeft(), proc.getOutputPeakRight() };
+    constexpr int segments = 18;
+    const float gap = 2.0f;
+    const float channelGap = 8.0f;
+    const float channelW = (meterArea.getWidth() - channelGap) * 0.5f;
+    const float segmentH = (meterArea.getHeight() - gap * (segments - 1)) / (float) segments;
+
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        const float db = juce::jlimit (-60.0f, 3.0f, 20.0f * std::log10 (juce::jmax (0.0001f, peaks[(size_t) channel])));
+        const float norm = juce::jlimit (0.0f, 1.0f, juce::jmap (db, -48.0f, 0.0f, 0.0f, 1.0f));
+        const int lit = (int) std::ceil (norm * (float) segments);
+        const float x = meterArea.getX() + (float) channel * (channelW + channelGap);
+        for (int i = 0; i < segments; ++i)
+        {
+            const float y = meterArea.getBottom() - (float) (i + 1) * segmentH - (float) i * gap;
+            auto segment = juce::Rectangle<float> (x, y, channelW, segmentH);
+            juce::Colour colour = i > 15 ? juce::Colour (0xffe56c55) : (i > 12 ? goldColour() : tealColour());
+            if (i >= lit) colour = juce::Colour (0xff243033);
+            else
+            {
+                g.setColour (colour.withAlpha (0.12f));
+                g.fillRoundedRectangle (segment.expanded (1.5f), 1.5f);
+            }
+            g.setColour (colour);
+            g.fillRoundedRectangle (segment, 1.2f);
+        }
+    }
+
+    auto labels = bounds.removeFromBottom (17.0f).reduced (10.0f, 0.0f);
+    g.setColour (juce::Colour (0xffa7b8b2));
+    g.setFont (juce::Font (juce::FontOptions (8.0f, juce::Font::bold)));
+    auto left = labels.removeFromLeft ((int) labels.getWidth() / 2);
+    g.drawText ("L", left, juce::Justification::centred);
+    g.drawText ("R", labels, juce::Justification::centred);
+}
+
+//==============================================================================
 RetroMatchSynthAudioProcessorEditor::VariantThread::VariantThread (RetroMatchSynthAudioProcessorEditor& ownerIn, WorkMode modeIn)
     : juce::Thread (modeIn == WorkMode::ai ? "RetroMatch AI variants" : "RetroMatch local variants"), owner (ownerIn), mode (modeIn)
 {
@@ -132,7 +381,7 @@ void RetroMatchSynthAudioProcessorEditor::VariantThread::run()
 
 //==============================================================================
 RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroMatchSynthAudioProcessor& p)
-    : AudioProcessorEditor (&p), proc (p), aiSettings (AISettings::load())
+    : AudioProcessorEditor (&p), proc (p), filterGraph (p), envelopeGraph (p), lfoScope (p), outputMeter (p), aiSettings (AISettings::load())
 {
     setLookAndFeel (&laf);
 
@@ -210,7 +459,6 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
 
     configureReferenceAudition();
 
-    // Core selectors.
     styleTextLabel (osc1Label, "OSC 1 WAVE");
     styleTextLabel (osc2Label, "OSC 2 WAVE");
     styleTextLabel (filterLabel, "FILTER MODE");
@@ -290,7 +538,6 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
 
     rebindFmOperatorEditor();
 
-    // AI configuration.
     aiProvider.addItemList ({ "Disabled", "OpenAI", "Google Gemini", "OpenAI-compatible / Azure", "GitHub Copilot bridge" }, 1);
     aiProvider.onChange = [this]
     {
@@ -345,10 +592,7 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
         juce::SystemClipboard::copyTextToClipboard (aiLog.getText());
         status.setText ("AI diagnostics copied to the clipboard.", juce::dontSendNotification);
     };
-    aiClearLog.onClick = [this]
-    {
-        setAILog ("AI log cleared. Run AI x3 to capture a new request.");
-    };
+    aiClearLog.onClick = [this] { setAILog ("AI log cleared. Run AI x3 to capture a new request."); };
     setAILog ("No AI request has been run in this editor session yet.");
 
     resynthBackend.addItemList ({ "Native Hybrid / Reference Wavetable", "WORLD Vocoder (experimental speech/vocal backend)" }, 1);
@@ -365,7 +609,6 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
 
     updateAIControlsFromSettings();
 
-    // Audition keyboard.
     keyboardState.addListener (this);
     keyboard.setAvailableRange (36, 96);
     keyboard.setKeyWidth (22.0f);
@@ -382,7 +625,6 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     updateReferencePitchControls();
     updateReferenceAuditionControls();
 
-    // Any size change can invoke resized() immediately, so this stays last.
     setResizable (true, true);
     setResizeLimits (1180, 760, 2300, 1500);
     setSize (1520, 920);
@@ -474,20 +716,12 @@ void RetroMatchSynthAudioProcessorEditor::configureReferenceAudition()
     referenceLevel.setValue (proc.getReferenceAuditionLevel(), juce::dontSendNotification);
     referenceLevel.setTextBoxStyle (juce::Slider::TextBoxRight, false, 48, 20);
     referenceLevel.setNumDecimalPlacesToDisplay (2);
-    referenceLevel.onValueChange = [this]
-    {
-        proc.setReferenceAuditionLevel ((float) referenceLevel.getValue());
-    };
+    referenceLevel.onValueChange = [this] { proc.setReferenceAuditionLevel ((float) referenceLevel.getValue()); };
 
-    addAndMakeVisible (referencePitchInfo);
-    addAndMakeVisible (referenceBaseNoteLabel);
-    addAndMakeVisible (referenceBaseNoteChoice);
-    addAndMakeVisible (resetReferencePitch);
-    addAndMakeVisible (auditionSynth);
-    addAndMakeVisible (auditionReference);
-    addAndMakeVisible (auditionMix);
-    addAndMakeVisible (referenceLevelLabel);
-    addAndMakeVisible (referenceLevel);
+    for (auto* component : std::array<juce::Component*, 9> { &referencePitchInfo, &referenceBaseNoteLabel, &referenceBaseNoteChoice,
+                                                              &resetReferencePitch, &auditionSynth, &auditionReference, &auditionMix,
+                                                              &referenceLevelLabel, &referenceLevel })
+        addAndMakeVisible (*component);
 }
 
 void RetroMatchSynthAudioProcessorEditor::updateReferencePitchControls()
@@ -532,6 +766,7 @@ void RetroMatchSynthAudioProcessorEditor::updateReferenceAuditionControls()
 void RetroMatchSynthAudioProcessorEditor::addKnob (const juce::String& id, const juce::String& name, const juce::String& suffix)
 {
     auto knob = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow);
+    knob->setName (id);
     knob->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 74, 19);
     knob->setTextValueSuffix (suffix);
     knob->setMouseDragSensitivity (180);
@@ -611,14 +846,14 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
     const std::array<juce::Component*, 4> synthControls { &osc1Label, &osc1Choice, &osc2Label, &osc2Choice };
     for (auto* c : synthControls) synthPage.addAndMakeVisible (*c);
 
-    const std::array<juce::Component*, 6> fmControls {
-        &fmAlgorithmLabel, &fmAlgorithmChoice, &fmOperatorEditLabel,
-        &fmOperatorEditChoice, &fmModeLabel, &fmModeChoice
-    };
+    const std::array<juce::Component*, 6> fmControls { &fmAlgorithmLabel, &fmAlgorithmChoice, &fmOperatorEditLabel, &fmOperatorEditChoice, &fmModeLabel, &fmModeChoice };
     for (auto* c : fmControls) fmPage.addAndMakeVisible (*c);
 
     for (size_t i = 0; i < fmDetailSliders.size(); ++i) { fmPage.addAndMakeVisible (fmDetailLabels[i]); fmPage.addAndMakeVisible (fmDetailSliders[i]); }
     filterAmpPage.addAndMakeVisible (filterLabel); filterAmpPage.addAndMakeVisible (filterChoice);
+    filterAmpPage.addAndMakeVisible (filterGraph); filterAmpPage.addAndMakeVisible (envelopeGraph);
+    modPage.addAndMakeVisible (lfoScope);
+    fxPage.addAndMakeVisible (outputMeter);
 
     for (int i = 0; i < VoiceParameters::modSlotCount; ++i)
     {
@@ -715,13 +950,31 @@ void RetroMatchSynthAudioProcessorEditor::layoutPages()
 
     auto fa = filterAmpPage.getLocalBounds().reduced (12);
     const int split = fa.getHeight() / 2;
-    auto filterArea = fa.removeFromTop (split).reduced (0, 2); filterSection.setBounds (filterArea.removeFromTop (24));
-    auto filterSelector = filterArea.removeFromTop (38).reduced (4, 4); filterLabel.setBounds (filterSelector.removeFromLeft (95)); filterChoice.setBounds (filterSelector.removeFromLeft (220));
-    layoutKnobGrid (filterKnobs, filterArea, 3);
-    ampSection.setBounds (fa.removeFromTop (24)); layoutKnobGrid (ampKnobs, fa.reduced (0, 5), 5);
+    auto filterArea = fa.removeFromTop (split).reduced (0, 2);
+    filterSection.setBounds (filterArea.removeFromTop (24));
+    auto filterSelector = filterArea.removeFromTop (38).reduced (4, 4);
+    filterLabel.setBounds (filterSelector.removeFromLeft (95));
+    filterChoice.setBounds (filterSelector.removeFromLeft (220));
+    filterArea.removeFromTop (3);
+    const int filterGraphW = juce::jlimit (210, 390, (int) std::round (filterArea.getWidth() * 0.42));
+    auto filterGraphArea = filterArea.removeFromRight (filterGraphW).reduced (6, 4);
+    filterGraph.setBounds (filterGraphArea);
+    layoutKnobGrid (filterKnobs, filterArea.reduced (1, 4), 3);
+
+    ampSection.setBounds (fa.removeFromTop (24));
+    fa.removeFromTop (4);
+    const int envelopeW = juce::jlimit (220, 410, (int) std::round (fa.getWidth() * 0.43));
+    auto envelopeArea = fa.removeFromRight (envelopeW).reduced (6, 4);
+    envelopeGraph.setBounds (envelopeArea);
+    layoutKnobGrid (ampKnobs, fa.reduced (1, 4), 3);
 
     auto mod = modPage.getLocalBounds().reduced (12);
-    modLfoSection.setBounds (mod.removeFromTop (24)); auto lfo = mod.removeFromTop (juce::jmax (135, mod.getHeight() / 3)); layoutKnobGrid (modLfoKnobs, lfo, 4);
+    modLfoSection.setBounds (mod.removeFromTop (24));
+    auto lfo = mod.removeFromTop (juce::jmax (155, mod.getHeight() / 3));
+    const int scopeW = juce::jlimit (220, 410, (int) std::round (lfo.getWidth() * 0.42));
+    auto scopeArea = lfo.removeFromRight (scopeW).reduced (6, 5);
+    lfoScope.setBounds (scopeArea);
+    layoutKnobGrid (modLfoKnobs, lfo.reduced (1, 3), 3);
     mod.removeFromTop (6); modMatrixSection.setBounds (mod.removeFromTop (24)); mod.removeFromTop (5);
     const int rowH = juce::jmax (50, mod.getHeight() / VoiceParameters::modSlotCount);
     for (int i = 0; i < VoiceParameters::modSlotCount; ++i)
@@ -734,8 +987,14 @@ void RetroMatchSynthAudioProcessorEditor::layoutPages()
     }
 
     auto fx = fxPage.getLocalBounds().reduced (12);
+    const int meterW = juce::jlimit (82, 118, fx.getWidth() / 8);
+    auto meterArea = fx.removeFromRight (meterW).reduced (5, 4);
+    outputMeter.setBounds (meterArea);
+    fx.removeFromRight (5);
     const int third = fx.getWidth() / 3;
-    auto chorusArea = fx.removeFromLeft (third).reduced (4); auto delayArea = fx.removeFromLeft (third).reduced (4); auto reverbArea = fx.reduced (4);
+    auto chorusArea = fx.removeFromLeft (third).reduced (4);
+    auto delayArea = fx.removeFromLeft (third).reduced (4);
+    auto reverbArea = fx.reduced (4);
     fxChorusSection.setBounds (chorusArea.removeFromTop (24)); layoutKnobGrid (chorusKnobs, chorusArea.reduced (0, 5), 2);
     fxDelaySection.setBounds (delayArea.removeFromTop (24)); layoutKnobGrid (delayKnobs, delayArea.reduced (0, 5), 2);
     fxReverbSection.setBounds (reverbArea.removeFromTop (24)); layoutKnobGrid (reverbKnobs, reverbArea.reduced (0, 5), 2);
@@ -942,6 +1201,11 @@ void RetroMatchSynthAudioProcessorEditor::drawPipeline (juce::Graphics& g, juce:
         g.setColour (active ? tealColour() : (complete ? juce::Colour (0xff4f8a7c) : juce::Colour (0xff344044)));
         g.drawRoundedRectangle (stage, 5.0f, active ? 1.6f : 1.0f);
         auto led = juce::Rectangle<float> (stage.getX() + 7.0f, stage.getCentreY() - 3.0f, 6.0f, 6.0f);
+        if (active)
+        {
+            g.setColour (tealColour().withAlpha (0.18f));
+            g.fillEllipse (led.expanded (5.0f));
+        }
         g.setColour (active ? tealColour() : (complete ? goldColour() : juce::Colour (0xff384643)));
         g.fillEllipse (led);
         g.setColour (juce::Colour (0xffb6c4bf));
@@ -1208,10 +1472,7 @@ void RetroMatchSynthAudioProcessorEditor::chooseFile()
                                   + " at " + juce::String (safe->proc.getDetectedReferenceHz(), 1)
                                   + " Hz. Correct BASE NOTE if needed, then run Quick / Refine / AI.", juce::dontSendNotification);
         }
-        else
-        {
-            safe->status.setText ("Could not analyse this reference.", juce::dontSendNotification);
-        }
+        else safe->status.setText ("Could not analyse this reference.", juce::dontSendNotification);
         safe->repaint();
     });
 }
@@ -1291,10 +1552,13 @@ void RetroMatchSynthAudioProcessorEditor::rebindFmOperatorEditor()
 void RetroMatchSynthAudioProcessorEditor::timerCallback()
 {
     progressDisplay = matchProgress.load();
-    if (worker != nullptr && ! worker->isThreadRunning())
-        progressBar.setVisible (false);
+    if (worker != nullptr && ! worker->isThreadRunning()) progressBar.setVisible (false);
     updateReferenceAuditionControls();
     repaint (workspaceBounds);
+    filterGraph.repaint();
+    envelopeGraph.repaint();
+    lfoScope.repaint();
+    outputMeter.repaint();
 }
 
 void RetroMatchSynthAudioProcessorEditor::handleNoteOn (juce::MidiKeyboardState*, int, int midiNoteNumber, float velocity)
