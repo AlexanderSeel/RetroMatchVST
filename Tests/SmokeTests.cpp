@@ -96,6 +96,17 @@ int main()
     if (! finiteFeatures (reference)) return fail ("reference analysis generated non-finite descriptors");
     if (reference.rms <= 1.0e-5f) return fail ("offline renderer generated silence");
     if (reference.stereoWidth <= 1.0e-4f) return fail ("supersaw/unison renderer did not create a stereo image");
+    if (std::abs (reference.fundamentalHz - fundamental) > 0.01f)
+        return fail ("expected reference fundamental was not retained by analysis");
+
+    // A user's manual base-note correction must replace the pitch assumption used
+    // by harmonic descriptors and matching, rather than changing only the UI label.
+    constexpr float correctedFundamental = 329.6276f;
+    const auto correctedReference = SampleAnalyzer::analyzeBuffer (referenceAudio, sampleRate, correctedFundamental);
+    if (std::abs (correctedReference.fundamentalHz - correctedFundamental) > 0.01f)
+        return fail ("manual reference base-note override was ignored by analysis");
+    if (! std::isfinite (correctedReference.pitchConfidence))
+        return fail ("manual reference base-note confidence is not finite");
 
     float temporalEnergy = 0.0f;
     for (const auto& frame : reference.temporalSpectralBands)
