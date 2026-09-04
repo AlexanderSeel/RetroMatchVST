@@ -4,10 +4,19 @@
 #include "Analysis/SampleAnalyzer.h"
 #include "Matching/SoundMatcher.h"
 #include "Matching/OfflineRenderer.h"
+#include "Reference/ReferenceSamplePlayer.h"
+#include <atomic>
 
 class RetroMatchSynthAudioProcessor : public juce::AudioProcessor
 {
 public:
+    enum class ReferenceAuditionMode : int
+    {
+        synthOnly = 0,
+        referenceOnly,
+        mixed
+    };
+
     RetroMatchSynthAudioProcessor();
     ~RetroMatchSynthAudioProcessor() override = default;
 
@@ -41,6 +50,25 @@ public:
     int selectedCandidate = 0;
 
     bool loadReferenceSample (const juce::File&);
+    bool setReferenceBaseMidiNote (int midiNote);
+    bool resetReferenceBaseMidiNote();
+    int getReferenceBaseMidiNote() const noexcept { return referenceBaseMidiNote.load(); }
+    int getDetectedReferenceMidiNote() const noexcept { return detectedReferenceMidiNote; }
+    float getDetectedReferenceHz() const noexcept { return detectedReferenceHz; }
+    float getDetectedReferencePitchConfidence() const noexcept { return detectedReferencePitchConfidence; }
+    bool hasReferenceSample() const noexcept { return referencePlayer.hasSample(); }
+
+    static float midiNoteToHz (int midiNote);
+    static int hzToNearestMidiNote (float hz);
+
+    void setReferenceAuditionMode (ReferenceAuditionMode mode);
+    ReferenceAuditionMode getReferenceAuditionMode() const noexcept
+    {
+        return static_cast<ReferenceAuditionMode> (referenceAuditionMode.load());
+    }
+    void setReferenceAuditionLevel (float level) noexcept { referenceAuditionLevel.store (juce::jlimit (0.0f, 1.0f, level)); }
+    float getReferenceAuditionLevel() const noexcept { return referenceAuditionLevel.load(); }
+
     MatchResult fitReference();
     MatchResult refineReference (SoundMatcher::ProgressCallback progress = {}, SoundMatcher::CancelCallback cancel = {});
     void applyMatchResult (const MatchResult&);
@@ -53,17 +81,28 @@ public:
     bool loadPreset (const juce::File&);
     bool exportPreviewWav (const juce::File&, float seconds = 2.5f) const;
 
-    // Optional UI audition keyboard. These calls are only for manual testing;
-    // host MIDI continues to use the normal processBlock path.
-    void noteOnFromEditor (int midiNote, float velocity) { engine.noteOnFromUi (midiNote, velocity); }
-    void noteOffFromEditor (int midiNote, float velocity = 0.0f) { engine.noteOffFromUi (midiNote, velocity); }
-    void allEditorNotesOff() { engine.allNotesOffFromUi(); }
+    // Optional UI audition keyboard. It can audition the synth, the loaded
+    // reference sample transposed from its base note, or both together.
+    void noteOnFromEditor (int midiNote, float velocity);
+    void noteOffFromEditor (int midiNote, float velocity = 0.0f);
+    void allEditorNotesOff();
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
 private:
     SynthEngine engine;
+    ReferenceSamplePlayer referencePlayer;
+    juce::AudioBuffer<float> referenceScratch;
+    juce::File loadedReferenceFile;
+    std::atomic<int> referenceAuditionMode { (int) ReferenceAuditionMode::synthOnly };
+    std::atomic<float> referenceAuditionLevel { 0.70f };
+    std::atomic<int> referenceBaseMidiNote { 60 };
+    int detectedReferenceMidiNote = 60;
+    float detectedReferenceHz = 0.0f;
+    float detectedReferencePitchConfidence = 0.0f;
+
     VoiceParameters readParams() const;
     void updateCandidatePreview (const MatchResult&);
+    void invalidateMatchesAfterReferencePitchChange();
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RetroMatchSynthAudioProcessor)
 };
