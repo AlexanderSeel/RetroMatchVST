@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include "ReferenceWavetable.h"
+#include "MSEG.h"
 
 enum class ModSource : int
 {
@@ -12,7 +13,8 @@ enum class ModSource : int
     velocity,
     keyTrack,
     randomNote,
-    ampEnvelope
+    ampEnvelope,
+    mseg1
 };
 
 enum class ModDestination : int
@@ -39,6 +41,7 @@ struct VoiceParameters
 {
     static constexpr int fmOperatorCount = 6;
     static constexpr int modSlotCount = 4;
+    static constexpr int modGraphSlotCount = 4;
 
     float osc1Mix = 0.75f, osc2Mix = 0.35f, subMix = 0.0f, noiseMix = 0.0f, ringMix = 0.0f, additiveMix = 0.0f;
     int osc1Wave = 1, osc2Wave = 0;
@@ -75,7 +78,13 @@ struct VoiceParameters
     int filterType = 0;
     float lfoRate = 1.5f, lfoPitch = 0.0f, lfoCutoff = 0.0f, lfoAmp = 0.0f;
 
+    // The original four-slot matrix is frozen for v1.0 automation compatibility.
     std::array<ModSlotParameters, modSlotCount> modSlots {};
+
+    // Post-1.0 modulation layer. New source/destination choices live here so the
+    // normalized values of the original mod slot choices never change.
+    MsegParameters mseg;
+    std::array<ModSlotParameters, modGraphSlotCount> modGraphSlots {};
 
     float drive = 0.0f;
     float chorusMix = 0.0f, chorusRate = 0.35f, chorusDepth = 0.25f;
@@ -114,6 +123,7 @@ private:
     juce::ADSR::Parameters envParams;
     std::array<juce::ADSR, VoiceParameters::fmOperatorCount> fmEnvelopes;
     std::array<juce::ADSR::Parameters, VoiceParameters::fmOperatorCount> fmEnvelopeParams;
+    MultiSegmentEnvelope mseg;
     juce::dsp::StateVariableTPTFilter<float> filter;
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling2x, oversampling4x;
     juce::AudioBuffer<float> renderScratch;
@@ -132,7 +142,7 @@ private:
     static float foldSample (float sample, float amount);
     float renderSixOperatorFm (float fundamentalHz);
     void renderSupersaw (float fundamentalHz, float detuneCents, float spread, float& left, float& right);
-    float getModSourceValue (int source, float lfo, float envelopeValue) const;
+    float getModSourceValue (int source, float lfo, float envelopeValue, float msegValue) const;
 };
 
 class BasicSound : public juce::SynthesiserSound
