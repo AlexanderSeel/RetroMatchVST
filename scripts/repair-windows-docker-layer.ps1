@@ -7,7 +7,8 @@ param(
 $ErrorActionPreference = "Stop"
 $scriptRoot = $PSScriptRoot
 $baseImage = "mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2022"
-$buildImage = "retromatch-build-windows:1.0.0"
+$legacyBuildImage = "retromatch-build-windows:1.0.0"
+$sourceImage = "retromatch-source-windows:1.0.0"
 
 function Invoke-Docker([string[]]$Arguments, [string]$Description, [switch]$AllowFailure) {
     Write-Host "$Description ..." -ForegroundColor Cyan
@@ -30,8 +31,8 @@ if ($engine -ne "windows") {
 
 Write-Host "RetroMatch targeted Windows-layer recovery" -ForegroundColor Yellow
 Write-Host "This does NOT run docker system prune and does not remove unrelated images." -ForegroundColor DarkGray
+Write-Host "Current RetroMatch builds compile in a disposable container so compiler output is never committed as a Docker image layer." -ForegroundColor DarkGray
 
-# Failed Docker builds can leave temporary RetroMatch export/build containers around.
 $staleContainers = @(& docker ps -aq --filter "name=retromatch-" 2>$null)
 foreach ($container in $staleContainers) {
     if (-not [string]::IsNullOrWhiteSpace($container)) {
@@ -39,9 +40,10 @@ foreach ($container in $staleContainers) {
     }
 }
 
-# Remove only the generated RetroMatch image tag. Corrupt/invalid cached build
-# layers will be bypassed by the recovery build's --no-cache option below.
-& docker image rm -f $buildImage *> $null
+# Remove only RetroMatch image tags. Toolchain layers can still be reused from
+# Docker's cache, but stale tagged source/final images cannot interfere.
+& docker image rm -f $legacyBuildImage *> $null
+& docker image rm -f $sourceImage *> $null
 
 Write-Host "Validating the LTSC 2022 base image by creating a container..." -ForegroundColor Cyan
 & docker run --rm $baseImage cmd.exe /D /C ver
@@ -56,22 +58,22 @@ if (-not $baseHealthy) {
     if ($LASTEXITCODE -ne 0) {
         throw @"
 The Windows base image is still unusable after a clean re-pull.
-Docker Desktop's Windows container layer store is damaged beyond RetroMatch's own cache.
-Restart Docker Desktop and run this script once more. If hcsshim::ImportLayer still fails,
-use Docker Desktop Troubleshoot/Clean-Purge data as the final recovery step; that action is
-intentionally not automated because it removes unrelated Docker state.
+Docker Desktop's Windows container layer store is damaged below RetroMatch's own images.
+Restart Docker Desktop and run this script once more. If hcsshim::ImportLayer still fails
+while building the small source/toolchain image, use Docker Desktop Troubleshoot/Clean-Purge
+as the final recovery step; that action is intentionally not automated because it removes
+unrelated Docker state.
 "@
     }
 }
 
 Write-Host "Base image container creation succeeded." -ForegroundColor Green
-Write-Host "Rebuilding RetroMatch once without cached intermediate layers..." -ForegroundColor Yellow
+Write-Host "Running the disposable-container Windows build workflow..." -ForegroundColor Yellow
 
 $buildScript = Join-Path $scriptRoot "build-docker.ps1"
 $params = @{
     Target = "Windows"
     Config = $Config
-    NoCache = $true
 }
 if ($InstallDocker) { $params.InstallDocker = $true }
 if ($NonInteractive) { $params.NonInteractive = $true }
@@ -81,4 +83,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "RetroMatch recovery build failed (exit code $LASTEXITCODE)."
 }
 
-Write-Host "Windows Docker layer recovery and RetroMatch rebuild completed." -ForegroundColor Green
+Write-Host "Windows Docker recovery and RetroMatch disposable-container build completed." -ForegroundColor Green
