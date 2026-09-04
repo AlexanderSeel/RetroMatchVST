@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "UI/MsegPage.h"
 #include <cmath>
 
 namespace
@@ -31,6 +32,10 @@ public:
                     settingsPage->addAndMakeVisible (qualityChoice);
                 }
             }
+
+            // Keep the legacy MOD tab unchanged for automation/UI compatibility and
+            // give the post-1.0 modulation graph a dedicated full-size editor page.
+            tabbed->addTab ("MSEG", juce::Colour (0xff10201d), new MsegPage (proc.apvts), true);
         }
         resized();
     }
@@ -62,11 +67,39 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> qualityAttachment;
 };
 
-juce::ValueTree stateWithOversamplingDefault (const juce::XmlElement& xml)
+juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
 {
     auto state = juce::ValueTree::fromXml (xml);
-    if (state.isValid() && ! state.hasProperty ("oversamplingQuality"))
-        state.setProperty ("oversamplingQuality", 0, nullptr);
+    if (! state.isValid()) return state;
+
+    auto setDefault = [&state] (const juce::String& id, const juce::var& value)
+    {
+        if (! state.hasProperty (id)) state.setProperty (id, value, nullptr);
+    };
+
+    setDefault ("oversamplingQuality", 0);
+    setDefault ("msegEnabled", false);
+    setDefault ("msegLoopEnabled", false);
+    setDefault ("msegLoopStart", 1);
+    setDefault ("msegLoopEnd", 2);
+
+    const std::array<float, MsegParameters::pointCount> levels {{ 0.0f, 1.0f, 0.78f, 0.58f, 0.28f, 0.0f }};
+    const std::array<float, MsegParameters::segmentCount> times {{ 0.025f, 0.090f, 0.180f, 0.320f, 0.420f }};
+    const std::array<float, MsegParameters::segmentCount> curves {{ 0.15f, -0.10f, 0.0f, 0.10f, -0.15f }};
+    for (int i = 0; i < MsegParameters::pointCount; ++i)
+        setDefault ("msegLevel" + juce::String (i + 1), levels[(size_t) i]);
+    for (int i = 0; i < MsegParameters::segmentCount; ++i)
+    {
+        setDefault ("msegTime" + juce::String (i + 1), times[(size_t) i]);
+        setDefault ("msegCurve" + juce::String (i + 1), curves[(size_t) i]);
+    }
+    for (int i = 0; i < VoiceParameters::modGraphSlotCount; ++i)
+    {
+        const auto index = juce::String (i + 1);
+        setDefault ("modGraph" + index + "Source", 0);
+        setDefault ("modGraph" + index + "Dest", 0);
+        setDefault ("modGraph" + index + "Amount", 0.0f);
+    }
     return state;
 }
 }
@@ -163,6 +196,25 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams() const
         p.modSlots[(size_t) i].source = (int) apvts.getRawParameterValue ("mod" + index + "Source")->load();
         p.modSlots[(size_t) i].destination = (int) apvts.getRawParameterValue ("mod" + index + "Dest")->load();
         p.modSlots[(size_t) i].amount = apvts.getRawParameterValue ("mod" + index + "Amount")->load();
+    }
+
+    p.mseg.enabled = v ("msegEnabled") >= 0.5f;
+    p.mseg.loopEnabled = v ("msegLoopEnabled") >= 0.5f;
+    p.mseg.loopStartPoint = juce::jlimit (0, MsegParameters::pointCount - 2, (int) v ("msegLoopStart"));
+    p.mseg.loopEndPoint = juce::jlimit (1, MsegParameters::pointCount - 1, (int) v ("msegLoopEnd") + 1);
+    for (int i = 0; i < MsegParameters::pointCount; ++i)
+        p.mseg.levels[(size_t) i] = apvts.getRawParameterValue ("msegLevel" + juce::String (i + 1))->load();
+    for (int i = 0; i < MsegParameters::segmentCount; ++i)
+    {
+        p.mseg.times[(size_t) i] = apvts.getRawParameterValue ("msegTime" + juce::String (i + 1))->load();
+        p.mseg.curves[(size_t) i] = apvts.getRawParameterValue ("msegCurve" + juce::String (i + 1))->load();
+    }
+    for (int i = 0; i < VoiceParameters::modGraphSlotCount; ++i)
+    {
+        const auto index = juce::String (i + 1);
+        p.modGraphSlots[(size_t) i].source = (int) apvts.getRawParameterValue ("modGraph" + index + "Source")->load();
+        p.modGraphSlots[(size_t) i].destination = (int) apvts.getRawParameterValue ("modGraph" + index + "Dest")->load();
+        p.modGraphSlots[(size_t) i].amount = apvts.getRawParameterValue ("modGraph" + index + "Amount")->load();
     }
 
     p.drive = v ("drive");
@@ -398,8 +450,8 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
     set ("reverbMix", q.reverbMix); set ("reverbSize", q.reverbSize); set ("reverbDamping", q.reverbDamping);
     set ("stereoWidth", q.stereoWidth); set ("outputGain", q.outputGainDb);
 
-    // oversamplingQuality intentionally remains a user/host render preference and is
-    // never overwritten when selecting, morphing or applying matcher candidates.
+    // Render quality and the post-1.0 MSEG graph are user/host-authored layers.
+    // Matcher candidate selection intentionally never overwrites them.
     lastMatch = result;
     updateCandidatePreview (result);
 }
@@ -437,6 +489,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
 {
     using P = juce::AudioParameterFloat;
     using C = juce::AudioParameterChoice;
+    using B = juce::AudioParameterBool;
     juce::AudioProcessorValueTreeState::ParameterLayout l;
 
     l.add (std::make_unique<C> ("osc1Wave", "OSC 1 Wave", juce::StringArray { "Sine", "Saw", "Square", "Triangle", "Pulse" }, 1));
@@ -502,8 +555,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
     l.add (std::make_unique<P> ("lfoAmp", "LFO Amp", juce::NormalisableRange<float> (0, 1), 0));
 
     const juce::StringArray modSources { "Off", "LFO 1", "Velocity", "Key Track", "Random Note", "Amp Env" };
-    const juce::StringArray modDestinations { "Off", "LFO 1", "Velocity", "Key Track", "Random Note", "Amp Env" };
-    juce::ignoreUnused (modDestinations);
     const juce::StringArray actualModDestinations { "Off", "Pitch", "Cutoff", "Amplitude", "Pulse Width", "FM Amount", "6-OP FM Mix", "Wavetable Position", "Wavefold" };
     for (int i = 0; i < VoiceParameters::modSlotCount; ++i)
     {
@@ -526,8 +577,41 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
     l.add (std::make_unique<P> ("stereoWidth", "Stereo Width", juce::NormalisableRange<float> (0, 2), 1.0f));
     l.add (std::make_unique<P> ("outputGain", "Output Gain", juce::NormalisableRange<float> (-18, 6, 0.1f), -3.0f));
 
-    // Appended after every v1.0 parameter so existing parameter IDs and ordering remain stable.
+    // Existing post-1.0 quality parameter remains first after the frozen v1.0 surface.
     l.add (std::make_unique<C> ("oversamplingQuality", "Nonlinear Oversampling", juce::StringArray { "1x", "2x", "4x" }, 0));
+
+    // MSEG/modulation-graph parameters are append-only. Do not insert new values into
+    // the legacy modSource/modDestination choice arrays above.
+    l.add (std::make_unique<B> ("msegEnabled", "MSEG 1 Enabled", false));
+    l.add (std::make_unique<B> ("msegLoopEnabled", "MSEG 1 Loop Enabled", false));
+    l.add (std::make_unique<C> ("msegLoopStart", "MSEG 1 Loop Start", juce::StringArray { "P1", "P2", "P3", "P4", "P5" }, 1));
+    l.add (std::make_unique<C> ("msegLoopEnd", "MSEG 1 Loop End", juce::StringArray { "P2", "P3", "P4", "P5", "P6" }, 2));
+
+    const float defaultMsegLevels[] = { 0.0f, 1.0f, 0.78f, 0.58f, 0.28f, 0.0f };
+    for (int i = 0; i < MsegParameters::pointCount; ++i)
+    {
+        const auto index = juce::String (i + 1);
+        l.add (std::make_unique<P> ("msegLevel" + index, "MSEG 1 Point " + index + " Level", juce::NormalisableRange<float> (0, 1), defaultMsegLevels[i]));
+    }
+
+    const float defaultMsegTimes[] = { 0.025f, 0.090f, 0.180f, 0.320f, 0.420f };
+    const float defaultMsegCurves[] = { 0.15f, -0.10f, 0.0f, 0.10f, -0.15f };
+    for (int i = 0; i < MsegParameters::segmentCount; ++i)
+    {
+        const auto index = juce::String (i + 1);
+        l.add (std::make_unique<P> ("msegTime" + index, "MSEG 1 Segment " + index + " Time", juce::NormalisableRange<float> (0.001f, 12.0f, 0.0f, 0.30f), defaultMsegTimes[i]));
+        l.add (std::make_unique<P> ("msegCurve" + index, "MSEG 1 Segment " + index + " Curve", juce::NormalisableRange<float> (-1, 1), defaultMsegCurves[i]));
+    }
+
+    const juce::StringArray graphSources { "Off", "LFO 1", "Velocity", "Key Track", "Random Note", "Amp Env", "MSEG 1" };
+    const juce::StringArray graphDestinations { "Off", "Pitch", "Cutoff", "Amplitude", "Pulse Width", "FM Amount", "6-OP FM Mix", "Wavetable Position", "Wavefold" };
+    for (int i = 0; i < VoiceParameters::modGraphSlotCount; ++i)
+    {
+        const auto index = juce::String (i + 1);
+        l.add (std::make_unique<C> ("modGraph" + index + "Source", "Graph " + index + " Source", graphSources, 0));
+        l.add (std::make_unique<C> ("modGraph" + index + "Dest", "Graph " + index + " Destination", graphDestinations, 0));
+        l.add (std::make_unique<P> ("modGraph" + index + "Amount", "Graph " + index + " Amount", juce::NormalisableRange<float> (-1, 1), 0));
+    }
     return l;
 }
 
@@ -535,7 +619,7 @@ bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
 {
     auto xml = apvts.copyState().createXml();
     if (! xml) return false;
-    xml->setAttribute ("presetVersion", "1.0");
+    xml->setAttribute ("presetVersion", "1.1");
     if (referenceWavetable && referenceWavetable->valid) xml->setAttribute ("referenceWavetable", referenceWavetable->toBase64());
     xml->setAttribute ("product", "RetroMatchSynth");
     return xml->writeTo (file, {});
@@ -545,7 +629,7 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
 {
     auto xml = juce::XmlDocument::parse (file);
     if (! xml || ! xml->hasTagName (apvts.state.getType())) return false;
-    apvts.replaceState (stateWithOversamplingDefault (*xml));
+    apvts.replaceState (stateWithPost10Defaults (*xml));
     if (xml->hasAttribute ("referenceWavetable")) referenceWavetable = ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable"));
     return true;
 }
@@ -587,7 +671,7 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
     {
         if (xml->hasTagName (apvts.state.getType()))
         {
-            apvts.replaceState (stateWithOversamplingDefault (*xml));
+            apvts.replaceState (stateWithPost10Defaults (*xml));
             if (xml->hasAttribute ("referenceWavetable"))
                 referenceWavetable = ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable"));
             referenceAuditionMode.store (juce::jlimit (0, 2, xml->getIntAttribute ("referenceAuditionMode", 0)));
