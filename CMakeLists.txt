@@ -55,6 +55,7 @@ target_sources(RetroMatchSynth PRIVATE
   Source/AI/AISeedProvider.cpp
   Source/Engine/SynthEngine.cpp
   Source/Engine/ReferenceWavetable.cpp
+  Source/Reference/ReferenceSamplePlayer.cpp
   Source/Analysis/SampleAnalyzer.cpp
   Source/Matching/OfflineRenderer.cpp
   Source/Matching/SimilarityScorer.cpp
