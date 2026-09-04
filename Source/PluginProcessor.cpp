@@ -128,10 +128,26 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
         for (int ch = 0; ch < b.getNumChannels(); ++ch)
         {
             if (mode == ReferenceAuditionMode::referenceOnly)
-                b.copyFrom (ch, 0, referenceScratch, ch, 0, b.getNumSamples(), gain);
+            {
+                b.copyFrom (ch, 0, referenceScratch, ch, 0, b.getNumSamples());
+                b.applyGain (ch, 0, b.getNumSamples(), gain);
+            }
             else
+            {
                 b.addFrom (ch, 0, referenceScratch, ch, 0, b.getNumSamples(), gain);
+            }
         }
+    }
+
+    if (b.getNumSamples() > 0 && b.getNumChannels() > 0)
+    {
+        const float left = b.getMagnitude (0, 0, b.getNumSamples());
+        const int rightChannel = juce::jmin (1, b.getNumChannels() - 1);
+        const float right = b.getMagnitude (rightChannel, 0, b.getNumSamples());
+        const float previousLeft = outputPeakLeft.load (std::memory_order_relaxed);
+        const float previousRight = outputPeakRight.load (std::memory_order_relaxed);
+        outputPeakLeft.store (juce::jmax (left, previousLeft * 0.88f), std::memory_order_relaxed);
+        outputPeakRight.store (juce::jmax (right, previousRight * 0.88f), std::memory_order_relaxed);
     }
 }
 
