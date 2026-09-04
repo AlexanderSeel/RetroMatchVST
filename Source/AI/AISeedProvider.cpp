@@ -2,6 +2,8 @@
 
 namespace
 {
+constexpr int diagnosticPayloadLimit = 12000;
+
 float numberProperty (const juce::DynamicObject& object, const juce::Identifier& name, float fallback)
 {
     if (! object.hasProperty (name)) return fallback;
@@ -30,6 +32,13 @@ juce::String stripCodeFence (juce::String text)
     const int fence = text.lastIndexOf ("```");
     if (fence >= 0) text = text.substring (0, fence);
     return text.trim();
+}
+
+void appendDiagnosticPayload (juce::String& diagnostics, const juce::String& label, const juce::String& payload)
+{
+    diagnostics << "\n" << label << " (" << payload.length() << " chars";
+    if (payload.length() > diagnosticPayloadLimit) diagnostics << ", first " << diagnosticPayloadLimit << " shown";
+    diagnostics << "):\n" << payload.substring (0, diagnosticPayloadLimit) << "\n";
 }
 
 juce::String buildPrompt (const SoundFeatures& f, const VoiceParameters& base)
@@ -152,7 +161,11 @@ juce::String extractProviderText (AIProvider provider, const juce::var& parsed)
     return {};
 }
 
-bool postJson (const AISettings& settings, const juce::String& prompt, juce::String& responseText, juce::String& error)
+bool postJson (const AISettings& settings,
+               const juce::String& prompt,
+               juce::String& responseText,
+               juce::String& error,
+               juce::String& diagnostics)
 {
     auto endpoint = settings.endpoint;
     juce::String requestBody;
@@ -175,6 +188,16 @@ bool postJson (const AISettings& settings, const juce::String& prompt, juce::Str
         headers << "Authorization: Bearer " << settings.resolvedApiKey() << "\r\n";
     }
 
+    diagnostics = "AI REQUEST\n";
+    diagnostics << "Provider: " << settings.providerName() << "\n"
+                << "Model: " << settings.model << "\n"
+                << "Endpoint: " << endpoint << "\n"
+                << "Audio upload: no (analysis features + current synth seed only)\n"
+                << "API key: configured via "
+                << (settings.sessionApiKey.isNotEmpty() ? juce::String ("session key")
+                                                        : "environment variable " + settings.apiKeyEnvironment)
+                << "\n";
+
     int statusCode = 0;
     auto url = juce::URL (endpoint).withPOSTData (requestBody);
     auto options = juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)
@@ -187,14 +210,19 @@ bool postJson (const AISettings& settings, const juce::String& prompt, juce::Str
     auto stream = url.createInputStream (options);
     if (stream == nullptr)
     {
-        error = "Could not connect to " + settings.providerName() + ".";
+        diagnostics << "HTTP status: unavailable\nResult: connection failed before a response stream was created.\n";
+        error = "Could not connect to " + settings.providerName() + ". See AI LOG for details.";
         return false;
     }
 
     const auto raw = stream->readEntireStreamAsString();
+    diagnostics << "HTTP status: " << statusCode << "\n"
+                << "Raw response size: " << raw.length() << " chars\n";
+
     if (statusCode < 200 || statusCode >= 300)
     {
-        error = settings.providerName() + " returned HTTP " + juce::String (statusCode) + ". " + raw.substring (0, 240);
+        appendDiagnosticPayload (diagnostics, "Provider response", raw);
+        error = settings.providerName() + " returned HTTP " + juce::String (statusCode) + ". See AI LOG for the full provider response.";
         return false;
     }
 
@@ -202,9 +230,12 @@ bool postJson (const AISettings& settings, const juce::String& prompt, juce::Str
     responseText = extractProviderText (settings.provider, parsed);
     if (responseText.isEmpty())
     {
-        error = "The provider returned no usable text response.";
+        appendDiagnosticPayload (diagnostics, "Provider response", raw);
+        error = "The provider returned no usable text response. See AI LOG for the raw response.";
         return false;
     }
+
+    diagnostics << "Provider response decoded successfully.\n";
     return true;
 }
 
@@ -257,38 +288,42 @@ AIVariantBatch AISeedProvider::generateVariants (const SoundFeatures& reference,
     if (! settings.hasUsableConfiguration())
     {
         batch.error = settings.configurationHint();
+        batch.diagnostics = "AI CONFIGURATION ERROR\n" + batch.error;
         return batch;
     }
-    if (cancel && cancel()) { batch.error = "AI matching cancelled."; return batch; }
+    if (cancel && cancel()) { batch.error = "AI matching cancelled."; batch.diagnostics = batch.error; return batch; }
     if (progress) progress (0.05f);
 
     juce::String providerText;
-    if (! postJson (settings, buildPrompt (reference, base), providerText, batch.error)) return batch;
-    if (cancel && cancel()) { batch.error = "AI matching cancelled."; return batch; }
+    if (! postJson (settings, buildPrompt (reference, base), providerText, batch.error, batch.diagnostics)) return batch;
+    if (cancel && cancel()) { batch.error = "AI matching cancelled."; batch.diagnostics << "\n" << batch.error; return batch; }
     if (progress) progress (0.45f);
 
     auto suggestionJson = juce::JSON::parse (stripCodeFence (providerText));
     auto* root = suggestionJson.getDynamicObject();
     if (root == nullptr)
     {
-        batch.error = "AI response was not a JSON object.";
+        batch.error = "AI response was not a JSON object. See AI LOG for the decoded provider text.";
+        appendDiagnosticPayload (batch.diagnostics, "Decoded provider text", providerText);
         return batch;
     }
 
     auto* variants = root->getProperty ("variants").getArray();
     if (variants == nullptr || variants->size() < 3)
     {
-        batch.error = "AI response did not contain three variants.";
+        batch.error = "AI response did not contain three variants. See AI LOG for the decoded provider text.";
+        appendDiagnosticPayload (batch.diagnostics, "Decoded provider text", providerText);
         return batch;
     }
 
     for (int i = 0; i < 3; ++i)
     {
-        if (cancel && cancel()) { batch.error = "AI matching cancelled."; return batch; }
+        if (cancel && cancel()) { batch.error = "AI matching cancelled."; batch.diagnostics << "\n" << batch.error; return batch; }
         auto* suggestion = variants->getReference (i).getDynamicObject();
         if (suggestion == nullptr)
         {
-            batch.error = "AI variant " + juce::String (i + 1) + " was invalid.";
+            batch.error = "AI variant " + juce::String (i + 1) + " was invalid. See AI LOG for the decoded provider text.";
+            appendDiagnosticPayload (batch.diagnostics, "Decoded provider text", providerText);
             return batch;
         }
 
@@ -302,5 +337,6 @@ AIVariantBatch AISeedProvider::generateVariants (const SoundFeatures& reference,
         if (progress) progress (0.45f + 0.55f * (float) (i + 1) / 3.0f);
     }
 
+    batch.diagnostics << "Result: three AI variants parsed, rendered and scored locally.\n";
     return batch;
 }
