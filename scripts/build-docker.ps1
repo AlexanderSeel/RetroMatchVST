@@ -56,21 +56,30 @@ function Invoke-DockerMonitored {
         [void]$psi.ArgumentList.Add([string]$arg)
     }
 
-    $process = [System.Diagnostics.Process]::Start($psi)
-    if ($null -eq $process) { throw "Could not start Docker for: $Activity" }
+    # Keep this variable explicitly local. The script can be invoked from a
+    # caller that already uses $process, and use WaitForExit rather than the
+    # HasExited/Refresh sequence to avoid a race while docker.exe is exiting.
+    $dockerProcess = $null
+    try {
+        $dockerProcess = [System.Diagnostics.Process]::Start($psi)
+        if ($null -eq $dockerProcess) { throw "Could not start Docker for: $Activity" }
 
-    $nextHeartbeat = (Get-Date).AddSeconds($HeartbeatSeconds)
-    while (-not $process.HasExited) {
-        Start-Sleep -Seconds 2
-        $process.Refresh()
-        if ((Get-Date) -ge $nextHeartbeat) {
-            Write-Host ("[{0}] {1} is still running (docker PID {2}). Windows image layer extraction/registration can be silent after download completes." -f (Get-Date -Format "HH:mm:ss"), $Activity, $process.Id) -ForegroundColor DarkGray
-            $nextHeartbeat = (Get-Date).AddSeconds($HeartbeatSeconds)
+        $nextHeartbeat = (Get-Date).AddSeconds($HeartbeatSeconds)
+        while (-not $dockerProcess.WaitForExit(2000)) {
+            if ((Get-Date) -ge $nextHeartbeat) {
+                Write-Host ("[{0}] {1} is still running (docker PID {2}). Windows image layer extraction/registration can be silent after download completes." -f (Get-Date -Format "HH:mm:ss"), $Activity, $dockerProcess.Id) -ForegroundColor DarkGray
+                $nextHeartbeat = (Get-Date).AddSeconds($HeartbeatSeconds)
+            }
         }
+
+        $exitCode = $dockerProcess.ExitCode
+    }
+    finally {
+        if ($null -ne $dockerProcess) { $dockerProcess.Dispose() }
     }
 
-    if ($process.ExitCode -ne 0) {
-        throw "$Activity failed (docker exit code $($process.ExitCode))."
+    if ($exitCode -ne 0) {
+        throw "$Activity failed (docker exit code $exitCode)."
     }
 }
 

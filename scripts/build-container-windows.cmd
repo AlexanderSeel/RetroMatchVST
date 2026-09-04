@@ -8,6 +8,7 @@ set "WINSDK=10.0.20348.0"
 set "VSDEVCMD=C:\BuildTools\Common7\Tools\VsDevCmd.bat"
 set "CMAKE=C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
 set "CTEST=C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe"
+set "GIT=C:\Git\cmd\git.exe"
 set "SDKROOT=C:\Program Files (x86)\Windows Kits\10"
 set "SDKHEADER=%SDKROOT%\Include\%WINSDK%\um\Windows.h"
 set "SDKLIB=%SDKROOT%\Lib\%WINSDK%\um\x64\kernel32.lib"
@@ -18,6 +19,7 @@ rem contain parentheses that cmd.exe can misparse when expanded inside a block.
 if not exist "%VSDEVCMD%" goto :missing_vsdevcmd
 if not exist "%CMAKE%" goto :missing_cmake
 if not exist "%CTEST%" goto :missing_ctest
+if not exist "%GIT%" goto :missing_git
 if not exist "%SDKHEADER%" goto :missing_sdk_header
 if not exist "%SDKLIB%" goto :missing_sdk_lib
 if not exist "%SDKRC%" goto :missing_sdk_rc
@@ -30,6 +32,10 @@ echo   %SDKRC%
 echo Initializing Visual Studio x64 build environment with Windows SDK %WINSDK%...
 call "%VSDEVCMD%" -arch=x64 -host_arch=x64 -winsdk=%WINSDK%
 if errorlevel 1 goto :vsdevcmd_failed
+
+set "PATH=C:\Git\cmd;%PATH%"
+where git.exe
+if errorlevel 1 goto :missing_git
 
 where cl.exe
 if errorlevel 1 goto :missing_cl
@@ -71,6 +77,10 @@ exit /b 3
 :missing_ctest
 echo ERROR: ctest.exe not found at %CTEST%
 exit /b 4
+
+:missing_git
+echo ERROR: git.exe not found at %GIT%
+exit /b 16
 
 :missing_cl
 echo ERROR: cl.exe is not available after VsDevCmd initialization.

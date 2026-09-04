@@ -23,10 +23,18 @@ RUN $cl = Get-ChildItem 'C:\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe' -
 ARG WINSDK_VERSION=10.0.20348.0
 RUN $sdkRoot='C:\Program Files (x86)\Windows Kits\10'; $sdkHeader=Join-Path $sdkRoot "Include\${env:WINSDK_VERSION}\um\Windows.h"; $sdkLib=Join-Path $sdkRoot "Lib\${env:WINSDK_VERSION}\um\x64\kernel32.lib"; $sdkRc=Join-Path $sdkRoot "bin\${env:WINSDK_VERSION}\x64\rc.exe"; $complete=(Test-Path $sdkHeader) -and (Test-Path $sdkLib) -and (Test-Path $sdkRc); if (-not $complete) { Write-Host 'Installing complete serviced Windows SDK 20348 desktop C++ payload...'; Invoke-WebRequest -UseBasicParsing https://go.microsoft.com/fwlink/?linkid=2331862 -OutFile C:\TEMP\winsdksetup.exe; $p = Start-Process C:\TEMP\winsdksetup.exe -ArgumentList '/features','OptionId.DesktopCPPx64','OptionId.SigningTools','/quiet','/norestart' -Wait -PassThru; if ($p.ExitCode -notin @(0, 3010)) { exit $p.ExitCode }; Remove-Item C:\TEMP\winsdksetup.exe -Force }; if (-not (Test-Path $sdkHeader)) { throw 'Windows SDK 20348 header payload is incomplete: Windows.h missing.' }; if (-not (Test-Path $sdkLib)) { throw 'Windows SDK 20348 library payload is incomplete: kernel32.lib missing.' }; if (-not (Test-Path $sdkRc)) { throw 'Windows SDK 20348 tool payload is incomplete: rc.exe missing.' }; Write-Host 'Windows SDK 20348 ready:' $sdkHeader $sdkLib $sdkRc
 
-# Do not override PATH here. A Windows Docker ENV such as
-# ENV PATH="...;${PATH}" can leave a literal ${PATH} in the environment and
-# make powershell.exe unreachable in subsequent layers.
-RUN Invoke-WebRequest -UseBasicParsing "https://github.com/juce-framework/JUCE/archive/refs/tags/${env:JUCE_TAG}.zip" -OutFile C:\TEMP\juce.zip; Expand-Archive C:\TEMP\juce.zip -DestinationPath C:\TEMP; Move-Item "C:\TEMP\JUCE-${env:JUCE_TAG}" C:\JUCE; Remove-Item C:\TEMP\juce.zip -Force
+ARG MINGIT_VERSION=2.55.0.5
+ARG MINGIT_RELEASE=v2.55.0.windows.5
+ARG MINGIT_SHA256=56D7B226B7693196CFC71FEF26568F536C4A021AB6C37FF2DB4287BED908E96E
+
+# Install the official portable Git distribution. CMake's FetchContent needs
+# git.exe, and using Git to obtain JUCE keeps the source checkout explicit and
+# verifies it before the project configuration runs. Do not set Docker ENV PATH
+# here: a Windows Docker ENV such as ENV PATH="...;${PATH}" can leave a literal
+# ${PATH} in the environment and make powershell.exe unreachable in later layers.
+RUN $archive='C:\TEMP\mingit.zip'; Invoke-WebRequest -UseBasicParsing "https://github.com/git-for-windows/git/releases/download/${env:MINGIT_RELEASE}/MinGit-${env:MINGIT_VERSION}-64-bit.zip" -OutFile $archive; $actual=(Get-FileHash -Algorithm SHA256 $archive).Hash; if ($actual -ne $env:MINGIT_SHA256) { throw "MinGit checksum mismatch. Expected $env:MINGIT_SHA256, got $actual." }; Expand-Archive $archive -DestinationPath C:\Git; Remove-Item $archive -Force; & C:\Git\cmd\git.exe --version; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+RUN & C:\Git\cmd\git.exe clone --depth 1 --branch $env:JUCE_TAG https://github.com/juce-framework/JUCE.git C:\JUCE; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if (-not (Test-Path C:\JUCE\CMakeLists.txt)) { throw 'JUCE clone completed without C:\JUCE\CMakeLists.txt.' }
 
 WORKDIR C:\src
 COPY . .
