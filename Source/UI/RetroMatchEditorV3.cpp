@@ -44,8 +44,6 @@ juce::String scoreText (float score)
 }
 
 //==============================================================================
-RetroMatchSynthAudioProcessorEditor::CandidateButton::CandidateButton (const CandidateButton&) = delete;
-
 void RetroMatchSynthAudioProcessorEditor::CandidateButton::setResult (const MatchResult* newResult, bool isSelected)
 {
     selected = isSelected;
@@ -451,8 +449,15 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
     configureSectionLabel (backendSection, "RESYNTH BACKEND RESEARCH", settingsPage);
     configureSectionLabel (privacySection, "PRIVACY + EVALUATION", settingsPage);
 
-    for (auto* c : { (juce::Component*) &osc1Label, &osc1Choice, &osc2Label, &osc2Choice }) synthPage.addAndMakeVisible (*c);
-    for (auto* c : { (juce::Component*) &fmAlgorithmLabel, &fmAlgorithmChoice, &fmOperatorEditLabel, &fmOperatorEditChoice, &fmModeLabel, &fmModeChoice }) fmPage.addAndMakeVisible (*c);
+    const std::array<juce::Component*, 4> synthControls { &osc1Label, &osc1Choice, &osc2Label, &osc2Choice };
+    for (auto* c : synthControls) synthPage.addAndMakeVisible (*c);
+
+    const std::array<juce::Component*, 6> fmControls {
+        &fmAlgorithmLabel, &fmAlgorithmChoice, &fmOperatorEditLabel,
+        &fmOperatorEditChoice, &fmModeLabel, &fmModeChoice
+    };
+    for (auto* c : fmControls) fmPage.addAndMakeVisible (*c);
+
     for (size_t i = 0; i < fmDetailSliders.size(); ++i) { fmPage.addAndMakeVisible (fmDetailLabels[i]); fmPage.addAndMakeVisible (fmDetailSliders[i]); }
     filterAmpPage.addAndMakeVisible (filterLabel); filterAmpPage.addAndMakeVisible (filterChoice);
 
@@ -475,11 +480,13 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
     for (const auto& id : delayKnobs) moveKnobToPage (id, fxPage);
     for (const auto& id : reverbKnobs) moveKnobToPage (id, fxPage);
 
-    for (auto* c : { (juce::Component*) &aiEnabled, &aiProviderLabel, &aiProvider, &aiModelLabel, &aiModel,
-                     &aiEndpointLabel, &aiEndpoint, &aiKeyEnvLabel, &aiKeyEnvironment,
-                     &aiSessionKeyLabel, &aiSessionKey, &aiSaveSettings, &aiStatus,
-                     &resynthBackendLabel, &resynthBackend, &resynthInfo, &privacyInfo })
-        settingsPage.addAndMakeVisible (*c);
+    const std::array<juce::Component*, 17> settingsControls {
+        &aiEnabled, &aiProviderLabel, &aiProvider, &aiModelLabel, &aiModel,
+        &aiEndpointLabel, &aiEndpoint, &aiKeyEnvLabel, &aiKeyEnvironment,
+        &aiSessionKeyLabel, &aiSessionKey, &aiSaveSettings, &aiStatus,
+        &resynthBackendLabel, &resynthBackend, &resynthInfo, &privacyInfo
+    };
+    for (auto* c : settingsControls) settingsPage.addAndMakeVisible (*c);
 }
 
 //==============================================================================
