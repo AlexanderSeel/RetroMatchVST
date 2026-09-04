@@ -59,10 +59,17 @@ if 'Source/UI/RetroMatchEditorV3.cpp' not in cmake or 'Source/AI/AISeedProvider.
 if 'Source/Reference/ReferenceSamplePlayer.cpp' not in cmake:
     errors.append('CMakeLists.txt must build the reference sample audition player')
 
+mseg_path = ROOT / 'Source/Engine/MSEG.h'
+mseg_page_path = ROOT / 'Source/UI/MsegPage.h'
+if not mseg_path.exists(): errors.append('Source/Engine/MSEG.h is missing')
+if not mseg_page_path.exists(): errors.append('Source/UI/MsegPage.h is missing')
+
 processor = (ROOT / 'Source/PluginProcessor.cpp').read_text(encoding='utf-8')
 processor_h = (ROOT / 'Source/PluginProcessor.h').read_text(encoding='utf-8')
 engine_h = (ROOT / 'Source/Engine/SynthEngine.h').read_text(encoding='utf-8')
 engine_cpp = (ROOT / 'Source/Engine/SynthEngine.cpp').read_text(encoding='utf-8')
+mseg = mseg_path.read_text(encoding='utf-8') if mseg_path.exists() else ''
+mseg_page = mseg_page_path.read_text(encoding='utf-8') if mseg_page_path.exists() else ''
 matcher = (ROOT / 'Source/Matching/SoundMatcher.cpp').read_text(encoding='utf-8')
 analyzer = (ROOT / 'Source/Analysis/SampleAnalyzer.cpp').read_text(encoding='utf-8')
 analyzer_h = (ROOT / 'Source/Analysis/SampleAnalyzer.h').read_text(encoding='utf-8')
@@ -78,7 +85,11 @@ required_tokens = {
     'FM detail parameters': ['"FixedHz"', '"Attack"', '"Decay"', '"Sustain"', '"Release"', '"KeyScale"', '"Velocity"'],
     'engine wavetable/unison/fold': ['wavetableWave', 'renderSupersaw', 'foldSample'],
     'nonlinear oversampling engine': ['Oversampling<float>', 'processSamplesUp', 'processSamplesDown', 'fixedLatencySamples', 'compensateLatency'],
-    'nonlinear oversampling processor': ['"oversamplingQuality"', 'setLatencySamples (engine.getLatencySamples())', 'referenceLatencyDelay', 'stateWithOversamplingDefault'],
+    'nonlinear oversampling processor': ['"oversamplingQuality"', 'setLatencySamples (engine.getLatencySamples())', 'referenceLatencyDelay', 'stateWithPost10Defaults'],
+    'MSEG engine': ['MsegParameters', 'MultiSegmentEnvelope', 'loopStartPoint', 'loopEndPoint', 'noteOn()', 'noteOff()', 'shapeProgress'],
+    'MSEG voice routing': ['mseg.setSampleRate', 'mseg.setParameters', 'mseg.noteOn', 'mseg.noteOff', 'params.modGraphSlots', 'ModSource::mseg1'],
+    'MSEG processor state': ['"msegEnabled"', '"msegLoopEnabled"', '"msegLevel"', '"msegTime"', '"msegCurve"', '"modGraph"', 'presetVersion", "1.1"'],
+    'MSEG editor': ['ENABLE MSEG 1', 'LOOP WHILE NOTE HELD', 'POST-1.0 MODULATION GRAPH', 'MSEG 1', 'modGraph'],
     'matcher search dimensions': ['p.wavetableMix', 'p.supersawMix', 'p.wavefold', 'p.fmOpFixedMode', 'p.fmOpAttack'],
     'operator UI': ['rebindFmOperatorEditor', 'SELECTED OPERATOR DETAIL'],
     'editing tabs': ['tabs.addTab ("SYNTH"', 'tabs.addTab ("FM"', 'tabs.addTab ("FILTER + AMP"', 'tabs.addTab ("MOD"', 'tabs.addTab ("FX"', 'tabs.addTab ("SETTINGS"'],
@@ -100,6 +111,10 @@ texts = {
     'engine wavetable/unison/fold': engine_cpp,
     'nonlinear oversampling engine': engine_h + engine_cpp,
     'nonlinear oversampling processor': processor + processor_h,
+    'MSEG engine': mseg,
+    'MSEG voice routing': engine_h + engine_cpp,
+    'MSEG processor state': processor,
+    'MSEG editor': processor + mseg_page,
     'matcher search dimensions': matcher,
     'operator UI': editor_all,
     'editing tabs': editor_all,
@@ -121,20 +136,36 @@ for name, tokens in required_tokens.items():
 
 if 'ModDestination::wavefold' not in engine_cpp or 'wavetablePosition' not in engine_h:
     errors.append('new modulation destinations are not wired through the engine')
-if 'presetVersion", "1.0"' not in processor:
-    errors.append('preset version was not bumped to 1.0')
 if 'noteOnFromUi' not in engine_h or 'noteOnFromEditor' not in processor_h:
     errors.append('virtual keyboard is not wired through a safe synth audition path')
 if 'sessionApiKey' not in ai_settings or 'setValue ("ai.' not in ai_settings:
     errors.append('AI settings persistence/session-secret separation is missing')
 
-# v1.0 hosts may care about parameter enumeration order. The render-quality choice
-# is additive only and must remain after outputGain rather than being inserted into
-# the established v1.0 parameter surface.
+# Host automation compatibility is append-only. The v1.0 outputGain endpoint must
+# remain before the post-1.0 quality choice, and the new MSEG layer must remain
+# after that quality choice.
 output_gain_position = processor.find('"outputGain", "Output Gain"')
 oversampling_position = processor.find('"oversamplingQuality", "Nonlinear Oversampling"')
+mseg_position = processor.find('"msegEnabled", "MSEG 1 Enabled"')
 if output_gain_position < 0 or oversampling_position <= output_gain_position:
     errors.append('oversamplingQuality must be appended after the complete v1.0 parameter surface')
+if mseg_position <= oversampling_position:
+    errors.append('MSEG parameters must remain appended after oversamplingQuality')
+
+# Never append MSEG to the original mod slot source choices: adding an item would
+# change the normalized automation values of existing choice parameters. MSEG is
+# available only in the new modGraph choices.
+legacy_sources_literal = 'const juce::StringArray modSources { "Off", "LFO 1", "Velocity", "Key Track", "Random Note", "Amp Env" };'
+if legacy_sources_literal not in processor:
+    errors.append('legacy modSources choice list changed; v1.0 normalized automation compatibility would be at risk')
+graph_sources_literal = 'const juce::StringArray graphSources { "Off", "LFO 1", "Velocity", "Key Track", "Random Note", "Amp Env", "MSEG 1" };'
+if graph_sources_literal not in processor:
+    errors.append('new modulation graph must expose MSEG 1 without changing legacy modSources')
+
+if 'tabbed->addTab ("MSEG"' not in processor or 'new MsegPage (proc.apvts)' not in processor:
+    errors.append('dedicated MSEG editor tab is not attached to the processor editor')
+if 'stateWithPost10Defaults' not in processor:
+    errors.append('post-1.0 preset/session migration helper is missing')
 
 # OpenAI Responses models in the GPT-5.x family may reject temperature. Keep
 # the OpenAI request conservative instead of sending an unsupported knob.
@@ -158,6 +189,9 @@ print(' - source delimiter balance passed')
 print(' - wavetable, supersaw/unison, wavefold and FM-detail plumbing present')
 print(' - nonlinear 1x/2x/4x oversampling and fixed-latency plumbing present')
 print(' - oversamplingQuality remains appended after the v1.0 parameter surface')
+print(' - six-point MSEG engine and append-only modulation graph present')
+print(' - legacy MOD choice ranges remain unchanged; MSEG routing is isolated to new graph slots')
+print(' - post-1.0 state migration and dedicated MSEG editor tab present')
 print(' - reference-to-variant workspace and editing tabs present')
 print(' - Quick/Refine/AI three-variant workflow present')
 print(' - optional virtual keyboard audition path present')
