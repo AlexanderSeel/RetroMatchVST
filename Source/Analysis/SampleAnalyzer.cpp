@@ -133,7 +133,7 @@ void makeWaveformPreview (const float* x, int n, SoundFeatures& f)
 }
 }
 
-void analyseTemporalSpectrum (const float* x, int n, double sr, SoundFeatures& f)
+static void analyseTemporalSpectrum (const float* x, int n, double sr, SoundFeatures& f)
 {
     if (n < 64 || sr <= 0.0) return;
 
@@ -201,7 +201,7 @@ void analyseTemporalSpectrum (const float* x, int n, double sr, SoundFeatures& f
     f.spectralMotion = comparisons > 0 ? juce::jlimit (0.0f, 1.0f, (float) (motion / comparisons) * 2.0f) : 0.0f;
 }
 
-void makeTimbreCepstrum (SoundFeatures& f)
+static void makeTimbreCepstrum (SoundFeatures& f)
 {
     // DCT-II over the log-spaced global spectrum. This is intentionally a lightweight
     // timbre-envelope descriptor rather than a speech-specific MFCC implementation.
