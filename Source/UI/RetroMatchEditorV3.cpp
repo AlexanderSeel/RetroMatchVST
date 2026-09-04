@@ -321,6 +321,29 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     aiStatus.setFont (juce::Font (juce::FontOptions (10.0f)));
     aiStatus.setJustificationType (juce::Justification::topLeft);
 
+    aiLogHint.setText ("Full provider, HTTP and response-parsing diagnostics are shown below. API key values are never written to this log.", juce::dontSendNotification);
+    aiLogHint.setColour (juce::Label::textColourId, juce::Colour (0xff9db0aa));
+    aiLogHint.setFont (juce::Font (juce::FontOptions (10.5f)));
+    aiLogHint.setJustificationType (juce::Justification::centredLeft);
+    aiLog.setMultiLine (true, true);
+    aiLog.setReadOnly (true);
+    aiLog.setScrollbarsShown (true);
+    aiLog.setFont (juce::Font (juce::FontOptions (11.0f)));
+    aiLog.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff070c0e));
+    aiLog.setColour (juce::TextEditor::textColourId, juce::Colour (0xffc2d2cc));
+    aiLog.setColour (juce::TextEditor::outlineColourId, juce::Colour (0xff304044));
+    aiLog.setColour (juce::TextEditor::focusedOutlineColourId, tealColour());
+    aiCopyLog.onClick = [this]
+    {
+        juce::SystemClipboard::copyTextToClipboard (aiLog.getText());
+        status.setText ("AI diagnostics copied to the clipboard.", juce::dontSendNotification);
+    };
+    aiClearLog.onClick = [this]
+    {
+        setAILog ("AI log cleared. Run AI x3 to capture a new request.");
+    };
+    setAILog ("No AI request has been run in this editor session yet.");
+
     resynthBackend.addItemList ({ "Native Hybrid / Reference Wavetable", "WORLD Vocoder (experimental speech/vocal backend)" }, 1);
     resynthBackend.setSelectedId (1, juce::dontSendNotification);
     styleTextLabel (resynthBackendLabel, "RESYNTH BACKEND");
@@ -432,6 +455,7 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
     tabs.addTab ("MOD", juce::Colour (0xff151c20), &modPage, false);
     tabs.addTab ("FX", juce::Colour (0xff191b20), &fxPage, false);
     tabs.addTab ("SETTINGS", juce::Colour (0xff171d1d), &settingsPage, false);
+    tabs.addTab ("AI LOG", juce::Colour (0xff10191b), &aiLogPage, false);
 
     configureSectionLabel (synthOscSection, "OSCILLATORS + PITCH", synthPage);
     configureSectionLabel (synthTextureSection, "WAVETABLE + UNISON + HARMONIC SHAPING", synthPage);
@@ -448,6 +472,7 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
     configureSectionLabel (aiSection, "AI-ASSISTED VARIANT SEEDS", settingsPage);
     configureSectionLabel (backendSection, "RESYNTH BACKEND RESEARCH", settingsPage);
     configureSectionLabel (privacySection, "PRIVACY + EVALUATION", settingsPage);
+    configureSectionLabel (aiLogSection, "AI REQUEST + PROVIDER DIAGNOSTICS", aiLogPage);
 
     const std::array<juce::Component*, 4> synthControls { &osc1Label, &osc1Choice, &osc2Label, &osc2Choice };
     for (auto* c : synthControls) synthPage.addAndMakeVisible (*c);
@@ -487,6 +512,9 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
         &resynthBackendLabel, &resynthBackend, &resynthInfo, &privacyInfo
     };
     for (auto* c : settingsControls) settingsPage.addAndMakeVisible (*c);
+
+    const std::array<juce::Component*, 4> aiLogControls { &aiLogHint, &aiLog, &aiCopyLog, &aiClearLog };
+    for (auto* c : aiLogControls) aiLogPage.addAndMakeVisible (*c);
 }
 
 //==============================================================================
@@ -592,6 +620,15 @@ void RetroMatchSynthAudioProcessorEditor::layoutPages()
     auto backendRow = settings.removeFromTop (36); resynthBackendLabel.setBounds (backendRow.removeFromLeft (135)); resynthBackend.setBounds (backendRow.reduced (3, 2));
     resynthInfo.setBounds (settings.removeFromTop (juce::jmin (82, settings.getHeight() / 2)).reduced (4, 5));
     settings.removeFromTop (5); privacySection.setBounds (settings.removeFromTop (24)); privacyInfo.setBounds (settings.reduced (4, 6));
+
+    auto log = aiLogPage.getLocalBounds().reduced (12);
+    aiLogSection.setBounds (log.removeFromTop (24)); log.removeFromTop (7);
+    aiLogHint.setBounds (log.removeFromTop (34)); log.removeFromTop (6);
+    auto logActions = log.removeFromTop (34);
+    aiCopyLog.setBounds (logActions.removeFromLeft (130).reduced (2, 1));
+    aiClearLog.setBounds (logActions.removeFromLeft (130).reduced (2, 1));
+    log.removeFromTop (7);
+    aiLog.setBounds (log.reduced (1));
 }
 
 void RetroMatchSynthAudioProcessorEditor::resized()
@@ -790,10 +827,21 @@ void RetroMatchSynthAudioProcessorEditor::startVariantSearch (WorkMode mode)
         syncAISettingsFromControls();
         if (! aiSettings.hasUsableConfiguration())
         {
-            status.setText (aiSettings.configurationHint(), juce::dontSendNotification);
+            const auto hint = aiSettings.configurationHint();
+            status.setText (hint, juce::dontSendNotification);
+            setAILog ("AI CONFIGURATION ERROR\n" + hint);
             tabs.setCurrentTabIndex (5);
             return;
         }
+
+        juce::String requestStart;
+        requestStart << "AI REQUEST\n"
+                     << "Provider: " << aiSettings.providerName() << "\n"
+                     << "Model: " << aiSettings.model << "\n"
+                     << "Endpoint: " << aiSettings.endpoint << "\n"
+                     << "Audio upload: no (analysis features + current synth seed only)\n"
+                     << "Status: waiting for provider response...\n";
+        setAILog (requestStart);
     }
 
     activeWorkMode = mode;
@@ -873,7 +921,8 @@ void RetroMatchSynthAudioProcessorEditor::runVariantSearch (WorkMode mode, Varia
         juce::Component::SafePointer<RetroMatchSynthAudioProcessorEditor> safe (this);
         juce::MessageManager::callAsync ([safe, batch = std::move (batch)] () mutable
         {
-            if (safe != nullptr) safe->finishVariantSearch (std::move (batch.candidates), batch.providerSummary, batch.error);
+            if (safe != nullptr)
+                safe->finishVariantSearch (std::move (batch.candidates), batch.providerSummary, batch.error, batch.diagnostics);
         });
         return;
     }
@@ -888,15 +937,30 @@ void RetroMatchSynthAudioProcessorEditor::runVariantSearch (WorkMode mode, Varia
     });
 }
 
-void RetroMatchSynthAudioProcessorEditor::finishVariantSearch (std::array<MatchResult, 3> results, const juce::String& sourceLabel, const juce::String& error)
+void RetroMatchSynthAudioProcessorEditor::finishVariantSearch (std::array<MatchResult, 3> results,
+                                                               const juce::String& sourceLabel,
+                                                               const juce::String& error,
+                                                               const juce::String& diagnostics)
 {
     for (auto* b : { &load, &quick, &refine, &aiVariants }) b->setEnabled (true);
     progressDisplay = error.isEmpty() ? 1.0 : 0.0;
     progressBar.setVisible (false);
 
+    if (diagnostics.isNotEmpty() || error.isNotEmpty())
+    {
+        juce::String completeLog = diagnostics;
+        if (error.isNotEmpty())
+        {
+            if (completeLog.isNotEmpty()) completeLog << "\n";
+            completeLog << "ERROR:\n" << error << "\n";
+        }
+        setAILog (completeLog);
+    }
+
     if (error.isNotEmpty())
     {
-        status.setText ("AI match failed: " + error, juce::dontSendNotification);
+        status.setText ("AI match failed. Open AI LOG for the complete error and provider response.", juce::dontSendNotification);
+        tabs.setCurrentTabIndex (6);
         updateAIStatus();
         return;
     }
@@ -960,6 +1024,12 @@ void RetroMatchSynthAudioProcessorEditor::updateAIStatus()
     syncAISettingsFromControls();
     aiStatus.setText (aiSettings.configurationHint(), juce::dontSendNotification);
     aiVariants.setEnabled (worker == nullptr || ! worker->isThreadRunning());
+}
+
+void RetroMatchSynthAudioProcessorEditor::setAILog (const juce::String& text)
+{
+    aiLog.setText (text.isNotEmpty() ? text : "No AI diagnostics available.", false);
+    aiLog.setCaretPosition (0);
 }
 
 //==============================================================================
