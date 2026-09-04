@@ -82,6 +82,13 @@ private:
     juce::Label candidateMorphLabel;
     juce::Rectangle<int> workspaceBounds, analyzerBounds, pipelineBounds;
 
+    // Detected/manual source pitch and reference-vs-synth A/B audition.
+    juce::Label referencePitchInfo, referenceBaseNoteLabel, referenceLevelLabel;
+    juce::ComboBox referenceBaseNoteChoice;
+    juce::TextButton resetReferencePitch { "RESET" };
+    juce::TextButton auditionSynth { "SYNTH" }, auditionReference { "REF SOLO" }, auditionMix { "MIX" };
+    juce::Slider referenceLevel;
+
     std::atomic<float> matchProgress { 0.0f };
     double progressDisplay = 0.0;
     juce::ProgressBar progressBar { progressDisplay };
@@ -150,6 +157,10 @@ private:
     void layoutPages();
     void layoutKnobGrid (const juce::StringArray& ids, juce::Rectangle<int> area, int maxColumns);
     void layoutFmDetailGrid (juce::Rectangle<int> area);
+
+    void configureReferenceAudition();
+    void updateReferencePitchControls();
+    void updateReferenceAuditionControls();
 
     void chooseFile();
     void chooseSavePatch();
