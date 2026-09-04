@@ -1,16 +1,50 @@
 #include "SynthEngine.h"
 #include <cmath>
 
+namespace
+{
+int qualityIndex (int quality)
+{
+    return juce::jlimit (0, 2, quality);
+}
+}
+
 HybridVoice::HybridVoice() = default;
 
 void HybridVoice::prepare (double sampleRate, int samplesPerBlock, int channels)
 {
     sr = sampleRate;
-    juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) samplesPerBlock, (juce::uint32) juce::jmax (1, channels) };
+    const auto safeChannels = (juce::uint32) juce::jmax (1, channels);
+    const auto safeBlockSize = (juce::uint32) juce::jmax (1, samplesPerBlock);
+    juce::dsp::ProcessSpec spec { sampleRate, safeBlockSize, safeChannels };
     filter.prepare (spec);
     filter.reset();
     ampEnv.setSampleRate (sampleRate);
     for (auto& env : fmEnvelopes) env.setSampleRate (sampleRate);
+
+    oversampling2x = std::make_unique<juce::dsp::Oversampling<float>> (
+        safeChannels, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
+    oversampling4x = std::make_unique<juce::dsp::Oversampling<float>> (
+        safeChannels, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
+    oversampling2x->initProcessing (safeBlockSize);
+    oversampling4x->initProcessing (safeBlockSize);
+    oversampling2x->reset();
+    oversampling4x->reset();
+
+    renderScratch.setSize ((int) safeChannels, (int) safeBlockSize, false, false, true);
+    cutoffScratch.resize ((size_t) safeBlockSize, 12000.0f);
+    gainScratch.resize ((size_t) safeBlockSize, 0.0f);
+    wavefoldScratch.resize ((size_t) safeBlockSize, 0.0f);
+}
+
+float HybridVoice::getOversamplingLatencySamples (int quality) const noexcept
+{
+    switch (qualityIndex (quality))
+    {
+        case 1: return oversampling2x != nullptr ? oversampling2x->getLatencyInSamples() : 0.0f;
+        case 2: return oversampling4x != nullptr ? oversampling4x->getLatencyInSamples() : 0.0f;
+        default: return 0.0f;
+    }
 }
 
 void HybridVoice::setParameters (const VoiceParameters& p)
@@ -269,8 +303,13 @@ void HybridVoice::renderSupersaw (float fundamentalHz, float detuneCents, float 
 void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int count)
 {
     if (! isVoiceActive()) return;
-    auto* left = out.getWritePointer (0);
-    auto* right = out.getNumChannels() > 1 ? out.getWritePointer (1) : nullptr;
+    jassert (count <= renderScratch.getNumSamples());
+    if (count <= 0 || count > renderScratch.getNumSamples()) return;
+
+    const int scratchChannels = juce::jmin (renderScratch.getNumChannels(), out.getNumChannels());
+    renderScratch.clear (0, count);
+    auto* scratchLeft = renderScratch.getWritePointer (0);
+    auto* scratchRight = scratchChannels > 1 ? renderScratch.getWritePointer (1) : nullptr;
 
     for (int i = 0; i < count; ++i)
     {
@@ -346,25 +385,15 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
 
         const float mono = o1 * params.osc1Mix + o2 * params.osc2Mix + sub * params.subMix + noise * params.noiseMix
                          + ring * params.ringMix + additive * params.additiveMix + fm6 * dynamicFmMix + wt * params.wavetableMix + refWt * params.referenceWavetableMix;
-        float sL = mono + uniL * params.supersawMix;
-        float sR = mono + uniR * params.supersawMix;
-        sL = foldSample (sL * 0.21f, dynamicWavefold);
-        sR = foldSample (sR * 0.21f, dynamicWavefold);
+        scratchLeft[i] = (mono + uniL * params.supersawMix) * 0.21f;
+        if (scratchRight != nullptr) scratchRight[i] = (mono + uniR * params.supersawMix) * 0.21f;
 
-        const float fc = juce::jlimit (20.0f, (float) (sr * 0.45),
-                                       params.cutoff * std::pow (2.0f, params.lfoCutoff * lfo + matrixCutoff));
-        filter.setCutoffFrequency (fc);
-        sL = filter.processSample (0, sL);
-        sR = right != nullptr ? filter.processSample (1, sR) : sL;
-
+        cutoffScratch[(size_t) i] = juce::jlimit (20.0f, (float) (sr * 0.45),
+                                                  params.cutoff * std::pow (2.0f, params.lfoCutoff * lfo + matrixCutoff));
+        wavefoldScratch[(size_t) i] = dynamicWavefold;
         const float tremolo = 1.0f - params.lfoAmp * 0.5f + params.lfoAmp * 0.5f * (lfo + 1.0f);
         const float matrixGain = juce::jlimit (0.0f, 2.0f, 1.0f + matrixAmp);
-        const float finalGain = env * level * juce::jlimit (0.0f, 1.5f, tremolo) * matrixGain;
-        sL *= finalGain;
-        sR *= finalGain;
-
-        left[start + i] += sL;
-        if (right != nullptr) right[start + i] += sR;
+        gainScratch[(size_t) i] = env * level * juce::jlimit (0.0f, 1.5f, tremolo) * matrixGain;
 
         phase1 += f1 / sr;
         phase2 += f2 / sr;
@@ -374,6 +403,57 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
         phase2 -= std::floor (phase2);
         subPhase -= std::floor (subPhase);
         lfoPhase -= std::floor (lfoPhase);
+    }
+
+    const int quality = qualityIndex (params.oversamplingQuality);
+    if (quality == 0)
+    {
+        for (int ch = 0; ch < scratchChannels; ++ch)
+        {
+            auto* samples = renderScratch.getWritePointer (ch);
+            for (int i = 0; i < count; ++i)
+                samples[i] = foldSample (samples[i], wavefoldScratch[(size_t) i]);
+        }
+    }
+    else
+    {
+        auto* oversampler = quality == 1 ? oversampling2x.get() : oversampling4x.get();
+        jassert (oversampler != nullptr);
+        juce::dsp::AudioBlock<float> fullBlock (renderScratch);
+        auto baseBlock = fullBlock.getSubBlock (0, (size_t) count);
+        auto upBlock = oversampler->processSamplesUp (baseBlock);
+        const auto factor = (float) oversampler->getOversamplingFactor();
+
+        auto interpolatedFold = [&] (size_t oversampledIndex)
+        {
+            const float basePosition = (float) oversampledIndex / factor;
+            const int i0 = juce::jlimit (0, count - 1, (int) std::floor (basePosition));
+            const int i1 = juce::jmin (count - 1, i0 + 1);
+            const float fraction = juce::jlimit (0.0f, 1.0f, basePosition - (float) i0);
+            return juce::jmap (fraction, wavefoldScratch[(size_t) i0], wavefoldScratch[(size_t) i1]);
+        };
+
+        for (size_t ch = 0; ch < upBlock.getNumChannels(); ++ch)
+        {
+            auto* samples = upBlock.getChannelPointer (ch);
+            for (size_t i = 0; i < upBlock.getNumSamples(); ++i)
+                samples[i] = foldSample (samples[i], interpolatedFold (i));
+        }
+        oversampler->processSamplesDown (baseBlock);
+    }
+
+    auto* outputLeft = out.getWritePointer (0);
+    auto* outputRight = out.getNumChannels() > 1 ? out.getWritePointer (1) : nullptr;
+    for (int i = 0; i < count; ++i)
+    {
+        filter.setCutoffFrequency (cutoffScratch[(size_t) i]);
+        float sL = filter.processSample (0, scratchLeft[i]);
+        float sR = scratchRight != nullptr ? filter.processSample (1, scratchRight[i]) : sL;
+        const float gain = gainScratch[(size_t) i];
+        sL *= gain;
+        sR *= gain;
+        outputLeft[start + i] += sL;
+        if (outputRight != nullptr) outputRight[start + i] += sR;
     }
 
     if (! ampEnv.isActive()) clearCurrentNote();
@@ -393,11 +473,35 @@ void SynthEngine::prepare (double sr, int samplesPerBlock, int channels)
         if (auto* v = dynamic_cast<HybridVoice*> (synth.getVoice (i)))
             v->prepare (sr, samplesPerBlock, channels);
 
-    juce::dsp::ProcessSpec spec { sr, (juce::uint32) juce::jmax (1, samplesPerBlock), (juce::uint32) juce::jmax (1, channels) };
+    const auto safeChannels = (juce::uint32) juce::jmax (1, channels);
+    const auto safeBlockSize = (juce::uint32) juce::jmax (1, samplesPerBlock);
+    juce::dsp::ProcessSpec spec { sr, safeBlockSize, safeChannels };
     chorus.prepare (spec);
     delay.setMaximumDelayInSamples ((int) std::ceil (sr * 2.0));
     delay.prepare (spec);
     reverb.setSampleRate (sr);
+
+    driveOversampling2x = std::make_unique<juce::dsp::Oversampling<float>> (
+        safeChannels, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
+    driveOversampling4x = std::make_unique<juce::dsp::Oversampling<float>> (
+        safeChannels, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
+    driveOversampling2x->initProcessing (safeBlockSize);
+    driveOversampling4x->initProcessing (safeBlockSize);
+
+    float voiceLatency2x = 0.0f, voiceLatency4x = 0.0f;
+    if (synth.getNumVoices() > 0)
+        if (auto* voice = dynamic_cast<HybridVoice*> (synth.getVoice (0)))
+        {
+            voiceLatency2x = voice->getOversamplingLatencySamples (1);
+            voiceLatency4x = voice->getOversamplingLatencySamples (2);
+        }
+
+    intrinsicLatencySamples[0] = 0;
+    intrinsicLatencySamples[1] = (int) std::lround (voiceLatency2x + driveOversampling2x->getLatencyInSamples());
+    intrinsicLatencySamples[2] = (int) std::lround (voiceLatency4x + driveOversampling4x->getLatencyInSamples());
+    fixedLatencySamples = juce::jmax (intrinsicLatencySamples[0], juce::jmax (intrinsicLatencySamples[1], intrinsicLatencySamples[2]));
+    latencyCompensation.setMaximumDelayInSamples (juce::jmax (1, fixedLatencySamples + 8));
+    latencyCompensation.prepare (spec);
     reset();
 }
 
@@ -406,11 +510,15 @@ void SynthEngine::reset()
     chorus.reset();
     delay.reset();
     reverb.reset();
+    if (driveOversampling2x != nullptr) driveOversampling2x->reset();
+    if (driveOversampling4x != nullptr) driveOversampling4x->reset();
+    latencyCompensation.reset();
 }
 
 void SynthEngine::setParameters (const VoiceParameters& p)
 {
     current = p;
+    current.oversamplingQuality = qualityIndex (current.oversamplingQuality);
     for (int i = 0; i < synth.getNumVoices(); ++i)
         if (auto* v = dynamic_cast<HybridVoice*> (synth.getVoice (i))) v->setParameters (current);
 
@@ -434,16 +542,34 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
 {
     const auto n = audio.getNumSamples();
     const auto channels = audio.getNumChannels();
+    const int quality = qualityIndex (current.oversamplingQuality);
 
-    if (current.drive > 0.0001f)
+    const auto processDrive = [&] (auto& block)
     {
+        if (current.drive <= 0.0001f) return;
         const auto gain = 1.0f + current.drive * 10.0f;
         const auto norm = 1.0f / std::tanh (gain);
-        for (int ch = 0; ch < channels; ++ch)
+        for (size_t ch = 0; ch < block.getNumChannels(); ++ch)
         {
-            auto* x = audio.getWritePointer (ch);
-            for (int i = 0; i < n; ++i) x[i] = std::tanh (x[i] * gain) * norm;
+            auto* x = block.getChannelPointer (ch);
+            for (size_t i = 0; i < block.getNumSamples(); ++i)
+                x[i] = std::tanh (x[i] * gain) * norm;
         }
+    };
+
+    if (quality == 0)
+    {
+        juce::dsp::AudioBlock<float> block (audio);
+        processDrive (block);
+    }
+    else
+    {
+        auto* oversampler = quality == 1 ? driveOversampling2x.get() : driveOversampling4x.get();
+        jassert (oversampler != nullptr);
+        juce::dsp::AudioBlock<float> block (audio);
+        auto upBlock = oversampler->processSamplesUp (block);
+        processDrive (upBlock);
+        oversampler->processSamplesDown (block);
     }
 
     if (current.chorusMix > 0.0001f)
@@ -494,8 +620,27 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
     audio.applyGain (juce::Decibels::decibelsToGain (current.outputGainDb));
 }
 
+void SynthEngine::compensateLatency (juce::AudioBuffer<float>& audio)
+{
+    if (fixedLatencySamples <= 0) return;
+    const int quality = qualityIndex (current.oversamplingQuality);
+    const float delaySamples = (float) juce::jmax (0, fixedLatencySamples - intrinsicLatencySamples[(size_t) quality]);
+    latencyCompensation.setDelay (delaySamples);
+
+    for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+    {
+        auto* samples = audio.getWritePointer (ch);
+        for (int i = 0; i < audio.getNumSamples(); ++i)
+        {
+            latencyCompensation.pushSample (ch, samples[i]);
+            samples[i] = latencyCompensation.popSample (ch);
+        }
+    }
+}
+
 void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
 {
     synth.renderNextBlock (audio, midi, 0, audio.getNumSamples());
     processEffects (audio);
+    compensateLatency (audio);
 }
