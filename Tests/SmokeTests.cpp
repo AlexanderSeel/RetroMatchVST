@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "../Source/Analysis/SampleAnalyzer.h"
+#include "../Source/Engine/MSEG.h"
 #include "../Source/Matching/OfflineRenderer.h"
 #include "../Source/Matching/SoundMatcher.h"
 #include <cmath>
@@ -58,6 +59,53 @@ int main()
     constexpr double sampleRate = 44100.0;
     constexpr float fundamental = 261.6256f;
 
+    // Direct MSEG lifecycle probe at a small, exact sample rate. It must remain
+    // active while a loop is held, stay finite/in-range, preserve the current
+    // value at release, and then reach the final point and become inactive.
+    MsegParameters msegParameters;
+    msegParameters.enabled = true;
+    msegParameters.loopEnabled = true;
+    msegParameters.loopStartPoint = 1;
+    msegParameters.loopEndPoint = 3;
+    msegParameters.levels = {{ 0.0f, 1.0f, 0.24f, 0.72f, 0.18f, 0.0f }};
+    msegParameters.times = {{ 0.010f, 0.012f, 0.014f, 0.016f, 0.018f }};
+    msegParameters.curves = {{ 0.0f, 0.35f, -0.30f, 0.15f, -0.20f }};
+
+    MultiSegmentEnvelope msegProbe;
+    msegProbe.setSampleRate (1000.0);
+    msegProbe.setParameters (msegParameters);
+    msegProbe.noteOn();
+
+    float heldMin = 1.0f, heldMax = 0.0f;
+    for (int i = 0; i < 180; ++i)
+    {
+        const float value = msegProbe.getNextSample();
+        if (! std::isfinite (value) || value < -1.0e-5f || value > 1.00001f)
+            return fail ("MSEG generated an invalid held value");
+        heldMin = std::min (heldMin, value);
+        heldMax = std::max (heldMax, value);
+    }
+    if (! msegProbe.isActive())
+        return fail ("MSEG loop stopped while the note was still held");
+    if (heldMax < 0.90f || heldMin > 0.35f)
+        return fail ("MSEG loop did not traverse the configured levels");
+
+    const float beforeRelease = msegProbe.getCurrentValue();
+    msegProbe.noteOff();
+    const float firstRelease = msegProbe.getNextSample();
+    if (std::abs (firstRelease - beforeRelease) > 1.0e-5f)
+        return fail ("MSEG release introduced a discontinuity");
+
+    for (int i = 0; i < 200 && msegProbe.isActive(); ++i)
+    {
+        const float value = msegProbe.getNextSample();
+        if (! std::isfinite (value)) return fail ("MSEG release generated a non-finite value");
+    }
+    if (msegProbe.isActive())
+        return fail ("MSEG did not complete after note release");
+    if (std::abs (msegProbe.getCurrentValue() - msegParameters.levels.back()) > 1.0e-5f)
+        return fail ("MSEG did not finish at its final point");
+
     VoiceParameters target;
     target.osc1Wave = 1;
     target.osc2Wave = 2;
@@ -105,6 +153,36 @@ int main()
     const auto probeB = OfflineRenderer::renderPatch (deterministicProbe, sampleRate, 0.5f, fundamental, 128);
     if (maxDifference (probeA, probeB) > 1.0e-7f)
         return fail ("offline renderer is not deterministic");
+
+    // The append-only graph must reach the actual synthesis engine. Use a strong
+    // MSEG->cutoff route, verify deterministic output, and verify the route changes
+    // the rendered result compared with the identical patch with MSEG disabled.
+    auto msegRenderProbe = target;
+    msegRenderProbe.chorusMix = 0.0f;
+    msegRenderProbe.delayMix = 0.0f;
+    msegRenderProbe.reverbMix = 0.0f;
+    msegRenderProbe.cutoff = 2400.0f;
+    msegRenderProbe.mseg.enabled = true;
+    msegRenderProbe.mseg.loopEnabled = true;
+    msegRenderProbe.mseg.loopStartPoint = 1;
+    msegRenderProbe.mseg.loopEndPoint = 4;
+    msegRenderProbe.mseg.levels = {{ 0.0f, 1.0f, 0.12f, 0.92f, 0.28f, 0.0f }};
+    msegRenderProbe.mseg.times = {{ 0.015f, 0.050f, 0.075f, 0.060f, 0.120f }};
+    msegRenderProbe.mseg.curves = {{ 0.25f, -0.20f, 0.35f, -0.30f, 0.0f }};
+    msegRenderProbe.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::cutoff, 0.88f };
+
+    const auto msegRenderA = OfflineRenderer::renderPatch (msegRenderProbe, sampleRate, 0.62f, fundamental, 128);
+    const auto msegRenderB = OfflineRenderer::renderPatch (msegRenderProbe, sampleRate, 0.62f, fundamental, 128);
+    auto msegDisabledProbe = msegRenderProbe;
+    msegDisabledProbe.mseg.enabled = false;
+    const auto msegDisabledRender = OfflineRenderer::renderPatch (msegDisabledProbe, sampleRate, 0.62f, fundamental, 128);
+
+    if (! finiteAudio (msegRenderA) || msegRenderA.getMagnitude (0, msegRenderA.getNumSamples()) <= 1.0e-5f)
+        return fail ("MSEG graph generated invalid or silent audio");
+    if (maxDifference (msegRenderA, msegRenderB) > 1.0e-7f)
+        return fail ("MSEG graph render is not deterministic");
+    if (maxDifference (msegRenderA, msegDisabledRender) <= 1.0e-5f)
+        return fail ("MSEG modulation graph did not alter rendered audio");
 
     // Nonlinear quality modes must all remain finite/deterministic, while the
     // oversampled modes must actually alter the nonlinear result rather than being
