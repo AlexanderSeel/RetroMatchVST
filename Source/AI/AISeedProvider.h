@@ -9,6 +9,7 @@ struct AIVariantBatch
     std::array<MatchResult, 3> candidates {};
     juce::String error;
     juce::String providerSummary;
+    juce::String diagnostics;
 
     bool succeeded() const
     {
