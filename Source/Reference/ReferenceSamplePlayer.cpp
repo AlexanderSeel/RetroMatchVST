@@ -34,7 +34,7 @@ void ReferenceSamplePlayer::clear()
 {
     allNotesOff();
     synth.clearSounds();
-    sourceFile = {};
+    sourceFile = juce::File();
     loaded.store (false);
 }
 
