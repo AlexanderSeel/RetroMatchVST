@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added selectable 1x, 2x and 4x nonlinear oversampling quality modes for the per-voice wavefolder and global drive stage.
+- Added fixed worst-case latency compensation and host latency reporting so changing quality does not change plug-in timing.
+- Aligned reference-sample audition to the compensated synth latency for accurate A/B and mixed monitoring.
+- Appended the render-quality choice after the complete v1.0 parameter surface; legacy presets and sessions default to 1x.
+- Extended static and DSP smoke coverage for oversampling determinism, finite output, nonlinear effect and latency reporting.
+
 ## 1.0.0
 
 - First complete product milestone.
