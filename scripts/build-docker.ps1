@@ -64,7 +64,7 @@ function Invoke-DockerMonitored {
         Start-Sleep -Seconds 2
         $process.Refresh()
         if ((Get-Date) -ge $nextHeartbeat) {
-            Write-Host ("[{0}] {1} is still running (docker PID {2}). Windows image layer extraction/registration can be silent after download completes." -f (Get-Date -Format "HH:mm:ss"), $Activity, $process.Id) -ForegroundColor DarkGray
+            Write-Host ("[{0}] {1} is still running (docker PID {2}). Windows container work can be silent while layers are registered or native tools are linking." -f (Get-Date -Format "HH:mm:ss"), $Activity, $process.Id) -ForegroundColor DarkGray
             $nextHeartbeat = (Get-Date).AddSeconds($HeartbeatSeconds)
         }
     }
@@ -150,6 +150,41 @@ function Ensure-DockerEngine([string]$Desired) {
     }
 }
 
+function Export-WindowsContainerArtifacts {
+    param(
+        [Parameter(Mandatory = $true)][string]$Container,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][string]$Configuration
+    )
+
+    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) "retromatch-export-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
+
+    try {
+        $artifactRoot = "C:/build/RetroMatchSynth_artefacts/$Configuration"
+        & docker cp "${Container}:${artifactRoot}/VST3" $stagingRoot
+        if ($LASTEXITCODE -ne 0) { throw "Could not copy VST3 artifacts from the build container." }
+        & docker cp "${Container}:${artifactRoot}/Standalone" $stagingRoot
+        if ($LASTEXITCODE -ne 0) { throw "Could not copy Standalone artifacts from the build container." }
+
+        foreach ($name in @("VST3", "Standalone")) {
+            $source = Join-Path $stagingRoot $name
+            if (-not (Test-Path -LiteralPath $source)) {
+                throw "Expected staged artifact directory was not created: $source"
+            }
+            $destinationPath = Join-Path $Destination $name
+            if (Test-Path -LiteralPath $destinationPath) {
+                Remove-Item -LiteralPath $destinationPath -Recurse -Force
+            }
+            Move-Item -LiteralPath $source -Destination $Destination -Force
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Ensure-Docker
 $desiredEngine = if ($Target -eq "Windows") { "windows" } else { "linux" }
 Ensure-DockerEngine $desiredEngine
@@ -169,21 +204,65 @@ Write-Host "Pre-pulling base image: $baseImage" -ForegroundColor Cyan
 Write-Host "Windows base images are large. After all layers report 'Download complete', Docker may remain silent while it expands and registers those layers." -ForegroundColor DarkGray
 Invoke-DockerMonitored -Arguments @("pull", $baseImage) -Activity "Base image pull/extraction"
 
-$image = "retromatch-build-$($Target.ToLowerInvariant()):1.0.0"
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
     $OutputDir = Join-Path $Root "dist\docker-$($Target.ToLowerInvariant())-$($Config.ToLowerInvariant())"
 }
 
-$buildArgs = @("build", "--file", $dockerfilePath, "--tag", $image, "--build-arg", "CONFIG=$Config")
 if ($Target -eq "Windows") {
-    # Microsoft recommends explicitly allocating memory for Visual Studio Build Tools container builds.
-    $buildArgs += @("--memory", "4g")
+    # Do not docker-build the compiler output into the final image. On Docker
+    # Desktop for Windows, committing/importing that very large writable layer
+    # can fail with hcsshim::ImportLayer (0x3) even after compilation and CTest
+    # have completed successfully. Build only the small source/toolchain image,
+    # compile in a disposable container, and copy artifacts directly from it.
+    $sourceImage = "retromatch-source-windows:1.0.0"
+    $sourceBuildArgs = @(
+        "build", "--file", $dockerfilePath,
+        "--target", "source",
+        "--tag", $sourceImage,
+        "--build-arg", "CONFIG=$Config"
+    )
+    if ($NoCache) { $sourceBuildArgs += "--no-cache" }
+    $sourceBuildArgs += $Root
+
+    Write-Host "Building reusable Windows toolchain/source image '$sourceImage' ..." -ForegroundColor Cyan
+    Invoke-DockerMonitored -Arguments $sourceBuildArgs -Activity "Windows Docker source/toolchain image build"
+
+    $container = "retromatch-buildrun-$([guid]::NewGuid().ToString('N').Substring(0, 10))"
+    try {
+        Write-Host "Creating disposable Windows build container '$container' ..." -ForegroundColor Cyan
+        & docker create --name $container --memory 4g $sourceImage C:\Windows\System32\cmd.exe /D /C C:\src\scripts\build-container-windows.cmd $Config | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not create disposable Windows build container." }
+
+        Write-Host "Compiling and testing RetroMatch inside the disposable container..." -ForegroundColor Cyan
+        Invoke-DockerMonitored -Arguments @("start", "--attach", $container) -Activity "Windows container compile/test"
+
+        Write-Host "Exporting build artifacts directly from the stopped container..." -ForegroundColor Cyan
+        Export-WindowsContainerArtifacts -Container $container -Destination $OutputDir -Configuration $Config
+    }
+    finally {
+        & docker rm -f $container *> $null
+    }
+
+    if (-not $KeepImage) {
+        & docker image rm $sourceImage *> $null
+    }
+
+    Write-Host ""
+    Write-Host "Container build complete." -ForegroundColor Green
+    Write-Host "Target:    Windows"
+    Write-Host "Artifacts: $OutputDir"
+    Write-Host "Mode:      disposable compile container (no final compiler-output image layer)" -ForegroundColor DarkGray
+    exit 0
 }
+
+# Linux retains the conventional image-build/export flow.
+$image = "retromatch-build-linux:1.0.0"
+$buildArgs = @("build", "--file", $dockerfilePath, "--tag", $image, "--build-arg", "CONFIG=$Config")
 if ($NoCache) { $buildArgs += "--no-cache" }
 $buildArgs += $Root
 
-Write-Host "Building isolated $Target image '$image' ..." -ForegroundColor Cyan
-Invoke-DockerMonitored -Arguments $buildArgs -Activity "$Target Docker image build"
+Write-Host "Building isolated Linux image '$image' ..." -ForegroundColor Cyan
+Invoke-DockerMonitored -Arguments $buildArgs -Activity "Linux Docker image build"
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $container = "retromatch-export-$([guid]::NewGuid().ToString('N').Substring(0, 10))"
@@ -194,11 +273,7 @@ try {
     & docker create --name $container $image | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not create export container." }
 
-    # Do not use C:/out/. for Windows containers. Docker resolves that to a
-    # Windows volume path ending in '\\out\\.', which CreateFile rejects.
-    # Copy the complete out directory to a staging folder, then move its
-    # contents into the requested artifact directory.
-    $containerPath = if ($Target -eq "Windows") { "${container}:C:/out" } else { "${container}:/out" }
+    $containerPath = "${container}:/out"
     & docker cp $containerPath $stagingRoot
     if ($LASTEXITCODE -ne 0) { throw "Could not copy build artifacts from the container." }
     if (-not (Test-Path $stagedOut)) { throw "Docker artifact export completed but the staged 'out' directory was not created." }
@@ -222,8 +297,6 @@ if (-not $KeepImage) {
 
 Write-Host ""
 Write-Host "Container build complete." -ForegroundColor Green
-Write-Host "Target:    $Target"
+Write-Host "Target:    Linux"
 Write-Host "Artifacts: $OutputDir"
-if ($Target -eq "Linux") {
-    Write-Host "Note: Linux-container artifacts are Linux binaries; use the Windows container or GitHub Actions for Windows VST3/EXE."
-}
+Write-Host "Note: Linux-container artifacts are Linux binaries; use the Windows container or GitHub Actions for Windows VST3/EXE."
