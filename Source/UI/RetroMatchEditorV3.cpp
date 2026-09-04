@@ -41,6 +41,11 @@ juce::String scoreText (float score)
 {
     return score > 0.0f ? juce::String (score * 100.0f, 1) + "%" : "--";
 }
+
+juce::String midiNoteName (int midiNote)
+{
+    return juce::MidiMessage::getMidiNoteName (juce::jlimit (0, 127, midiNote), true, true, 3);
+}
 }
 
 //==============================================================================
@@ -202,6 +207,8 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     progressBar.setPercentageDisplay (true);
     progressBar.setVisible (false);
     addAndMakeVisible (progressBar);
+
+    configureReferenceAudition();
 
     // Core selectors.
     styleTextLabel (osc1Label, "OSC 1 WAVE");
@@ -372,6 +379,8 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
 
     configurePages();
     updateCandidateButtons();
+    updateReferencePitchControls();
+    updateReferenceAuditionControls();
 
     // Any size change can invoke resized() immediately, so this stays last.
     setResizable (true, true);
@@ -392,6 +401,131 @@ RetroMatchSynthAudioProcessorEditor::~RetroMatchSynthAudioProcessorEditor()
     keyboardState.allNotesOff (0);
     proc.allEditorNotesOff();
     setLookAndFeel (nullptr);
+}
+
+//==============================================================================
+void RetroMatchSynthAudioProcessorEditor::configureReferenceAudition()
+{
+    referencePitchInfo.setColour (juce::Label::textColourId, tealColour());
+    referencePitchInfo.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
+    referencePitchInfo.setJustificationType (juce::Justification::centredLeft);
+    referencePitchInfo.setMinimumHorizontalScale (0.68f);
+    styleTextLabel (referenceBaseNoteLabel, "BASE NOTE");
+    styleTextLabel (referenceLevelLabel, "REF LEVEL");
+
+    for (int note = 0; note < 128; ++note)
+        referenceBaseNoteChoice.addItem (midiNoteName (note), note + 1);
+
+    referenceBaseNoteChoice.onChange = [this]
+    {
+        if (! proc.currentFeatures || referenceBaseNoteChoice.getSelectedId() <= 0) return;
+        const int note = referenceBaseNoteChoice.getSelectedId() - 1;
+        if (! proc.setReferenceBaseMidiNote (note))
+        {
+            status.setText ("Could not re-analyse the reference at the selected base note.", juce::dontSendNotification);
+            return;
+        }
+
+        candidateMorph.setValue (0.0, juce::dontSendNotification);
+        updateCandidateButtons();
+        updateReferencePitchControls();
+        status.setText ("Base note set to " + midiNoteName (note) + " (" + juce::String (RetroMatchSynthAudioProcessor::midiNoteToHz (note), 1)
+                        + " Hz). Reference re-analysed; run matching again.", juce::dontSendNotification);
+        repaint();
+    };
+
+    resetReferencePitch.onClick = [this]
+    {
+        if (! proc.resetReferenceBaseMidiNote()) return;
+        candidateMorph.setValue (0.0, juce::dontSendNotification);
+        updateCandidateButtons();
+        updateReferencePitchControls();
+        status.setText ("Base note reset to detected " + midiNoteName (proc.getDetectedReferenceMidiNote()) + ". Run matching again.", juce::dontSendNotification);
+        repaint();
+    };
+
+    constexpr int auditionGroup = 0x524d;
+    for (auto* button : { &auditionSynth, &auditionReference, &auditionMix })
+    {
+        button->setClickingTogglesState (true);
+        button->setRadioGroupId (auditionGroup);
+    }
+    auditionSynth.onClick = [this]
+    {
+        proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::synthOnly);
+        updateReferenceAuditionControls();
+        status.setText ("Audition: synthesizer only.", juce::dontSendNotification);
+    };
+    auditionReference.onClick = [this]
+    {
+        proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::referenceOnly);
+        updateReferenceAuditionControls();
+        status.setText ("Audition: original reference only, mapped from the selected base note.", juce::dontSendNotification);
+    };
+    auditionMix.onClick = [this]
+    {
+        proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::mixed);
+        updateReferenceAuditionControls();
+        status.setText ("Audition: synthesizer + original reference.", juce::dontSendNotification);
+    };
+
+    referenceLevel.setSliderStyle (juce::Slider::LinearHorizontal);
+    referenceLevel.setRange (0.0, 1.0, 0.01);
+    referenceLevel.setValue (proc.getReferenceAuditionLevel(), juce::dontSendNotification);
+    referenceLevel.setTextBoxStyle (juce::Slider::TextBoxRight, false, 48, 20);
+    referenceLevel.setNumDecimalPlacesToDisplay (2);
+    referenceLevel.onValueChange = [this]
+    {
+        proc.setReferenceAuditionLevel ((float) referenceLevel.getValue());
+    };
+
+    addAndMakeVisible (referencePitchInfo);
+    addAndMakeVisible (referenceBaseNoteLabel);
+    addAndMakeVisible (referenceBaseNoteChoice);
+    addAndMakeVisible (resetReferencePitch);
+    addAndMakeVisible (auditionSynth);
+    addAndMakeVisible (auditionReference);
+    addAndMakeVisible (auditionMix);
+    addAndMakeVisible (referenceLevelLabel);
+    addAndMakeVisible (referenceLevel);
+}
+
+void RetroMatchSynthAudioProcessorEditor::updateReferencePitchControls()
+{
+    const bool ready = proc.currentFeatures.has_value();
+    referenceBaseNoteChoice.setEnabled (ready);
+    resetReferencePitch.setEnabled (ready);
+    auditionReference.setEnabled (proc.hasReferenceSample());
+    auditionMix.setEnabled (proc.hasReferenceSample());
+
+    if (! ready)
+    {
+        referencePitchInfo.setText ("DETECTED PITCH  --", juce::dontSendNotification);
+        referenceBaseNoteChoice.setSelectedId (0, juce::dontSendNotification);
+        return;
+    }
+
+    const auto detectedNote = proc.getDetectedReferenceMidiNote();
+    const auto detectedHz = proc.getDetectedReferenceHz();
+    const auto confidence = proc.getDetectedReferencePitchConfidence();
+    juce::String text = "DETECTED  " + midiNoteName (detectedNote) + "  " + juce::String (detectedHz, 1)
+                      + " Hz  /  " + juce::String (confidence * 100.0f, 0) + "%";
+    if (confidence < 0.45f) text << "  LOW CONF";
+    referencePitchInfo.setText (text, juce::dontSendNotification);
+    referenceBaseNoteChoice.setSelectedId (proc.getReferenceBaseMidiNote() + 1, juce::dontSendNotification);
+}
+
+void RetroMatchSynthAudioProcessorEditor::updateReferenceAuditionControls()
+{
+    const auto mode = proc.getReferenceAuditionMode();
+    auditionSynth.setToggleState (mode == RetroMatchSynthAudioProcessor::ReferenceAuditionMode::synthOnly, juce::dontSendNotification);
+    auditionReference.setToggleState (mode == RetroMatchSynthAudioProcessor::ReferenceAuditionMode::referenceOnly, juce::dontSendNotification);
+    auditionMix.setToggleState (mode == RetroMatchSynthAudioProcessor::ReferenceAuditionMode::mixed, juce::dontSendNotification);
+    const bool referenceReady = proc.hasReferenceSample();
+    auditionReference.setEnabled (referenceReady);
+    auditionMix.setEnabled (referenceReady);
+    referenceLevel.setEnabled (referenceReady);
+    referenceLevel.setValue (proc.getReferenceAuditionLevel(), juce::dontSendNotification);
 }
 
 //==============================================================================
@@ -658,24 +792,44 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     tabs.setBounds (outer);
 
     auto w = workspaceBounds.reduced (12);
-    load.setBounds (w.removeFromTop (34)); w.removeFromTop (7);
-    const int analyzerHeight = juce::jlimit (180, 255, (int) std::round (w.getHeight() * 0.34));
-    analyzerBounds = w.removeFromTop (analyzerHeight); w.removeFromTop (6);
-    pipelineBounds = w.removeFromTop (36); w.removeFromTop (7);
+    load.setBounds (w.removeFromTop (34));
+    w.removeFromTop (5);
 
-    auto actionRow = w.removeFromTop (34);
+    auto pitchRow = w.removeFromTop (30);
+    const int pitchInfoW = juce::jlimit (150, 230, pitchRow.getWidth() / 2);
+    referencePitchInfo.setBounds (pitchRow.removeFromLeft (pitchInfoW));
+    referenceBaseNoteLabel.setBounds (pitchRow.removeFromLeft (62));
+    referenceBaseNoteChoice.setBounds (pitchRow.removeFromLeft (92).reduced (2, 1));
+    resetReferencePitch.setBounds (pitchRow.reduced (2, 1));
+    w.removeFromTop (4);
+
+    auto auditionRow = w.removeFromTop (30);
+    const int modeW = juce::jlimit (56, 76, (auditionRow.getWidth() - 145) / 3);
+    auditionSynth.setBounds (auditionRow.removeFromLeft (modeW).reduced (1, 1));
+    auditionReference.setBounds (auditionRow.removeFromLeft (modeW).reduced (1, 1));
+    auditionMix.setBounds (auditionRow.removeFromLeft (modeW).reduced (1, 1));
+    auditionRow.removeFromLeft (4);
+    referenceLevelLabel.setBounds (auditionRow.removeFromLeft (58));
+    referenceLevel.setBounds (auditionRow.reduced (1, 1));
+    w.removeFromTop (5);
+
+    const int analyzerHeight = juce::jlimit (128, 220, (int) std::round (w.getHeight() * 0.27));
+    analyzerBounds = w.removeFromTop (analyzerHeight); w.removeFromTop (5);
+    pipelineBounds = w.removeFromTop (32); w.removeFromTop (5);
+
+    auto actionRow = w.removeFromTop (32);
     const int buttonW = actionRow.getWidth() / 3;
     quick.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     refine.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     aiVariants.setBounds (actionRow.reduced (2, 0));
-    w.removeFromTop (7);
+    w.removeFromTop (5);
 
-    auto footer = w.removeFromBottom (88);
-    auto morphRow = footer.removeFromTop (36); candidateMorphLabel.setBounds (morphRow.removeFromLeft (128)); candidateMorph.setBounds (morphRow);
-    footer.removeFromTop (4); progressBar.setBounds (footer.removeFromTop (20)); footer.removeFromTop (4); status.setBounds (footer);
+    auto footer = w.removeFromBottom (76);
+    auto morphRow = footer.removeFromTop (28); candidateMorphLabel.setBounds (morphRow.removeFromLeft (118)); candidateMorph.setBounds (morphRow);
+    footer.removeFromTop (3); progressBar.setBounds (footer.removeFromTop (18)); footer.removeFromTop (3); status.setBounds (footer);
 
-    const int candidateGap = 5;
-    const int cardH = juce::jmax (50, (w.getHeight() - candidateGap * 2) / 3);
+    const int candidateGap = 4;
+    const int cardH = juce::jmax (42, (w.getHeight() - candidateGap * 2) / 3);
     candidateA.setBounds (w.removeFromTop (cardH)); w.removeFromTop (candidateGap);
     candidateB.setBounds (w.removeFromTop (cardH)); w.removeFromTop (candidateGap);
     candidateC.setBounds (w);
@@ -720,8 +874,8 @@ void RetroMatchSynthAudioProcessorEditor::drawAnalyzer (juce::Graphics& g, juce:
     auto stats = area.removeFromTop (23.0f).reduced (10.0f, 0.0f);
     g.setColour (juce::Colour (0xff9ec9bd));
     g.setFont (juce::Font (juce::FontOptions (9.0f)));
-    g.drawText (juce::String (reference.fundamentalHz, 1) + " Hz  |  centroid " + juce::String (reference.spectralCentroidHz / 1000.0f, 1)
-                + " kHz  |  harmonic " + juce::String (reference.harmonicity, 2)
+    g.drawText (midiNoteName (proc.getReferenceBaseMidiNote()) + "  " + juce::String (reference.fundamentalHz, 1) + " Hz  |  centroid "
+                + juce::String (reference.spectralCentroidHz / 1000.0f, 1) + " kHz  |  harmonic " + juce::String (reference.harmonicity, 2)
                 + "  |  transient " + juce::String (reference.transientScore, 2), stats, juce::Justification::centredLeft, true);
 
     auto graph = area.reduced (10.0f, 6.0f);
@@ -1046,8 +1200,18 @@ void RetroMatchSynthAudioProcessorEditor::chooseFile()
         const bool ok = safe->proc.loadReferenceSample (file);
         safe->proc.candidateBank = {};
         safe->updateCandidateButtons();
-        safe->status.setText (ok ? "Reference analysed. Choose Quick x3, Refine x3 or AI x3."
-                                 : "Could not analyse this reference.", juce::dontSendNotification);
+        safe->updateReferencePitchControls();
+        safe->updateReferenceAuditionControls();
+        if (ok)
+        {
+            safe->status.setText ("Reference analysed: detected " + midiNoteName (safe->proc.getDetectedReferenceMidiNote())
+                                  + " at " + juce::String (safe->proc.getDetectedReferenceHz(), 1)
+                                  + " Hz. Correct BASE NOTE if needed, then run Quick / Refine / AI.", juce::dontSendNotification);
+        }
+        else
+        {
+            safe->status.setText ("Could not analyse this reference.", juce::dontSendNotification);
+        }
         safe->repaint();
     });
 }
@@ -1060,7 +1224,11 @@ void RetroMatchSynthAudioProcessorEditor::filesDropped (const juce::StringArray&
     {
         proc.candidateBank = {};
         updateCandidateButtons();
-        status.setText ("Reference analysed. Choose Quick x3, Refine x3 or AI x3.", juce::dontSendNotification);
+        updateReferencePitchControls();
+        updateReferenceAuditionControls();
+        status.setText ("Reference analysed: detected " + midiNoteName (proc.getDetectedReferenceMidiNote())
+                        + " at " + juce::String (proc.getDetectedReferenceHz(), 1)
+                        + " Hz. Correct BASE NOTE if needed, then run Quick / Refine / AI.", juce::dontSendNotification);
     }
     repaint();
 }
@@ -1125,6 +1293,7 @@ void RetroMatchSynthAudioProcessorEditor::timerCallback()
     progressDisplay = matchProgress.load();
     if (worker != nullptr && ! worker->isThreadRunning())
         progressBar.setVisible (false);
+    updateReferenceAuditionControls();
     repaint (workspaceBounds);
 }
 
