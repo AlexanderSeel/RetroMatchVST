@@ -173,6 +173,7 @@ float HybridVoice::getModSourceValue (int source, float lfo, float envelopeValue
 {
     switch ((ModSource) source)
     {
+        case ModSource::none:        return 0.0f;
         case ModSource::lfo1:         return lfo;
         case ModSource::velocity:     return level * 2.0f - 1.0f;
         case ModSource::keyTrack:     return juce::jlimit (-1.0f, 1.0f, (currentMidiNote - 60) / 36.0f);
@@ -286,6 +287,7 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
             const float mod = getModSourceValue (slot.source, lfo, env) * juce::jlimit (-1.0f, 1.0f, slot.amount);
             switch ((ModDestination) slot.destination)
             {
+                case ModDestination::none:              break;
                 case ModDestination::pitch:             matrixPitch += mod * 12.0f; break;
                 case ModDestination::cutoff:            matrixCutoff += mod * 4.0f; break;
                 case ModDestination::amplitude:         matrixAmp += mod; break;
