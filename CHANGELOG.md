@@ -6,7 +6,12 @@
 - Added fixed worst-case latency compensation and host latency reporting so changing quality does not change plug-in timing.
 - Aligned reference-sample audition to the compensated synth latency for accurate A/B and mixed monitoring.
 - Appended the render-quality choice after the complete v1.0 parameter surface; legacy presets and sessions default to 1x.
-- Extended static and DSP smoke coverage for oversampling determinism, finite output, nonlinear effect and latency reporting.
+- Added an allocation-free six-point per-voice MSEG with five independently timed/curved segments and note-held looping.
+- Added four append-only modulation-graph routes with MSEG 1, LFO, velocity, key track, random note and amp envelope sources.
+- Added a dedicated MSEG editor tab with envelope visualization, point levels, segment timing/curve controls and graph routing.
+- Preserved the original four MOD source/destination choice ranges and parameter order so existing DAW automation remains stable.
+- Added post-1.0 state migration defaults and bumped `.rmsynth` preset schema metadata to 1.1 without changing the plug-in product version.
+- Extended static and DSP smoke coverage for oversampling determinism, latency reporting, MSEG held-loop/release lifecycle and rendered MSEG routing.
 
 ## 1.0.0
 
