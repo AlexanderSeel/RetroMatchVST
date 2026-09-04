@@ -1,6 +1,8 @@
 #pragma once
 #include <JuceHeader.h>
 #include <array>
+#include <memory>
+#include <vector>
 #include "ReferenceWavetable.h"
 
 enum class ModSource : int
@@ -81,6 +83,10 @@ struct VoiceParameters
     float reverbMix = 0.0f, reverbSize = 0.45f, reverbDamping = 0.45f;
     float stereoWidth = 1.0f;
     float outputGainDb = -3.0f;
+
+    // Global render-quality preference. This is deliberately not a matcher mutation
+    // dimension: 0 = 1x, 1 = 2x, 2 = 4x nonlinear oversampling.
+    int oversamplingQuality = 0;
 };
 
 class HybridVoice : public juce::SynthesiserVoice
@@ -91,6 +97,7 @@ public:
     void prepare (double sampleRate, int samplesPerBlock, int channels);
     void setParameters (const VoiceParameters& p);
     void setRandomSeed (int64 seed) { random.setSeed (seed); }
+    float getOversamplingLatencySamples (int quality) const noexcept;
     void startNote (int midiNoteNumber, float velocity, juce::SynthesiserSound*, int) override;
     void stopNote (float velocity, bool allowTailOff) override;
     void pitchWheelMoved (int newValue) override;
@@ -108,6 +115,9 @@ private:
     std::array<juce::ADSR, VoiceParameters::fmOperatorCount> fmEnvelopes;
     std::array<juce::ADSR::Parameters, VoiceParameters::fmOperatorCount> fmEnvelopeParams;
     juce::dsp::StateVariableTPTFilter<float> filter;
+    std::unique_ptr<juce::dsp::Oversampling<float>> oversampling2x, oversampling4x;
+    juce::AudioBuffer<float> renderScratch;
+    std::vector<float> cutoffScratch, gainScratch, wavefoldScratch;
     juce::Random random;
     double sr = 44100.0, phase1 = 0.0, phase2 = 0.0, subPhase = 0.0, lfoPhase = 0.0;
     std::array<double, VoiceParameters::fmOperatorCount> fmPhase {};
@@ -146,6 +156,7 @@ public:
     }
     void render (juce::AudioBuffer<float>&, juce::MidiBuffer&);
     void reset();
+    int getLatencySamples() const noexcept { return fixedLatencySamples; }
 
     // Manual audition helpers for the editor's optional virtual keyboard.
     // juce::Synthesiser serialises these calls against rendering internally.
@@ -172,6 +183,11 @@ private:
     juce::dsp::Chorus<float> chorus;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delay { 192000 };
     juce::Reverb reverb;
+    std::unique_ptr<juce::dsp::Oversampling<float>> driveOversampling2x, driveOversampling4x;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> latencyCompensation { 512 };
+    std::array<int, 3> intrinsicLatencySamples {{ 0, 0, 0 }};
+    int fixedLatencySamples = 0;
 
     void processEffects (juce::AudioBuffer<float>& audio);
+    void compensateLatency (juce::AudioBuffer<float>& audio);
 };
