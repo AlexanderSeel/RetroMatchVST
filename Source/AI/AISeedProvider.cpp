@@ -77,7 +77,8 @@ juce::String makeOpenAIRequest (const AISettings& settings, const juce::String& 
     auto* object = new juce::DynamicObject();
     object->setProperty ("model", settings.model);
     object->setProperty ("input", prompt);
-    object->setProperty ("temperature", 0.45);
+    // Do not send sampling controls blindly. Several GPT-5.x Responses models
+    // reject temperature entirely; the model default is appropriate for seed generation.
     object->setProperty ("store", false);
     return juce::JSON::toString (juce::var (object), false);
 }
@@ -197,6 +198,8 @@ bool postJson (const AISettings& settings,
                 << (settings.sessionApiKey.isNotEmpty() ? juce::String ("session key")
                                                         : "environment variable " + settings.apiKeyEnvironment)
                 << "\n";
+    if (settings.provider == AIProvider::openAI)
+        diagnostics << "Sampling controls: model default (temperature omitted for GPT-5.x compatibility)\n";
 
     int statusCode = 0;
     auto url = juce::URL (endpoint).withPOSTData (requestBody);
