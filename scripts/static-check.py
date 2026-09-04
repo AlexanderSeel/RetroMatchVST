@@ -77,6 +77,8 @@ required_tokens = {
     'processor wavetable parameters': ['"wavetableMix"', '"wavetablePosition"', '"wavetableWarp"', '"supersawMix"', '"unisonDetune"', '"unisonSpread"', '"wavefold"'],
     'FM detail parameters': ['"FixedHz"', '"Attack"', '"Decay"', '"Sustain"', '"Release"', '"KeyScale"', '"Velocity"'],
     'engine wavetable/unison/fold': ['wavetableWave', 'renderSupersaw', 'foldSample'],
+    'nonlinear oversampling engine': ['Oversampling<float>', 'processSamplesUp', 'processSamplesDown', 'fixedLatencySamples', 'compensateLatency'],
+    'nonlinear oversampling processor': ['"oversamplingQuality"', 'setLatencySamples (engine.getLatencySamples())', 'referenceLatencyDelay', 'stateWithOversamplingDefault'],
     'matcher search dimensions': ['p.wavetableMix', 'p.supersawMix', 'p.wavefold', 'p.fmOpFixedMode', 'p.fmOpAttack'],
     'operator UI': ['rebindFmOperatorEditor', 'SELECTED OPERATOR DETAIL'],
     'editing tabs': ['tabs.addTab ("SYNTH"', 'tabs.addTab ("FM"', 'tabs.addTab ("FILTER + AMP"', 'tabs.addTab ("MOD"', 'tabs.addTab ("FX"', 'tabs.addTab ("SETTINGS"'],
@@ -96,6 +98,8 @@ texts = {
     'processor wavetable parameters': processor,
     'FM detail parameters': processor,
     'engine wavetable/unison/fold': engine_cpp,
+    'nonlinear oversampling engine': engine_h + engine_cpp,
+    'nonlinear oversampling processor': processor + processor_h,
     'matcher search dimensions': matcher,
     'operator UI': editor_all,
     'editing tabs': editor_all,
@@ -124,6 +128,14 @@ if 'noteOnFromUi' not in engine_h or 'noteOnFromEditor' not in processor_h:
 if 'sessionApiKey' not in ai_settings or 'setValue ("ai.' not in ai_settings:
     errors.append('AI settings persistence/session-secret separation is missing')
 
+# v1.0 hosts may care about parameter enumeration order. The render-quality choice
+# is additive only and must remain after outputGain rather than being inserted into
+# the established v1.0 parameter surface.
+output_gain_position = processor.find('"outputGain", "Output Gain"')
+oversampling_position = processor.find('"oversamplingQuality", "Nonlinear Oversampling"')
+if output_gain_position < 0 or oversampling_position <= output_gain_position:
+    errors.append('oversamplingQuality must be appended after the complete v1.0 parameter surface')
+
 # OpenAI Responses models in the GPT-5.x family may reject temperature. Keep
 # the OpenAI request conservative instead of sending an unsupported knob.
 openai_start = ai.find('juce::String makeOpenAIRequest')
@@ -144,6 +156,8 @@ print('RetroMatch static checks passed')
 print(' - C/C++ JUCE project configuration present')
 print(' - source delimiter balance passed')
 print(' - wavetable, supersaw/unison, wavefold and FM-detail plumbing present')
+print(' - nonlinear 1x/2x/4x oversampling and fixed-latency plumbing present')
+print(' - oversamplingQuality remains appended after the v1.0 parameter surface')
 print(' - reference-to-variant workspace and editing tabs present')
 print(' - Quick/Refine/AI three-variant workflow present')
 print(' - optional virtual keyboard audition path present')

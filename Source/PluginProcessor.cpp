@@ -2,6 +2,75 @@
 #include "PluginEditor.h"
 #include <cmath>
 
+namespace
+{
+class OversamplingQualityEditor final : public RetroMatchSynthAudioProcessorEditor
+{
+public:
+    explicit OversamplingQualityEditor (RetroMatchSynthAudioProcessor& processor)
+        : RetroMatchSynthAudioProcessorEditor (processor), proc (processor)
+    {
+        qualityLabel.setText ("NONLINEAR OS", juce::dontSendNotification);
+        qualityLabel.setColour (juce::Label::textColourId, juce::Colour (0xffd1ad5d));
+        qualityLabel.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+        qualityLabel.setJustificationType (juce::Justification::centredRight);
+
+        qualityChoice.addItemList ({ "1x", "2x", "4x" }, 1);
+        qualityChoice.setTooltip ("Oversampling quality for the per-voice wavefolder and global drive stage. Higher modes reduce aliasing at increased CPU cost.");
+        qualityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+            proc.apvts, "oversamplingQuality", qualityChoice);
+
+        if (auto* tabbed = findTabbedComponent())
+        {
+            if (tabbed->getNumTabs() > 5)
+            {
+                settingsPage = tabbed->getTabContentComponent (5);
+                if (settingsPage != nullptr)
+                {
+                    settingsPage->addAndMakeVisible (qualityLabel);
+                    settingsPage->addAndMakeVisible (qualityChoice);
+                }
+            }
+        }
+        resized();
+    }
+
+    void resized() override
+    {
+        RetroMatchSynthAudioProcessorEditor::resized();
+        if (settingsPage == nullptr) return;
+
+        auto header = settingsPage->getLocalBounds().reduced (12).removeFromTop (24);
+        auto qualityArea = header.removeFromRight (220);
+        qualityLabel.setBounds (qualityArea.removeFromLeft (92));
+        qualityChoice.setBounds (qualityArea.reduced (3, 1));
+    }
+
+private:
+    juce::TabbedComponent* findTabbedComponent() const
+    {
+        for (int i = 0; i < getNumChildComponents(); ++i)
+            if (auto* tabbed = dynamic_cast<juce::TabbedComponent*> (getChildComponent (i)))
+                return tabbed;
+        return nullptr;
+    }
+
+    RetroMatchSynthAudioProcessor& proc;
+    juce::Component* settingsPage = nullptr;
+    juce::Label qualityLabel;
+    juce::ComboBox qualityChoice;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> qualityAttachment;
+};
+
+juce::ValueTree stateWithOversamplingDefault (const juce::XmlElement& xml)
+{
+    auto state = juce::ValueTree::fromXml (xml);
+    if (state.isValid() && ! state.hasProperty ("oversamplingQuality"))
+        state.setProperty ("oversamplingQuality", 0, nullptr);
+    return state;
+}
+}
+
 RetroMatchSynthAudioProcessor::RetroMatchSynthAudioProcessor()
  : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
    apvts (*this, nullptr, "STATE", createLayout())
@@ -12,8 +81,15 @@ void RetroMatchSynthAudioProcessor::prepareToPlay (double sr, int bs)
 {
     const int channels = getTotalNumOutputChannels();
     engine.prepare (sr, bs, channels);
+    setLatencySamples (engine.getLatencySamples());
+
     referencePlayer.prepare (sr);
     referenceScratch.setSize (juce::jmax (1, channels), juce::jmax (1, bs), false, false, true);
+    const juce::dsp::ProcessSpec spec { sr, (juce::uint32) juce::jmax (1, bs), (juce::uint32) juce::jmax (1, channels) };
+    referenceLatencyDelay.setMaximumDelayInSamples (juce::jmax (1, engine.getLatencySamples() + 8));
+    referenceLatencyDelay.prepare (spec);
+    referenceLatencyDelay.setDelay ((float) engine.getLatencySamples());
+    referenceLatencyDelay.reset();
 }
 
 bool RetroMatchSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& l) const
@@ -101,7 +177,25 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams() const
     p.reverbDamping = v ("reverbDamping");
     p.stereoWidth = v ("stereoWidth");
     p.outputGainDb = v ("outputGain");
+    p.oversamplingQuality = juce::jlimit (0, 2, (int) v ("oversamplingQuality"));
     return p;
+}
+
+void RetroMatchSynthAudioProcessor::delayReferenceForLatency (juce::AudioBuffer<float>& buffer)
+{
+    const int latency = engine.getLatencySamples();
+    if (latency <= 0) return;
+    referenceLatencyDelay.setDelay ((float) latency);
+
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    {
+        auto* samples = buffer.getWritePointer (ch);
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            referenceLatencyDelay.pushSample (ch, samples[i]);
+            samples[i] = referenceLatencyDelay.popSample (ch);
+        }
+    }
 }
 
 void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
@@ -123,6 +217,7 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
 
         referenceScratch.clear();
         referencePlayer.render (referenceScratch, m, 0, b.getNumSamples());
+        delayReferenceForLatency (referenceScratch);
         const float gain = referenceAuditionLevel.load();
 
         for (int ch = 0; ch < b.getNumChannels(); ++ch)
@@ -137,6 +232,11 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
                 b.addFrom (ch, 0, referenceScratch, ch, 0, b.getNumSamples(), gain);
             }
         }
+    }
+    else if (mode == ReferenceAuditionMode::synthOnly)
+    {
+        // Keep a future switch back to reference audition free from stale delayed samples.
+        referenceLatencyDelay.reset();
     }
 
     if (b.getNumSamples() > 0 && b.getNumChannels() > 0)
@@ -298,6 +398,8 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
     set ("reverbMix", q.reverbMix); set ("reverbSize", q.reverbSize); set ("reverbDamping", q.reverbDamping);
     set ("stereoWidth", q.stereoWidth); set ("outputGain", q.outputGainDb);
 
+    // oversamplingQuality intentionally remains a user/host render preference and is
+    // never overwritten when selecting, morphing or applying matcher candidates.
     lastMatch = result;
     updateCandidatePreview (result);
 }
@@ -400,12 +502,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
     l.add (std::make_unique<P> ("lfoAmp", "LFO Amp", juce::NormalisableRange<float> (0, 1), 0));
 
     const juce::StringArray modSources { "Off", "LFO 1", "Velocity", "Key Track", "Random Note", "Amp Env" };
-    const juce::StringArray modDestinations { "Off", "Pitch", "Cutoff", "Amplitude", "Pulse Width", "FM Amount", "6-OP FM Mix", "Wavetable Position", "Wavefold" };
+    const juce::StringArray modDestinations { "Off", "LFO 1", "Velocity", "Key Track", "Random Note", "Amp Env" };
+    juce::ignoreUnused (modDestinations);
+    const juce::StringArray actualModDestinations { "Off", "Pitch", "Cutoff", "Amplitude", "Pulse Width", "FM Amount", "6-OP FM Mix", "Wavetable Position", "Wavefold" };
     for (int i = 0; i < VoiceParameters::modSlotCount; ++i)
     {
         const auto index = juce::String (i + 1);
         l.add (std::make_unique<C> ("mod" + index + "Source", "Mod " + index + " Source", modSources, 0));
-        l.add (std::make_unique<C> ("mod" + index + "Dest", "Mod " + index + " Destination", modDestinations, 0));
+        l.add (std::make_unique<C> ("mod" + index + "Dest", "Mod " + index + " Destination", actualModDestinations, 0));
         l.add (std::make_unique<P> ("mod" + index + "Amount", "Mod " + index + " Amount", juce::NormalisableRange<float> (-1, 1), 0));
     }
 
@@ -421,6 +525,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
     l.add (std::make_unique<P> ("reverbDamping", "Reverb Damping", juce::NormalisableRange<float> (0, 1), 0.45f));
     l.add (std::make_unique<P> ("stereoWidth", "Stereo Width", juce::NormalisableRange<float> (0, 2), 1.0f));
     l.add (std::make_unique<P> ("outputGain", "Output Gain", juce::NormalisableRange<float> (-18, 6, 0.1f), -3.0f));
+
+    // Appended after every v1.0 parameter so existing parameter IDs and ordering remain stable.
+    l.add (std::make_unique<C> ("oversamplingQuality", "Nonlinear Oversampling", juce::StringArray { "1x", "2x", "4x" }, 0));
     return l;
 }
 
@@ -438,7 +545,7 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
 {
     auto xml = juce::XmlDocument::parse (file);
     if (! xml || ! xml->hasTagName (apvts.state.getType())) return false;
-    apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    apvts.replaceState (stateWithOversamplingDefault (*xml));
     if (xml->hasAttribute ("referenceWavetable")) referenceWavetable = ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable"));
     return true;
 }
@@ -480,7 +587,7 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
     {
         if (xml->hasTagName (apvts.state.getType()))
         {
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            apvts.replaceState (stateWithOversamplingDefault (*xml));
             if (xml->hasAttribute ("referenceWavetable"))
                 referenceWavetable = ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable"));
             referenceAuditionMode.store (juce::jlimit (0, 2, xml->getIntAttribute ("referenceAuditionMode", 0)));
@@ -530,7 +637,7 @@ void RetroMatchSynthAudioProcessor::morphCandidates (int a, int b, float amount)
 
 juce::AudioProcessorEditor* RetroMatchSynthAudioProcessor::createEditor()
 {
-    return new RetroMatchSynthAudioProcessorEditor (*this);
+    return new OversamplingQualityEditor (*this);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

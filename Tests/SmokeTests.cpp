@@ -17,6 +17,26 @@ bool finiteFeatures (const SoundFeatures& f)
     return true;
 }
 
+bool finiteAudio (const juce::AudioBuffer<float>& audio)
+{
+    for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+        for (int i = 0; i < audio.getNumSamples(); ++i)
+            if (! std::isfinite (audio.getSample (ch, i))) return false;
+    return true;
+}
+
+float maxDifference (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+{
+    if (a.getNumChannels() != b.getNumChannels() || a.getNumSamples() != b.getNumSamples())
+        return std::numeric_limits<float>::infinity();
+
+    float difference = 0.0f;
+    for (int ch = 0; ch < a.getNumChannels(); ++ch)
+        for (int i = 0; i < a.getNumSamples(); ++i)
+            difference = std::max (difference, std::abs (a.getSample (ch, i) - b.getSample (ch, i)));
+    return difference;
+}
+
 int fail (const char* message)
 {
     std::cerr << "FAILED: " << message << '\n';
@@ -83,12 +103,44 @@ int main()
     deterministicProbe.modSlots[2] = { (int) ModSource::randomNote, (int) ModDestination::cutoff, 0.08f };
     const auto probeA = OfflineRenderer::renderPatch (deterministicProbe, sampleRate, 0.5f, fundamental, 128);
     const auto probeB = OfflineRenderer::renderPatch (deterministicProbe, sampleRate, 0.5f, fundamental, 128);
-    float maxProbeDifference = 0.0f;
-    for (int ch = 0; ch < probeA.getNumChannels(); ++ch)
-        for (int i = 0; i < probeA.getNumSamples(); ++i)
-            maxProbeDifference = std::max (maxProbeDifference, std::abs (probeA.getSample (ch, i) - probeB.getSample (ch, i)));
-    if (maxProbeDifference > 1.0e-7f)
+    if (maxDifference (probeA, probeB) > 1.0e-7f)
         return fail ("offline renderer is not deterministic");
+
+    // Nonlinear quality modes must all remain finite/deterministic, while the
+    // oversampled modes must actually alter the nonlinear result rather than being
+    // a UI-only switch. Fixed engine latency keeps every mode sample-aligned.
+    auto nonlinearProbe = target;
+    nonlinearProbe.noiseMix = 0.0f;
+    nonlinearProbe.chorusMix = 0.0f;
+    nonlinearProbe.delayMix = 0.0f;
+    nonlinearProbe.reverbMix = 0.0f;
+    nonlinearProbe.wavefold = 0.78f;
+    nonlinearProbe.drive = 0.86f;
+    nonlinearProbe.cutoff = 17500.0f;
+
+    nonlinearProbe.oversamplingQuality = 0;
+    const auto quality1x = OfflineRenderer::renderPatch (nonlinearProbe, sampleRate, 0.42f, fundamental, 128);
+    nonlinearProbe.oversamplingQuality = 1;
+    const auto quality2x = OfflineRenderer::renderPatch (nonlinearProbe, sampleRate, 0.42f, fundamental, 128);
+    nonlinearProbe.oversamplingQuality = 2;
+    const auto quality4xA = OfflineRenderer::renderPatch (nonlinearProbe, sampleRate, 0.42f, fundamental, 128);
+    const auto quality4xB = OfflineRenderer::renderPatch (nonlinearProbe, sampleRate, 0.42f, fundamental, 128);
+
+    if (! finiteAudio (quality1x) || ! finiteAudio (quality2x) || ! finiteAudio (quality4xA))
+        return fail ("oversampling generated non-finite audio");
+    if (quality1x.getMagnitude (0, quality1x.getNumSamples()) <= 1.0e-5f
+        || quality2x.getMagnitude (0, quality2x.getNumSamples()) <= 1.0e-5f
+        || quality4xA.getMagnitude (0, quality4xA.getNumSamples()) <= 1.0e-5f)
+        return fail ("oversampling quality mode generated silence");
+    if (maxDifference (quality4xA, quality4xB) > 1.0e-7f)
+        return fail ("4x oversampling render is not deterministic");
+    if (maxDifference (quality1x, quality4xA) <= 1.0e-6f)
+        return fail ("oversampling quality switch did not alter nonlinear rendering");
+
+    SynthEngine latencyProbe;
+    latencyProbe.prepare (sampleRate, 128, 2);
+    if (latencyProbe.getLatencySamples() <= 0)
+        return fail ("oversampling engine did not report its fixed latency");
 
     auto referenceAudio = OfflineRenderer::renderPatch (target, sampleRate, 0.9f, fundamental, 128);
     const auto reference = SampleAnalyzer::analyzeBuffer (referenceAudio, sampleRate, fundamental);
@@ -113,7 +165,8 @@ int main()
         for (const auto value : frame) temporalEnergy += value;
     if (temporalEnergy <= 0.01f) return fail ("time-varying spectral descriptor is empty");
 
-    const auto seed = SoundMatcher::initialFit (reference);
+    auto seed = SoundMatcher::initialFit (reference);
+    seed.params.oversamplingQuality = 2;
     MatchSettings settings;
     settings.iterations = 10;
     settings.topologyTrials = 3;
@@ -125,6 +178,8 @@ int main()
 
     if (! std::isfinite (quick.similarity.total) || ! std::isfinite (refined.similarity.total))
         return fail ("matcher produced a non-finite score");
+    if (quick.params.oversamplingQuality != 2 || refined.params.oversamplingQuality != 2)
+        return fail ("matcher changed the render-quality preference");
     if (refined.similarity.total + 1.0e-6f < quick.similarity.total)
     {
         std::cerr << "FAILED: population optimizer regressed below its seed candidate; quick="
@@ -136,6 +191,7 @@ int main()
 
     std::cout << "RetroMatch smoke tests passed. quick=" << quick.similarity.total
               << " refined=" << refined.similarity.total
-              << " candidates=" << refined.evaluatedCandidates << '\n';
+              << " candidates=" << refined.evaluatedCandidates
+              << " latency=" << latencyProbe.getLatencySamples() << " samples\n";
     return 0;
 }

@@ -98,6 +98,7 @@ private:
     SynthEngine engine;
     ReferenceSamplePlayer referencePlayer;
     juce::AudioBuffer<float> referenceScratch;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> referenceLatencyDelay { 512 };
     juce::File loadedReferenceFile;
     std::atomic<int> referenceAuditionMode { (int) ReferenceAuditionMode::synthOnly };
     std::atomic<float> referenceAuditionLevel { 0.70f };
@@ -111,5 +112,6 @@ private:
     VoiceParameters readParams() const;
     void updateCandidatePreview (const MatchResult&);
     void invalidateMatchesAfterReferencePitchChange();
+    void delayReferenceForLatency (juce::AudioBuffer<float>&);
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RetroMatchSynthAudioProcessor)
 };
