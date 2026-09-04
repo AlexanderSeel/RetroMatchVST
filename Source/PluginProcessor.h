@@ -69,6 +69,11 @@ public:
     void setReferenceAuditionLevel (float level) noexcept { referenceAuditionLevel.store (juce::jlimit (0.0f, 1.0f, level)); }
     float getReferenceAuditionLevel() const noexcept { return referenceAuditionLevel.load(); }
 
+    // Smoothed post-mix peaks for editor meters. The audio thread only performs
+    // relaxed atomic stores; the UI thread reads these values without locks.
+    float getOutputPeakLeft() const noexcept { return outputPeakLeft.load (std::memory_order_relaxed); }
+    float getOutputPeakRight() const noexcept { return outputPeakRight.load (std::memory_order_relaxed); }
+
     MatchResult fitReference();
     MatchResult refineReference (SoundMatcher::ProgressCallback progress = {}, SoundMatcher::CancelCallback cancel = {});
     void applyMatchResult (const MatchResult&);
@@ -97,6 +102,8 @@ private:
     std::atomic<int> referenceAuditionMode { (int) ReferenceAuditionMode::synthOnly };
     std::atomic<float> referenceAuditionLevel { 0.70f };
     std::atomic<int> referenceBaseMidiNote { 60 };
+    std::atomic<float> outputPeakLeft { 0.0f };
+    std::atomic<float> outputPeakRight { 0.0f };
     int detectedReferenceMidiNote = 60;
     float detectedReferenceHz = 0.0f;
     float detectedReferencePitchConfidence = 0.0f;
