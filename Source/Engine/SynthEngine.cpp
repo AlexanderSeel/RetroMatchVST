@@ -21,6 +21,7 @@ void HybridVoice::prepare (double sampleRate, int samplesPerBlock, int channels)
     filter.reset();
     ampEnv.setSampleRate (sampleRate);
     for (auto& env : fmEnvelopes) env.setSampleRate (sampleRate);
+    mseg.setSampleRate (sampleRate);
 
     oversampling2x = std::make_unique<juce::dsp::Oversampling<float>> (
         safeChannels, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
@@ -55,6 +56,7 @@ void HybridVoice::setParameters (const VoiceParameters& p)
     envParams.sustain = juce::jlimit (0.0f, 1.0f, p.sustain);
     envParams.release = juce::jmax (0.001f, p.release);
     ampEnv.setParameters (envParams);
+    mseg.setParameters (p.mseg);
 
     for (int i = 0; i < VoiceParameters::fmOperatorCount; ++i)
     {
@@ -180,6 +182,7 @@ void HybridVoice::startNote (int midiNoteNumber, float velocity, juce::Synthesis
     currentMidiNote = midiNoteNumber;
     randomNoteValue = random.nextFloat() * 2.0f - 1.0f;
     ampEnv.noteOn();
+    mseg.noteOn();
     for (auto& env : fmEnvelopes) env.noteOn();
 }
 
@@ -188,11 +191,13 @@ void HybridVoice::stopNote (float, bool allowTailOff)
     if (allowTailOff)
     {
         ampEnv.noteOff();
+        mseg.noteOff();
         for (auto& env : fmEnvelopes) env.noteOff();
     }
     else
     {
         ampEnv.reset();
+        mseg.reset();
         for (auto& env : fmEnvelopes) env.reset();
         clearCurrentNote();
     }
@@ -203,7 +208,7 @@ void HybridVoice::pitchWheelMoved (int newValue)
     pitchWheelSemitones = juce::jmap ((float) newValue, 0.0f, 16383.0f, -2.0f, 2.0f);
 }
 
-float HybridVoice::getModSourceValue (int source, float lfo, float envelopeValue) const
+float HybridVoice::getModSourceValue (int source, float lfo, float envelopeValue, float msegValue) const
 {
     switch ((ModSource) source)
     {
@@ -213,6 +218,7 @@ float HybridVoice::getModSourceValue (int source, float lfo, float envelopeValue
         case ModSource::keyTrack:     return juce::jlimit (-1.0f, 1.0f, (currentMidiNote - 60) / 36.0f);
         case ModSource::randomNote:   return randomNoteValue;
         case ModSource::ampEnvelope: return envelopeValue * 2.0f - 1.0f;
+        case ModSource::mseg1:       return msegValue;
         default:                      return 0.0f;
     }
 }
@@ -315,15 +321,18 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
     {
         const float lfo = std::sin ((float) (juce::MathConstants<double>::twoPi * lfoPhase));
         const float env = ampEnv.getNextSample();
+        const float msegValue = params.mseg.enabled ? mseg.getNextSample() : 0.0f;
 
         float matrixPitch = 0.0f, matrixCutoff = 0.0f, matrixAmp = 0.0f;
         float matrixPulse = 0.0f, matrixFmAmount = 0.0f, matrixFmMix = 0.0f;
         float matrixWavetable = 0.0f, matrixWavefold = 0.0f;
-        for (const auto& slot : params.modSlots)
+
+        auto applySlot = [&] (const ModSlotParameters& slot)
         {
             if (slot.source == (int) ModSource::none || slot.destination == (int) ModDestination::none || std::abs (slot.amount) < 0.0001f)
-                continue;
-            const float mod = getModSourceValue (slot.source, lfo, env) * juce::jlimit (-1.0f, 1.0f, slot.amount);
+                return;
+
+            const float mod = getModSourceValue (slot.source, lfo, env, msegValue) * juce::jlimit (-1.0f, 1.0f, slot.amount);
             switch ((ModDestination) slot.destination)
             {
                 case ModDestination::none:              break;
@@ -337,7 +346,10 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
                 case ModDestination::wavefold:          matrixWavefold += mod * 0.5f; break;
                 default: break;
             }
-        }
+        };
+
+        for (const auto& slot : params.modSlots) applySlot (slot);
+        for (const auto& slot : params.modGraphSlots) applySlot (slot);
 
         const float globalSemis = params.masterTuneCents / 100.0f + pitchWheelSemitones + matrixPitch;
         const float f1 = baseHz * std::pow (2.0f, (globalSemis + params.lfoPitch * lfo) / 12.0f);
