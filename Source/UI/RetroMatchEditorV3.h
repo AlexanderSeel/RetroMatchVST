@@ -57,6 +57,42 @@ private:
         bool selected = false;
     };
 
+    class FilterResponseGraph final : public juce::Component
+    {
+    public:
+        explicit FilterResponseGraph (RetroMatchSynthAudioProcessor& p) : proc (p) { setInterceptsMouseClicks (false, false); }
+        void paint (juce::Graphics&) override;
+    private:
+        RetroMatchSynthAudioProcessor& proc;
+    };
+
+    class EnvelopeGraph final : public juce::Component
+    {
+    public:
+        explicit EnvelopeGraph (RetroMatchSynthAudioProcessor& p) : proc (p) { setInterceptsMouseClicks (false, false); }
+        void paint (juce::Graphics&) override;
+    private:
+        RetroMatchSynthAudioProcessor& proc;
+    };
+
+    class LfoScope final : public juce::Component
+    {
+    public:
+        explicit LfoScope (RetroMatchSynthAudioProcessor& p) : proc (p) { setInterceptsMouseClicks (false, false); }
+        void paint (juce::Graphics&) override;
+    private:
+        RetroMatchSynthAudioProcessor& proc;
+    };
+
+    class StereoMeter final : public juce::Component
+    {
+    public:
+        explicit StereoMeter (RetroMatchSynthAudioProcessor& p) : proc (p) { setInterceptsMouseClicks (false, false); }
+        void paint (juce::Graphics&) override;
+    private:
+        RetroMatchSynthAudioProcessor& proc;
+    };
+
     class VariantThread final : public juce::Thread
     {
     public:
@@ -70,6 +106,10 @@ private:
 
     RetroMatchSynthAudioProcessor& proc;
     RetroLookAndFeel laf;
+    FilterResponseGraph filterGraph;
+    EnvelopeGraph envelopeGraph;
+    LfoScope lfoScope;
+    StereoMeter outputMeter;
 
     juce::Label title, subtitle, status;
     juce::TextButton savePatch { "SAVE PATCH" }, loadPatch { "LOAD PATCH" }, exportPreview { "EXPORT WAV" };
