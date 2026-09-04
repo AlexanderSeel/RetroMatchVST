@@ -90,14 +90,14 @@ private:
 
     // Editing pages. Matching deliberately stays outside these tabs.
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
-    TabPage synthPage, fmPage, filterAmpPage, modPage, fxPage, settingsPage;
+    TabPage synthPage, fmPage, filterAmpPage, modPage, fxPage, settingsPage, aiLogPage;
 
     juce::Label synthOscSection, synthTextureSection;
     juce::Label fmCoreSection, fmOperatorsSection, fmDetailSection;
     juce::Label filterSection, ampSection;
     juce::Label modLfoSection, modMatrixSection;
     juce::Label fxChorusSection, fxDelaySection, fxReverbSection;
-    juce::Label aiSection, backendSection, privacySection;
+    juce::Label aiSection, backendSection, privacySection, aiLogSection;
 
     juce::Label osc1Label, osc2Label, filterLabel, fmAlgorithmLabel;
     juce::ComboBox osc1Choice, osc2Choice, filterChoice, fmAlgorithmChoice;
@@ -132,6 +132,11 @@ private:
     juce::ComboBox resynthBackend;
     juce::Label resynthBackendLabel, resynthInfo, privacyInfo;
 
+    // Full, scrollable AI diagnostics. Secrets are never added to this view.
+    juce::Label aiLogHint;
+    juce::TextEditor aiLog;
+    juce::TextButton aiCopyLog { "COPY LOG" }, aiClearLog { "CLEAR LOG" };
+
     // Optional audition keyboard.
     juce::MidiKeyboardState keyboardState;
     juce::MidiKeyboardComponent keyboard { keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard };
@@ -154,13 +159,15 @@ private:
     void startVariantSearch (WorkMode);
     void runVariantSearch (WorkMode, VariantThread&);
     std::array<MatchResult, 3> createLocalVariants (bool refined, VariantThread&);
-    void finishVariantSearch (std::array<MatchResult, 3>, const juce::String& sourceLabel, const juce::String& error = {});
+    void finishVariantSearch (std::array<MatchResult, 3>, const juce::String& sourceLabel,
+                              const juce::String& error = {}, const juce::String& diagnostics = {});
     void updateCandidateButtons();
     void selectCandidate (int index);
 
     void syncAISettingsFromControls();
     void updateAIControlsFromSettings();
     void updateAIStatus();
+    void setAILog (const juce::String& text);
 
     void rebindFmOperatorEditor();
     void timerCallback() override;
