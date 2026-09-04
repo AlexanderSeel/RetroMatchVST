@@ -83,14 +83,43 @@ try {
     & $buildScript @params
 }
 catch {
-    throw @"
-RetroMatch's clean Windows Docker rebuild failed after the base image passed validation.
-If the Docker output immediately above still contains hcsshim::ImportLayer (0x3), the
-remaining fault is Docker Desktop's Windows layer store rather than the RetroMatch source.
-Restart Docker Desktop and retry this repair once. If it persists, use Docker Desktop
-Troubleshoot > Clean up data, switch back to Windows containers, and rerun this script.
-Original error: $($_.Exception.Message)
+    $originalError = $_.Exception.Message
+    if ($originalError -notmatch "Windows Docker source/toolchain image build failed") {
+        throw
+    }
+
+    Write-Warning @"
+The clean Dockerfile build still failed while Docker was registering a Windows image layer.
+The LTSC 2022 base container already passed validation, so RetroMatch will now bypass image
+creation entirely and provision/build inside one disposable base container writable layer.
 "@
+
+    $directScript = Join-Path $scriptRoot "build-windows-direct-container.ps1"
+    if (-not (Test-Path $directScript)) {
+        throw "Direct Windows container fallback script is missing: $directScript"
+    }
+
+    try {
+        & $directScript -Config $Config
+    }
+    catch {
+        throw @"
+RetroMatch's Dockerfile build hit the Windows hcsshim::ImportLayer path, and the direct
+base-container fallback also failed. The direct fallback does not build or commit an image,
+so the error immediately above is now the actionable failure to diagnose.
+
+If that direct failure is itself hcsshim/HCS storage related, restart Docker Desktop and retry
+once. If it persists, use Docker Desktop Troubleshoot > Clean up data, switch back to Windows
+containers, and rerun this script. Clean up data is intentionally not automated because it
+removes unrelated Docker state.
+
+Original Dockerfile failure: $originalError
+Direct fallback failure: $($_.Exception.Message)
+"@
+    }
+
+    Write-Host "Direct base-container fallback completed successfully." -ForegroundColor Green
+    exit 0
 }
 
 if ($LASTEXITCODE -ne 0) {
