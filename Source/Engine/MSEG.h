@@ -20,7 +20,8 @@ struct MsegParameters
 
 // Allocation-free, per-voice multi-segment envelope. A loop spans point
 // loopStartPoint through loopEndPoint while the note is held. Releasing the note
-// exits the loop without a discontinuity and continues toward the final point.
+// exits the loop without a discontinuity and continues through the loop-end point
+// toward the final point.
 class MultiSegmentEnvelope
 {
 public:
@@ -56,7 +57,10 @@ public:
             && segmentIndex >= params.loopStartPoint
             && segmentIndex < params.loopEndPoint)
         {
-            beginSegment (params.loopEndPoint, true);
+            // Continue from the exact current level to the loop-end point, then
+            // proceed through the remaining segments. This avoids both a value jump
+            // and accidentally skipping the loop-end point on release.
+            beginSegment (params.loopEndPoint - 1, true);
         }
     }
 
