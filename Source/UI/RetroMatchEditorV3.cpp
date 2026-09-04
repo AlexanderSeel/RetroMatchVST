@@ -24,7 +24,6 @@ const juce::StringArray chorusKnobs { "chorusMix", "chorusRate", "chorusDepth" }
 const juce::StringArray delayKnobs { "delayMix", "delayTime", "delayFeedback" };
 const juce::StringArray reverbKnobs { "reverbMix", "reverbSize", "reverbDamping", "stereoWidth" };
 
-juce::Colour panelColour() { return juce::Colour (0xff0b1113); }
 juce::Colour borderColour() { return juce::Colour (0xff2d3b3e); }
 juce::Colour goldColour() { return juce::Colour (0xffd1ad5d); }
 juce::Colour tealColour() { return juce::Colour (0xff65d5bc); }
@@ -360,12 +359,12 @@ void RetroMatchSynthAudioProcessorEditor::StereoMeter::paint (juce::Graphics& g)
         }
     }
 
-    auto labels = bounds.removeFromBottom (17.0f).reduced (10.0f, 0.0f);
+    auto meterLabels = bounds.removeFromBottom (17.0f).reduced (10.0f, 0.0f);
     g.setColour (juce::Colour (0xffa7b8b2));
     g.setFont (juce::Font (juce::FontOptions (8.0f, juce::Font::bold)));
-    auto left = labels.removeFromLeft ((int) labels.getWidth() / 2);
+    auto left = meterLabels.removeFromLeft ((int) meterLabels.getWidth() / 2);
     g.drawText ("L", left, juce::Justification::centred);
-    g.drawText ("R", labels, juce::Justification::centred);
+    g.drawText ("R", meterLabels, juce::Justification::centred);
 }
 
 //==============================================================================
@@ -1248,7 +1247,7 @@ void RetroMatchSynthAudioProcessorEditor::startVariantSearch (WorkMode mode)
             const auto hint = aiSettings.configurationHint();
             status.setText (hint, juce::dontSendNotification);
             setAILog ("AI CONFIGURATION ERROR\n" + hint);
-            tabs.setCurrentTabIndex (5);
+            tabs.setCurrentTabIndex (6);
             return;
         }
 
@@ -1332,12 +1331,12 @@ void RetroMatchSynthAudioProcessorEditor::runVariantSearch (WorkMode mode, Varia
         const auto settingsCopy = aiSettings;
         auto base = proc.lastMatch.confidence > 0.0f ? proc.getCurrentVoiceParameters() : SoundMatcher::initialFit (*proc.currentFeatures).params;
         base.referenceWavetable = proc.referenceWavetable;
-        auto batch = AISeedProvider::generateVariants (*proc.currentFeatures, base, proc.matchSettings, settingsCopy,
-                                                       [this] (float p) { matchProgress.store (p); },
-                                                       [&thread] { return thread.threadShouldExit(); });
+        auto generatedBatch = AISeedProvider::generateVariants (*proc.currentFeatures, base, proc.matchSettings, settingsCopy,
+                                                                [this] (float p) { matchProgress.store (p); },
+                                                                [&thread] { return thread.threadShouldExit(); });
         if (thread.threadShouldExit()) return;
         juce::Component::SafePointer<RetroMatchSynthAudioProcessorEditor> safe (this);
-        juce::MessageManager::callAsync ([safe, batch = std::move (batch)] () mutable
+        juce::MessageManager::callAsync ([safe, batch = std::move (generatedBatch)] () mutable
         {
             if (safe != nullptr)
                 safe->finishVariantSearch (std::move (batch.candidates), batch.providerSummary, batch.error, batch.diagnostics);
@@ -1345,11 +1344,11 @@ void RetroMatchSynthAudioProcessorEditor::runVariantSearch (WorkMode mode, Varia
         return;
     }
 
-    auto variants = createLocalVariants (mode == WorkMode::refine, thread);
+    auto localVariants = createLocalVariants (mode == WorkMode::refine, thread);
     if (thread.threadShouldExit()) return;
     juce::Component::SafePointer<RetroMatchSynthAudioProcessorEditor> safe (this);
     const auto source = mode == WorkMode::refine ? juce::String ("REFINE") : juce::String ("QUICK");
-    juce::MessageManager::callAsync ([safe, variants = std::move (variants), source] () mutable
+    juce::MessageManager::callAsync ([safe, variants = std::move (localVariants), source] () mutable
     {
         if (safe != nullptr) safe->finishVariantSearch (std::move (variants), source);
     });
