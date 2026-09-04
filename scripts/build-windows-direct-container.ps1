@@ -72,6 +72,23 @@ function Export-Artifacts {
     }
 }
 
+function New-SourceStage {
+    $stage = Join-Path ([System.IO.Path]::GetTempPath()) "retromatch-direct-source-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+    $excludedDirs = @('.git', '.github', 'dist', 'extern', '.vs', '.idea', '.vscode')
+    $excludedDirs += @(Get-ChildItem -LiteralPath $Root -Directory -Filter 'build*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    $args = @($Root, $stage, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/XD') + $excludedDirs + @('/XF', '*.zip', '*.sha256', '.DS_Store', 'Thumbs.db')
+
+    & robocopy @args | Out-Null
+    $code = $LASTEXITCODE
+    if ($code -ge 8) {
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+        throw "Could not stage the Docker-equivalent source tree with robocopy (exit code $code)."
+    }
+    return $stage
+}
+
 if ($null -eq (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "docker.exe is not available. Install/start Docker Desktop first."
 }
@@ -93,13 +110,16 @@ Write-Host "Pre-pulling validated base image: $BaseImage" -ForegroundColor Cyan
 Invoke-DockerMonitored -Arguments @("pull", $BaseImage) -Activity "Windows base image pull"
 
 $container = "retromatch-direct-$([guid]::NewGuid().ToString('N').Substring(0, 10))"
+$sourceStage = $null
 try {
     Write-Host "Creating disposable base container '$container' ..." -ForegroundColor Cyan
     & docker create --name $container $BaseImage powershell.exe -NoLogo -ExecutionPolicy Bypass -File C:\src\scripts\provision-container-windows.ps1 -Config $Config | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not create direct Windows build container from the validated base image." }
 
-    Write-Host "Copying RetroMatch source into the stopped container..." -ForegroundColor Cyan
-    & docker cp "$Root\." "${container}:C:/src"
+    Write-Host "Staging RetroMatch source using the same exclusions as .dockerignore..." -ForegroundColor Cyan
+    $sourceStage = New-SourceStage
+    Write-Host "Copying staged RetroMatch source into the stopped container..." -ForegroundColor Cyan
+    & docker cp "$sourceStage\." "${container}:C:/src"
     if ($LASTEXITCODE -ne 0) { throw "Could not copy RetroMatch source into the direct Windows build container." }
 
     Write-Host "Provisioning Build Tools + SDK + MinGit + JUCE, then compiling/testing..." -ForegroundColor Cyan
@@ -111,6 +131,7 @@ try {
 }
 finally {
     & docker rm -f $container *> $null
+    if ($null -ne $sourceStage) { Remove-Item -LiteralPath $sourceStage -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Write-Host ""
