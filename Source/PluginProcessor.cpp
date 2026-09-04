@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <cmath>
 
 RetroMatchSynthAudioProcessor::RetroMatchSynthAudioProcessor()
  : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
@@ -9,7 +10,10 @@ RetroMatchSynthAudioProcessor::RetroMatchSynthAudioProcessor()
 
 void RetroMatchSynthAudioProcessor::prepareToPlay (double sr, int bs)
 {
-    engine.prepare (sr, bs, getTotalNumOutputChannels());
+    const int channels = getTotalNumOutputChannels();
+    engine.prepare (sr, bs, channels);
+    referencePlayer.prepare (sr);
+    referenceScratch.setSize (juce::jmax (1, channels), juce::jmax (1, bs), false, false, true);
 }
 
 bool RetroMatchSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& l) const
@@ -104,20 +108,126 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
 {
     juce::ScopedNoDenormals noDenormals;
     b.clear();
-    engine.setParameters (readParams());
-    engine.render (b, m);
+
+    const auto mode = getReferenceAuditionMode();
+    if (mode != ReferenceAuditionMode::referenceOnly)
+    {
+        engine.setParameters (readParams());
+        engine.render (b, m);
+    }
+
+    if (mode != ReferenceAuditionMode::synthOnly && referencePlayer.hasSample())
+    {
+        if (referenceScratch.getNumChannels() != b.getNumChannels() || referenceScratch.getNumSamples() < b.getNumSamples())
+            referenceScratch.setSize (b.getNumChannels(), b.getNumSamples(), false, false, true);
+
+        referenceScratch.clear();
+        referencePlayer.render (referenceScratch, m, 0, b.getNumSamples());
+        const float gain = referenceAuditionLevel.load();
+
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+        {
+            if (mode == ReferenceAuditionMode::referenceOnly)
+                b.copyFrom (ch, 0, referenceScratch, ch, 0, b.getNumSamples(), gain);
+            else
+                b.addFrom (ch, 0, referenceScratch, ch, 0, b.getNumSamples(), gain);
+        }
+    }
+}
+
+float RetroMatchSynthAudioProcessor::midiNoteToHz (int midiNote)
+{
+    const int note = juce::jlimit (0, 127, midiNote);
+    return 440.0f * std::pow (2.0f, (note - 69) / 12.0f);
+}
+
+int RetroMatchSynthAudioProcessor::hzToNearestMidiNote (float hz)
+{
+    if (! std::isfinite (hz) || hz <= 0.0f) return 60;
+    return juce::jlimit (0, 127, (int) std::lround (69.0 + 12.0 * std::log2 ((double) hz / 440.0)));
+}
+
+void RetroMatchSynthAudioProcessor::invalidateMatchesAfterReferencePitchChange()
+{
+    allEditorNotesOff();
+    currentCandidateFeatures.reset();
+    lastMatch = {};
+    candidateBank = {};
+    selectedCandidate = 0;
 }
 
 bool RetroMatchSynthAudioProcessor::loadReferenceSample (const juce::File& f)
 {
     auto analysed = SampleAnalyzer::analyzeFile (f);
     if (! analysed) return false;
+
+    detectedReferenceHz = analysed->fundamentalHz;
+    detectedReferencePitchConfidence = analysed->pitchConfidence;
+    detectedReferenceMidiNote = hzToNearestMidiNote (detectedReferenceHz);
+    referenceBaseMidiNote.store (detectedReferenceMidiNote);
+    loadedReferenceFile = f;
+
     currentFeatures = std::move (analysed);
     currentCandidateFeatures.reset();
     referenceWavetable = ReferenceWavetableExtractor::extract (f, currentFeatures->fundamentalHz);
+    referencePlayer.load (f, detectedReferenceMidiNote);
     loadedSampleName = f.getFileName();
     lastMatch = {};
+    candidateBank = {};
+    selectedCandidate = 0;
     return true;
+}
+
+bool RetroMatchSynthAudioProcessor::setReferenceBaseMidiNote (int midiNote)
+{
+    if (! loadedReferenceFile.existsAsFile()) return false;
+
+    const int note = juce::jlimit (0, 127, midiNote);
+    const float expectedHz = midiNoteToHz (note);
+    auto analysed = SampleAnalyzer::analyzeFile (loadedReferenceFile, expectedHz);
+    if (! analysed) return false;
+
+    currentFeatures = std::move (analysed);
+    referenceBaseMidiNote.store (note);
+    referencePlayer.setRootMidiNote (note);
+    referenceWavetable = ReferenceWavetableExtractor::extract (loadedReferenceFile, expectedHz);
+    invalidateMatchesAfterReferencePitchChange();
+    return true;
+}
+
+bool RetroMatchSynthAudioProcessor::resetReferenceBaseMidiNote()
+{
+    return setReferenceBaseMidiNote (detectedReferenceMidiNote);
+}
+
+void RetroMatchSynthAudioProcessor::setReferenceAuditionMode (ReferenceAuditionMode mode)
+{
+    const int value = juce::jlimit ((int) ReferenceAuditionMode::synthOnly,
+                                    (int) ReferenceAuditionMode::mixed,
+                                    (int) mode);
+    allEditorNotesOff();
+    referenceAuditionMode.store (value);
+}
+
+void RetroMatchSynthAudioProcessor::noteOnFromEditor (int midiNote, float velocity)
+{
+    const auto mode = getReferenceAuditionMode();
+    if (mode != ReferenceAuditionMode::referenceOnly)
+        engine.noteOnFromUi (midiNote, velocity);
+    if (mode != ReferenceAuditionMode::synthOnly)
+        referencePlayer.noteOnFromUi (midiNote, velocity);
+}
+
+void RetroMatchSynthAudioProcessor::noteOffFromEditor (int midiNote, float velocity)
+{
+    engine.noteOffFromUi (midiNote, velocity);
+    referencePlayer.noteOffFromUi (midiNote, velocity);
+}
+
+void RetroMatchSynthAudioProcessor::allEditorNotesOff()
+{
+    engine.allNotesOffFromUi();
+    referencePlayer.allNotesOff();
 }
 
 void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
@@ -317,7 +427,6 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
     return true;
 }
 
-
 bool RetroMatchSynthAudioProcessor::exportPreviewWav (const juce::File& file, float seconds) const
 {
     auto params = readParams(); params.referenceWavetable = referenceWavetable;
@@ -339,15 +448,30 @@ bool RetroMatchSynthAudioProcessor::exportPreviewWav (const juce::File& file, fl
 
 void RetroMatchSynthAudioProcessor::getStateInformation (juce::MemoryBlock& d)
 {
-    if (auto xml = apvts.copyState().createXml()) { if (referenceWavetable && referenceWavetable->valid) xml->setAttribute ("referenceWavetable", referenceWavetable->toBase64()); copyXmlToBinary (*xml, d); }
+    if (auto xml = apvts.copyState().createXml())
+    {
+        if (referenceWavetable && referenceWavetable->valid)
+            xml->setAttribute ("referenceWavetable", referenceWavetable->toBase64());
+        xml->setAttribute ("referenceAuditionMode", referenceAuditionMode.load());
+        xml->setAttribute ("referenceAuditionLevel", (double) referenceAuditionLevel.load());
+        copyXmlToBinary (*xml, d);
+    }
 }
 
 void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
 {
     if (auto xml = getXmlFromBinary (d, n))
-        if (xml->hasTagName (apvts.state.getType())) { apvts.replaceState (juce::ValueTree::fromXml (*xml)); if (xml->hasAttribute ("referenceWavetable")) referenceWavetable = ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable")); }
+    {
+        if (xml->hasTagName (apvts.state.getType()))
+        {
+            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            if (xml->hasAttribute ("referenceWavetable"))
+                referenceWavetable = ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable"));
+            referenceAuditionMode.store (juce::jlimit (0, 2, xml->getIntAttribute ("referenceAuditionMode", 0)));
+            referenceAuditionLevel.store (juce::jlimit (0.0f, 1.0f, (float) xml->getDoubleAttribute ("referenceAuditionLevel", 0.70)));
+        }
+    }
 }
-
 
 std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildCandidateBank()
 {
