@@ -20,6 +20,31 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v6
+      - name: Validate Windows PowerShell build helpers
+        shell: pwsh
+        run: |
+          $paths = @(
+            'scripts/build-docker.ps1',
+            'scripts/repair-windows-docker-layer.ps1',
+            'scripts/build-windows-direct-container.ps1',
+            'scripts/provision-container-windows.ps1'
+          )
+          $allErrors = @()
+          foreach ($path in $paths) {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref] $tokens,
+              [ref] $parseErrors
+            ) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              Write-Host "PowerShell parse errors in $path" -ForegroundColor Red
+              $parseErrors | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+              $allErrors += $parseErrors
+            }
+          }
+          if ($allErrors.Count -gt 0) { exit 1 }
       - name: Configure
         shell: pwsh
         run: cmake -S . -B build -A x64 -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON
