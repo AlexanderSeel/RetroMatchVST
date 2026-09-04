@@ -95,7 +95,7 @@ Invoke-DockerMonitored -Arguments @("pull", $BaseImage) -Activity "Windows base 
 $container = "retromatch-direct-$([guid]::NewGuid().ToString('N').Substring(0, 10))"
 try {
     Write-Host "Creating disposable base container '$container' ..." -ForegroundColor Cyan
-    & docker create --name $container --memory 4g $BaseImage powershell.exe -NoLogo -ExecutionPolicy Bypass -File C:\src\scripts\provision-container-windows.ps1 -Config $Config | Out-Null
+    & docker create --name $container $BaseImage powershell.exe -NoLogo -ExecutionPolicy Bypass -File C:\src\scripts\provision-container-windows.ps1 -Config $Config | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not create direct Windows build container from the validated base image." }
 
     Write-Host "Copying RetroMatch source into the stopped container..." -ForegroundColor Cyan
