@@ -1,6 +1,37 @@
 #include "ReferenceWavetable.h"
 #include <cmath>
 
+namespace
+{
+int chooseSourceFrameSize (int totalSamples, int requested)
+{
+    if (totalSamples < 8) return 0;
+    if (requested > 0) return requested <= totalSamples ? requested : 0;
+
+    // 2048 is the de-facto default for modern wavetable sets. Explicit UI
+    // selection handles ambiguous totals (for example 8192 can be 4x2048 or 8x1024).
+    constexpr std::array<int, 5> candidates {{ 2048, 1024, 4096, 512, 256 }};
+    for (const auto candidate : candidates)
+        if (totalSamples >= candidate && totalSamples % candidate == 0)
+            return candidate;
+
+    // Short non-standard single cycles are still useful and are resampled to 2048.
+    if (totalSamples <= 8192) return totalSamples;
+    return totalSamples >= 2048 ? 2048 : totalSamples;
+}
+
+float cyclicFrameSample (const float* samples, int frameStart, int frameSize, double phase)
+{
+    if (samples == nullptr || frameSize <= 0) return 0.0f;
+    phase -= std::floor (phase);
+    const double position = phase * frameSize;
+    const int i0 = ((int) std::floor (position)) % frameSize;
+    const int i1 = (i0 + 1) % frameSize;
+    const float fraction = (float) (position - std::floor (position));
+    return juce::jmap (fraction, samples[frameStart + i0], samples[frameStart + i1]);
+}
+}
+
 float ReferenceWavetableData::sample (double phase, float position) const
 {
     if (! valid) return 0.0f;
@@ -84,5 +115,88 @@ std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::extract (co
         for (auto& v : result->frames[(size_t) frame]) v = juce::jlimit (-1.0f, 1.0f, v / peak * 0.9f);
     }
     result->valid = true;
+    return result;
+}
+
+std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::importSet (const juce::File& file,
+                                                                                int sourceFrameSize,
+                                                                                juce::String* description)
+{
+    juce::AudioFormatManager fm;
+    fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (file));
+    if (! reader || reader->lengthInSamples < 8) return {};
+
+    // 512 source frames at the largest supported cycle size is already far beyond
+    // what the five-frame internal representation needs while keeping imports bounded.
+    constexpr int maxImportedSamples = 4096 * 512;
+    const int readSamples = (int) juce::jmin<int64> (reader->lengthInSamples, maxImportedSamples);
+    juce::AudioBuffer<float> audio ((int) juce::jmax ((unsigned int) 1, reader->numChannels), readSamples);
+    if (! reader->read (&audio, 0, readSamples, 0, true, true)) return {};
+    return importSetFromBuffer (audio, reader->sampleRate, sourceFrameSize, description);
+}
+
+std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::importSetFromBuffer (const juce::AudioBuffer<float>& audio,
+                                                                                          double sampleRate,
+                                                                                          int sourceFrameSize,
+                                                                                          juce::String* description)
+{
+    if (audio.getNumChannels() <= 0 || audio.getNumSamples() < 8) return {};
+
+    juce::AudioBuffer<float> mono (1, audio.getNumSamples());
+    mono.clear();
+    const float channelGain = 1.0f / (float) audio.getNumChannels();
+    for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+        mono.addFrom (0, 0, audio, ch, 0, audio.getNumSamples(), channelGain);
+
+    const int frameSize = chooseSourceFrameSize (mono.getNumSamples(), sourceFrameSize);
+    if (frameSize < 8 || frameSize > mono.getNumSamples()) return {};
+    const int availableFrames = mono.getNumSamples() / frameSize;
+    if (availableFrames <= 0) return {};
+
+    const int sourceFrames = juce::jmin (512, availableFrames);
+    const float* samples = mono.getReadPointer (0);
+    auto result = std::make_shared<ReferenceWavetableData>();
+    result->fundamentalHz = sampleRate > 0.0 ? (float) (sampleRate / frameSize) : 0.0f;
+
+    float globalPeak = 1.0e-6f;
+    for (int targetFrame = 0; targetFrame < ReferenceWavetableData::frameCount; ++targetFrame)
+    {
+        const float sourcePosition = sourceFrames <= 1 ? 0.0f
+            : (float) targetFrame / (float) (ReferenceWavetableData::frameCount - 1) * (float) (sourceFrames - 1);
+        const int source0 = juce::jlimit (0, sourceFrames - 1, (int) std::floor (sourcePosition));
+        const int source1 = juce::jmin (sourceFrames - 1, source0 + 1);
+        const float sourceMix = sourcePosition - (float) source0;
+
+        float mean = 0.0f;
+        for (int i = 0; i < ReferenceWavetableData::tableSize; ++i)
+        {
+            const double phase = i / (double) ReferenceWavetableData::tableSize;
+            const float a = cyclicFrameSample (samples, source0 * frameSize, frameSize, phase);
+            const float b = cyclicFrameSample (samples, source1 * frameSize, frameSize, phase);
+            const float value = juce::jmap (sourceMix, a, b);
+            result->frames[(size_t) targetFrame][(size_t) i] = value;
+            mean += value;
+        }
+        mean /= (float) ReferenceWavetableData::tableSize;
+        for (auto& value : result->frames[(size_t) targetFrame])
+        {
+            value -= mean;
+            globalPeak = juce::jmax (globalPeak, std::abs (value));
+        }
+    }
+
+    const float normalise = 0.95f / globalPeak;
+    for (auto& frame : result->frames)
+        for (auto& value : frame)
+            value = juce::jlimit (-1.0f, 1.0f, value * normalise);
+
+    result->valid = true;
+    if (description != nullptr)
+    {
+        *description = juce::String (availableFrames) + " source frame" + (availableFrames == 1 ? "" : "s")
+                     + " x " + juce::String (frameSize) + " samples -> 5 x 2048";
+        if (availableFrames > sourceFrames) *description += " (first 512 frames used)";
+    }
     return result;
 }
