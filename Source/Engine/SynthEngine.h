@@ -52,6 +52,13 @@ struct VoiceParameters
     float wavetableMix = 0.0f, wavetablePosition = 0.25f, wavetableWarp = 0.0f;
     float referenceWavetableMix = 0.0f;
     std::shared_ptr<const ReferenceWavetableData> referenceWavetable;
+
+    // User-imported wavetable sets are intentionally independent from the
+    // reference-derived table so loading a sound-design table never destroys the
+    // matching reference representation.
+    float userWavetableMix = 0.0f;
+    std::shared_ptr<const ReferenceWavetableData> userWavetable;
+
     float supersawMix = 0.0f, unisonDetune = 18.0f, unisonSpread = 0.72f;
     float wavefold = 0.0f;
 
