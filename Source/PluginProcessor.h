@@ -46,6 +46,9 @@ public:
     juce::String loadedSampleName;
     MatchSettings matchSettings;
     std::shared_ptr<ReferenceWavetableData> referenceWavetable;
+    std::shared_ptr<ReferenceWavetableData> userWavetable;
+    juce::String userWavetableName;
+    juce::String userWavetableDescription;
     std::array<MatchResult, 3> candidateBank {};
     int selectedCandidate = 0;
 
@@ -57,6 +60,13 @@ public:
     float getDetectedReferenceHz() const noexcept { return detectedReferenceHz; }
     float getDetectedReferencePitchConfidence() const noexcept { return detectedReferencePitchConfidence; }
     bool hasReferenceSample() const noexcept { return referencePlayer.hasSample(); }
+
+    bool loadUserWavetable (const juce::File&, int sourceFrameSize = 0);
+    void clearUserWavetable();
+    bool hasUserWavetable() const noexcept { return userWavetable != nullptr && userWavetable->valid; }
+    std::shared_ptr<const ReferenceWavetableData> getUserWavetable() const { return userWavetable; }
+    const juce::String& getUserWavetableName() const noexcept { return userWavetableName; }
+    const juce::String& getUserWavetableDescription() const noexcept { return userWavetableDescription; }
 
     static float midiNoteToHz (int midiNote);
     static int hzToNearestMidiNote (float hz);
