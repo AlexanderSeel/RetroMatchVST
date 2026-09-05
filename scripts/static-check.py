@@ -97,7 +97,7 @@ required_tokens = {
     'MSEG editor': ['ENABLE MSEG 1', 'LOOP WHILE NOTE HELD', 'POST-1.0 MODULATION GRAPH', 'MSEG 1', 'modGraph'],
     'user wavetable importer': ['importSet', 'importSetFromBuffer', 'chooseSourceFrameSize', 'cyclicFrameSample', 'source frame', '5 x 2048'],
     'user wavetable engine': ['userWavetableMix', 'userWavetable', 'params.userWavetable->sample'],
-    'user wavetable processor': ['"userWavetableMix"', 'loadUserWavetable', 'clearUserWavetable', '"userWavetable"', 'userWavetableDescription', 'presetVersion", "1.2"'],
+    'user wavetable processor': ['"userWavetableMix"', 'loadUserWavetable', 'clearUserWavetable', '"userWavetable"', 'userWavetableDescription', 'presetVersion", "1.3"'],
     'user wavetable editor': ['LOAD WAVETABLE', 'SOURCE CYCLE', 'USER WT MIX', 'AUTO (prefer 2048)', 'getUserWavetable'],
     'matcher search dimensions': ['p.wavetableMix', 'p.supersawMix', 'p.wavefold', 'p.fmOpFixedMode', 'p.fmOpAttack'],
     'operator UI': ['rebindFmOperatorEditor', 'SELECTED OPERATOR DETAIL'],

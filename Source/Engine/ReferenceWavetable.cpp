@@ -1,4 +1,5 @@
 #include "ReferenceWavetable.h"
+#include "../Analysis/SampleAnalyzer.h"
 #include <cmath>
 
 namespace
@@ -72,21 +73,27 @@ std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::extract (co
 {
     juce::AudioFormatManager fm; fm.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (file));
-    if (! reader || reader->lengthInSamples < 128) return {};
+    if (! reader || reader->lengthInSamples < 128 || ! std::isfinite (startSeconds)
+        || ! std::isfinite (endSeconds) || reader->sampleRate <= 0) return {};
     const auto sr = reader->sampleRate;
     float f0 = expectedFundamentalHz;
-    if (f0 < 25.0f || f0 > 5000.0f) f0 = 220.0f;
+    if (! std::isfinite (f0) || f0 < 25.0f || f0 > 5000.0f) f0 = 220.0f;
     const int period = juce::jlimit (8, 8192, (int) std::round (sr / f0));
     if (reader->lengthInSamples < period * 2) return {};
 
     const double duration = (double) reader->lengthInSamples / sr;
     const double startSec = juce::jlimit (0.0, duration, startSeconds);
+    const double endSec = endSeconds < 0 ? duration : juce::jlimit (0.0, duration, endSeconds);
+    if (endSec <= startSec) return {};
     const int64 startSample = (int64) std::llround (startSec * sr);
-    const int readSamples = (int) juce::jmin<int64> (reader->lengthInSamples - startSample, (int64) sr * 6);
+    const int64 endSample = juce::jmin (reader->lengthInSamples, (int64) std::llround (endSec * sr));
+    const int readSamples = (int) juce::jmin<int64> (endSample - startSample, (int64) sr * 6);
+    if (readSamples < period * 2 + 2) return {};
     juce::AudioBuffer<float> audio ((int) juce::jmax ((unsigned int) 1, reader->numChannels), readSamples);
-    reader->read (&audio, 0, readSamples, startSample, true, true);
+    if (! reader->read (&audio, 0, readSamples, startSample, true, true)) return {};
     juce::AudioBuffer<float> mono (1, readSamples); mono.clear();
     for (int c = 0; c < audio.getNumChannels(); ++c) mono.addFrom (0, 0, audio, c, 0, readSamples, 1.0f / audio.getNumChannels());
+    if (mono.getMagnitude (0, readSamples) < 1.0e-6f) return {};
 
     auto result = std::make_shared<ReferenceWavetableData>(); result->fundamentalHz = f0;
     const int margin = period;
@@ -135,6 +142,26 @@ std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::extract (co
         for (auto& v : result->frames[(size_t) frame]) v = juce::jlimit (-1.0f, 1.0f, v / peak * 0.9f);
     }
     result->valid = true;
+    return result;
+}
+
+std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::chop (const juce::File& file, double start, double end, int slices)
+{
+    if (! std::isfinite (start) || ! std::isfinite (end) || start < 0 || end <= start || slices < 2 || slices > 5) return {};
+    std::array<std::shared_ptr<ReferenceWavetableData>, 5> tables;
+    for (int i = 0; i < slices; ++i)
+    {
+        const double s = start + (end - start) * i / slices;
+        const double e = start + (end - start) * (i + 1) / slices;
+        auto features = SampleAnalyzer::analyzeFile (file, 0, s, e);
+        if (! features) return {};
+        tables[(size_t) i] = extract (file, features->fundamentalHz, s, e);
+        if (! tables[(size_t) i]) return {};
+    }
+    auto result = std::make_shared<ReferenceWavetableData>();
+    result->fundamentalHz = tables[0]->fundamentalHz; result->valid = true;
+    for (int i = 0; i < ReferenceWavetableData::frameCount; ++i)
+        result->frames[(size_t) i] = tables[(size_t) std::lround (i * (slices - 1) / 4.0)]->frames[2];
     return result;
 }
 

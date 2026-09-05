@@ -5,7 +5,7 @@
 #include <array>
 #include <memory>
 
-class UserWavetablePage final : public juce::Component
+class UserWavetablePage final : public juce::Component, private juce::Timer
 {
 public:
     void lookAndFeelChanged() override
@@ -22,7 +22,7 @@ public:
         title.setColour (juce::Label::textColourId, juce::Colour (0xff65d5bc));
         title.setFont (juce::Font (juce::FontOptions (17.0f, juce::Font::bold)));
 
-        hint.setText ("Import single-cycle or multi-frame WAV/AIFF/FLAC/OGG tables. RetroMatch maps the source to five immutable 2048-sample frames while keeping the reference-derived wavetable separate.", juce::dontSendNotification);
+        hint.setText ("Select START / END in the reference view and click CREATE WAVETABLE, or import a table below. Blend it with USER WT MIX and scan its five frames with WT POSITION.", juce::dontSendNotification);
         hint.setColour (juce::Label::textColourId, juce::Colour (0xff9db0aa));
         hint.setFont (juce::Font (juce::FontOptions (10.5f)));
         hint.setJustificationType (juce::Justification::topLeft);
@@ -65,8 +65,14 @@ public:
         addAndMakeVisible (mixLabel);
         addAndMakeVisible (mix);
         addAndMakeVisible (status);
+        positionLabel.setText ("WT POSITION", juce::dontSendNotification);
+        addAndMakeVisible (positionLabel); addAndMakeVisible (position);
+        position.setSliderStyle (juce::Slider::LinearHorizontal);
+        position.setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 20);
+        positionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "wavetablePosition", position);
 
         updateStatus();
+        startTimerHz (4);
     }
 
     void paint (juce::Graphics& g) override
@@ -115,13 +121,21 @@ public:
 
             g.setColour (findColour (RetroLookAndFeel::primaryLed).withAlpha (0.16f));
             g.strokePath (wave, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved));
-            g.setColour (frame == 2 ? findColour (RetroLookAndFeel::secondaryLed) : findColour (RetroLookAndFeel::primaryLed));
+            const int selected = (int) std::lround (proc.apvts.getRawParameterValue ("wavetablePosition")->load() * 4);
+            g.setColour (frame == selected ? findColour (RetroLookAndFeel::secondaryLed) : findColour (RetroLookAndFeel::primaryLed));
             g.strokePath (wave, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved));
             g.setFont (juce::Font (juce::FontOptions (8.0f, juce::Font::bold)));
             g.drawText ("F" + juce::String (frame + 1), (int) row.getX(), (int) row.getY(), 25, 14, juce::Justification::centredLeft);
         }
     }
 
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! previewBounds.contains (e.getPosition()) || ! proc.hasUserWavetable()) return;
+        const auto graph = previewBounds.reduced (12, 24);
+        const int frame = juce::jlimit (0, 4, (e.y - graph.getY()) * 5 / juce::jmax (1, graph.getHeight()));
+        proc.apvts.getParameter ("wavetablePosition")->setValueNotifyingHost (frame / 4.0f); repaint();
+    }
     void resized() override
     {
         auto area = getLocalBounds().reduced (16);
@@ -135,9 +149,10 @@ public:
         controls.removeFromLeft (10);
         load.setBounds (controls.removeFromLeft (145).reduced (3, 3));
         clear.setBounds (controls.removeFromLeft (80).reduced (3, 3));
-        controls.removeFromLeft (12);
-        mixLabel.setBounds (controls.removeFromLeft (85));
-        mix.setBounds (controls.reduced (3, 3));
+        auto blends = area.removeFromTop (36);
+        auto leftBlend = blends.removeFromLeft (blends.getWidth() / 2);
+        mixLabel.setBounds (leftBlend.removeFromLeft (85)); mix.setBounds (leftBlend.reduced (3));
+        positionLabel.setBounds (blends.removeFromLeft (85)); position.setBounds (blends.reduced (3));
 
         status.setBounds (area.removeFromTop (42));
         area.removeFromTop (7);
@@ -145,11 +160,14 @@ public:
     }
 
 private:
+    void timerCallback() override { updateStatus(); repaint(); }
     RetroMatchSynthAudioProcessor& proc;
     juce::Label title, hint, frameSizeLabel, mixLabel, status;
     juce::ComboBox frameSize;
     juce::TextButton load, clear;
-    juce::Slider mix;
+    juce::Slider mix, position;
+    juce::Label positionLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> positionAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mixAttachment;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> previewBounds;

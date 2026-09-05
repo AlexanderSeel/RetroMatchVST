@@ -130,6 +130,22 @@ Force a completely fresh image build:
 .\scripts\build-docker.ps1 -Target Windows -NoCache
 ```
 
+The Windows helper checks that the source/toolchain image can start before compiling.
+If this check fails (for example, HCS error `0xc0370106`), it automatically runs
+`build-windows-direct-container.ps1`, provisioning and building in a disposable
+base container without committing toolchain image layers. It preserves the failed
+image for diagnosis. Compiler and test failures are reported without this retry.
+
+To use the direct path immediately on a machine with Windows Docker already running:
+
+```powershell
+.\scripts\build-windows-direct-container.ps1
+```
+
+This path reinstalls the toolchain inside the container, so it takes longer. Artifacts
+still go to `dist/docker-windows-release` by default. If the base container also fails
+to start, the direct helper reports that failure; the fallback does not repair Docker's storage.
+
 ### Windows-container requirements
 
 Native Windows containers require a supported Windows Pro/Enterprise host and Docker Desktop installed with Windows-container support. Docker Desktop can switch container engines from the CLI with `docker desktop engine use windows`; the helper uses this command automatically.

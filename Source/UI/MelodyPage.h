@@ -7,7 +7,7 @@ class MelodyPage final : public juce::Component, private juce::Timer
 public:
     explicit MelodyPage (RetroMatchSynthAudioProcessor& p) : proc (p), roll (*this)
     {
-        for (auto* button : std::array<juce::Button*, 8> { &analyze, &play, &stop, &save, &drag, &lower, &higher, &remove }) addAndMakeVisible (*button);
+        for (auto* button : std::array<juce::Button*, 9> { &analyze, &play, &samplePlay, &stop, &save, &drag, &lower, &higher, &remove }) addAndMakeVisible (*button);
         addAndMakeVisible (mode); addAndMakeVisible (tempo); addAndMakeVisible (hint); addAndMakeVisible (roll);
         for (auto* slider : { &synthStart, &synthEnd, &midiStart, &midiEnd })
         { addAndMakeVisible (*slider); slider->setRange (0.0, 60.0, 0.01); slider->setSliderStyle (juce::Slider::LinearHorizontal); slider->setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 20); slider->setTextValueSuffix (" s"); }
@@ -28,7 +28,9 @@ public:
             worker = std::make_unique<Worker> (file, mode.getSelectedId() == 2, tempo.getValue(), midiStart.getValue(), midiEnd.getValue());
             worker->startThread(); analyze.setButtonText ("CANCEL"); proc.melodyTransport.stop();
         };
-        play.onClick = [this] { proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::referenceOnly); proc.noteOnFromEditor (proc.getReferenceBaseMidiNote(), 0.82f); };
+        play.onClick = [this] { proc.playMelody(); };
+        samplePlay.onClick = [this] { proc.melodyTransport.stop(); proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::referenceOnly); proc.noteOnFromEditor (proc.getReferenceBaseMidiNote(), 0.82f); };
+        play.setTooltip ("Play the extracted notes through the current synth and enabled layers.");
         stop.onClick = [this] { proc.melodyTransport.stop(); proc.allEditorNotesOff(); proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::synthOnly); };
         save.onClick = [this] { chooseMidi(); };
         drag.begin = [this]
@@ -53,7 +55,7 @@ public:
     }
     ~MelodyPage() override
     {
-        stopTimer(); proc.melodyTransport.stop();
+        stopTimer(); proc.melodyTransport.stop(); proc.allEditorNotesOff();
         if (worker) { worker->signalThreadShouldExit(); worker->waitForThreadToExit (-1); }
     }
     void resized() override
@@ -68,7 +70,7 @@ public:
         auto midi = area.removeFromTop (27);
         midiLabel.setBounds (midi.removeFromLeft (105).reduced (2)); midiStart.setBounds (midi.removeFromLeft (125).reduced (2)); midiEnd.setBounds (midi.reduced (2));
         area.removeFromTop (5); auto actions = area.removeFromTop (34);
-        play.setBounds (actions.removeFromLeft (80).reduced (2)); stop.setBounds (actions.removeFromLeft (80).reduced (2));
+        play.setBounds (actions.removeFromLeft (112).reduced (2)); samplePlay.setBounds (actions.removeFromLeft (108).reduced (2)); stop.setBounds (actions.removeFromLeft (65).reduced (2));
         save.setBounds (actions.removeFromLeft (125).reduced (2)); drag.setBounds (actions.removeFromLeft (155).reduced (2));
         area.removeFromTop (6); sampleView.setBounds (area.removeFromTop (112)); area.removeFromTop (8); auto edit = area.removeFromTop (28);
         lower.setBounds (edit.removeFromLeft (90).reduced (2)); higher.setBounds (edit.removeFromLeft (90).reduced (2));
@@ -186,9 +188,10 @@ private:
         MelodyPage& page; int dragging = -1;
     };
     RetroMatchSynthAudioProcessor& proc;
+    float shownStart = -1, shownEnd = -1;
     MelodyClip clip; juce::ValueTree previousState; int selected = -1; SampleRangeView sampleView { *this };
     std::unique_ptr<Worker> worker; std::unique_ptr<juce::FileChooser> chooser;
-    juce::TextButton analyze { "ANALYZE" }, play { "PLAY" }, stop { "STOP" }, save { "EXPORT MIDI" };
+    juce::TextButton analyze { "ANALYZE" }, play { "PLAY MELODY" }, samplePlay { "PLAY SAMPLE" }, stop { "STOP" }, save { "EXPORT MIDI" };
     DragButton drag;
     juce::TextButton lower { "NOTE -" }, higher { "NOTE +" }, remove { "DELETE NOTE" };
     juce::ComboBox mode; juce::Slider tempo, synthStart, synthEnd, midiStart, midiEnd; juce::TextButton applyRegion { "APPLY SYNTH" }; juce::Label synthLabel, midiLabel, hint; PianoRoll roll;
@@ -246,8 +249,18 @@ private:
             else hint.setText ("Analyzing locally... " + juce::String (worker->progress.load() * 100, 0) + "%", juce::dontSendNotification);
         }
         if (previousState != proc.apvts.state.getChildWithName ("MELODY")) refreshClip();
+        const auto start = proc.getAnalysisStartSeconds();
+        const auto end = proc.getAnalysisEndSeconds() > 0 ? proc.getAnalysisEndSeconds() : proc.getReferenceAnalysisDuration();
+        if (start != shownStart || end != shownEnd)
+        {
+            const double duration = juce::jmax (0.01, (double) proc.getReferenceAnalysisDuration());
+            synthStart.setRange (0, duration, 0.001); synthEnd.setRange (0, duration, 0.001);
+            synthStart.setValue (start, juce::dontSendNotification); synthEnd.setValue (end, juce::dontSendNotification);
+            shownStart = start; shownEnd = end; sampleView.repaint();
+        }
         const bool ready = ! clip.notes.empty() && ! worker;
         play.setEnabled (ready); save.setEnabled (ready); drag.setEnabled (ready);
+        samplePlay.setEnabled (proc.hasReferenceSample());
         lower.setEnabled (ready && selected >= 0); higher.setEnabled (ready && selected >= 0); remove.setEnabled (ready && selected >= 0);
         play.setToggleState (proc.melodyTransport.isPlaying(), juce::dontSendNotification);
         roll.repaint();

@@ -236,6 +236,35 @@ if ($Target -eq "Windows") {
     Write-Host "Building reusable Windows toolchain/source image '$sourceImage' ..." -ForegroundColor Cyan
     Invoke-DockerMonitored -Arguments $sourceBuildArgs -Activity "Windows Docker source/toolchain image build"
 
+    # A successful Docker build does not guarantee that its committed Windows
+    # layers can boot. Probe before compilation so an HCS startup failure can
+    # use the direct base-container path without retrying compiler/test errors.
+    Write-Host "Checking Windows source/toolchain container startup..." -ForegroundColor Cyan
+    $probe = "retromatch-startup-$([guid]::NewGuid().ToString('N').Substring(0, 10))"
+    $startupFailed = $false
+    try {
+        Invoke-DockerMonitored -Arguments @(
+            "run", "--name", $probe, "--memory", "4g", $sourceImage,
+            "C:\Windows\System32\cmd.exe", "/D", "/C", "echo", "RetroMatch container startup OK"
+        ) -Activity "Windows source/toolchain startup check"
+    }
+    catch {
+        $startupFailed = $true
+        Write-Warning $_.Exception.Message
+        & docker inspect --format '{{json .State}}' $probe | Out-Host
+    }
+    finally {
+        & docker rm -f $probe *> $null
+    }
+
+    if ($startupFailed) {
+        Write-Warning "The source/toolchain image cannot start. Retrying with a disposable base container; toolchain provisioning will run again without committing image layers."
+        & (Join-Path $PSScriptRoot "build-windows-direct-container.ps1") -Config $Config -OutputDir $OutputDir
+        # Keep the failed image available for diagnosis. The direct helper owns
+        # its container cleanup and reports its artifact destination.
+        exit 0
+    }
+
     $container = "retromatch-buildrun-$([guid]::NewGuid().ToString('N').Substring(0, 10))"
     try {
         Write-Host "Creating disposable Windows build container '$container' ..." -ForegroundColor Cyan

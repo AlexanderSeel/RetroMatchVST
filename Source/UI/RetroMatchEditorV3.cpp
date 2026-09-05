@@ -1,6 +1,7 @@
 #include "RetroMatchEditorV3.h"
 #include "MelodyPage.h"
 #include "SignalLabPage.h"
+#include "LayersPage.h"
 #include <BinaryData.h>
 #include <algorithm>
 #include <cmath>
@@ -20,7 +21,8 @@ const juce::StringArray fmOperatorKnobs {
     "fmOp1Ratio", "fmOp1Level", "fmOp2Ratio", "fmOp2Level", "fmOp3Ratio", "fmOp3Level",
     "fmOp4Ratio", "fmOp4Level", "fmOp5Ratio", "fmOp5Level", "fmOp6Ratio", "fmOp6Level"
 };
-const juce::StringArray filterKnobs { "cutoff", "resonance", "drive" };
+const juce::StringArray filterKnobs { "cutoff", "resonance" };
+const juce::StringArray distortionKnobs { "drive", "distortionMix" };
 const juce::StringArray ampKnobs { "attack", "decay", "sustain", "release", "outputGain" };
 const juce::StringArray modLfoKnobs { "lfoRate", "lfoPitch", "lfoCutoff", "lfoAmp" };
 const juce::StringArray chorusKnobs { "chorusMix", "chorusRate", "chorusDepth" };
@@ -465,6 +467,37 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     addAndMakeVisible (progressBar);
 
     configureReferenceAudition();
+    for (auto* slider : { &regionStart, &regionEnd })
+    {
+        addAndMakeVisible (*slider); slider->setSliderStyle (juce::Slider::IncDecButtons);
+        slider->setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 24);
+        slider->setRange (0, 60, 0.001); slider->setTextValueSuffix (" s");
+    }
+    regionStartLabel.setText ("START", juce::dontSendNotification);
+    regionStart.setComponentID ("referenceStart"); regionEnd.setComponentID ("referenceEnd");
+    regionEndLabel.setText ("END", juce::dontSendNotification);
+    addAndMakeVisible (regionStartLabel); addAndMakeVisible (regionEndLabel);
+    addAndMakeVisible (applyReferenceRegion); addAndMakeVisible (createReferenceTable);
+    applyReferenceRegion.onClick = [this]
+    {
+        if (regionEnd.getValue() <= regionStart.getValue())
+        { status.setText ("End must be after start.", juce::dontSendNotification); return; }
+        const bool ok = proc.setReferenceAnalysisRegion ((float) regionStart.getValue(), (float) regionEnd.getValue());
+        status.setText (ok ? "Reference selection applied. Run a match or create a wavetable." : "Could not analyze the selection.", juce::dontSendNotification);
+        shownRegionStart = -1.0f; repaint();
+    };
+    addAndMakeVisible (chopReferenceTable);
+    chopReferenceTable.setTooltip ("Divide this selection into five parts, detect each part's pitch, and turn them into a wavetable.");
+    chopReferenceTable.onClick = [this]
+    {
+        const bool ok = proc.createUserWavetableFromReference ((float) regionStart.getValue(), (float) regionEnd.getValue(), true);
+        status.setText (ok ? "Five sample slices mapped to wavetable frames." : "Choose a longer region with audio in all five slices.", juce::dontSendNotification);
+    };
+    createReferenceTable.onClick = [this]
+    {
+        const bool ok = proc.createUserWavetableFromReference ((float) regionStart.getValue(), (float) regionEnd.getValue());
+        status.setText (ok ? "Wavetable created. Open WAVETABLE to blend and scan it." : "Select an audible region containing at least two cycles.", juce::dontSendNotification);
+    };
 
     styleTextLabel (osc1Label, "OSC 1 WAVE");
     styleTextLabel (osc2Label, "OSC 2 WAVE");
@@ -512,7 +545,7 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
         { "fmAmount", "PM AMOUNT", "" }, { "fmRatio", "PM RATIO", "" }, { "fmMix", "6-OP FM", "" }, { "fmFeedback", "FM FEEDBACK", "" }, { "harmonicTilt", "HARM TILT", "" }, { "oddEven", "ODD/EVEN", "" }, { "cutoff", "CUTOFF", " Hz" }, { "resonance", "RESO", "" },
         { "attack", "ATTACK", " s" }, { "decay", "DECAY", " s" }, { "sustain", "SUSTAIN", "" }, { "release", "RELEASE", " s" },
         { "lfoRate", "LFO RATE", " Hz" }, { "lfoPitch", "LFO->PITCH", " st" }, { "lfoCutoff", "LFO->FILTER", "" }, { "lfoAmp", "LFO->AMP", "" },
-        { "drive", "DRIVE", "" }, { "chorusMix", "CHORUS", "" }, { "chorusRate", "CHR RATE", " Hz" }, { "chorusDepth", "CHR DEPTH", "" },
+        { "distortionMix", "DIST MIX", "" }, { "drive", "DRIVE", "" }, { "chorusMix", "CHORUS", "" }, { "chorusRate", "CHR RATE", " Hz" }, { "chorusDepth", "CHR DEPTH", "" },
         { "delayMix", "DELAY", "" }, { "delayTime", "DLY TIME", " s" }, { "delayFeedback", "DLY FDBK", "" },
         { "reverbMix", "REVERB", "" }, { "reverbSize", "ROOM", "" }, { "reverbDamping", "DAMPING", "" }, { "stereoWidth", "WIDTH", "" }, { "outputGain", "OUTPUT", " dB" }
     };
@@ -841,6 +874,9 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
     tabs.addTab ("MELODY", juce::Colour (0xff102024), melodyPage.get(), false);
 
     configureSectionLabel (synthOscSection, "OSCILLATORS + PITCH", synthPage);
+    synthVisual = std::make_unique<SynthInstanceVisual>();
+    synthVisual->parameters = [this] { return proc.getMainVoiceParameters(); };
+    synthPage.addAndMakeVisible (*synthVisual);
     configureSectionLabel (synthTextureSection, "WAVETABLE + UNISON + HARMONIC SHAPING", synthPage);
     configureSectionLabel (fmCoreSection, "FM / PHASE MOD CORE", fmPage);
     configureSectionLabel (fmOperatorsSection, "SIX-OPERATOR OVERVIEW", fmPage);
@@ -849,6 +885,10 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
     configureSectionLabel (ampSection, "AMPLITUDE + OUTPUT", filterAmpPage);
     configureSectionLabel (modLfoSection, "LFO", modPage);
     configureSectionLabel (modMatrixSection, "MODULATION MATRIX", modPage);
+    configureSectionLabel (fxDistortionSection, "DISTORTION", fxPage);
+    distortionChoice.addItemList ({ "Soft saturation", "Hard clip", "Sine fold" }, 1);
+    fxPage.addAndMakeVisible (distortionChoice);
+    distortionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "distortionMode", distortionChoice);
     configureSectionLabel (fxChorusSection, "CHORUS", fxPage);
     configureSectionLabel (fxDelaySection, "DELAY", fxPage);
     configureSectionLabel (fxReverbSection, "REVERB + STEREO", fxPage);
@@ -884,6 +924,7 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
     for (const auto& id : filterKnobs) moveKnobToPage (id, filterAmpPage);
     for (const auto& id : ampKnobs) moveKnobToPage (id, filterAmpPage);
     for (const auto& id : modLfoKnobs) moveKnobToPage (id, modPage);
+    for (const auto& id : distortionKnobs) moveKnobToPage (id, fxPage);
     for (const auto& id : chorusKnobs) moveKnobToPage (id, fxPage);
     for (const auto& id : delayKnobs) moveKnobToPage (id, fxPage);
     for (const auto& id : reverbKnobs) moveKnobToPage (id, fxPage);
@@ -938,6 +979,7 @@ void RetroMatchSynthAudioProcessorEditor::layoutFmDetailGrid (juce::Rectangle<in
 void RetroMatchSynthAudioProcessorEditor::layoutPages()
 {
     auto synth = synthPage.getLocalBounds().reduced (12);
+    if (synthVisual) synthVisual->setBounds (synth.removeFromTop (90).reduced (2));
     synthOscSection.setBounds (synth.removeFromTop (24)); synth.removeFromTop (7);
     auto selectors = synth.removeFromTop (38);
     const int half = selectors.getWidth() / 2;
@@ -1005,13 +1047,17 @@ void RetroMatchSynthAudioProcessorEditor::layoutPages()
     auto meterArea = fx.removeFromRight (meterW).reduced (5, 4);
     outputMeter.setBounds (meterArea);
     fx.removeFromRight (5);
-    const int third = fx.getWidth() / 3;
-    auto chorusArea = fx.removeFromLeft (third).reduced (4);
-    auto delayArea = fx.removeFromLeft (third).reduced (4);
+    auto topFx = fx.removeFromTop (fx.getHeight() / 2);
+    auto distortionArea = topFx.removeFromLeft (topFx.getWidth() / 2).reduced (4);
+    auto chorusArea = topFx.reduced (4);
+    auto delayArea = fx.removeFromLeft (fx.getWidth() / 2).reduced (4);
     auto reverbArea = fx.reduced (4);
-    fxChorusSection.setBounds (chorusArea.removeFromTop (24)); layoutKnobGrid (chorusKnobs, chorusArea.reduced (0, 5), 2);
-    fxDelaySection.setBounds (delayArea.removeFromTop (24)); layoutKnobGrid (delayKnobs, delayArea.reduced (0, 5), 2);
-    fxReverbSection.setBounds (reverbArea.removeFromTop (24)); layoutKnobGrid (reverbKnobs, reverbArea.reduced (0, 5), 2);
+    fxDistortionSection.setBounds (distortionArea.removeFromTop (24));
+    distortionChoice.setBounds (distortionArea.removeFromTop (28).reduced (2));
+    layoutKnobGrid (distortionKnobs, distortionArea.reduced (0, 3), 2);
+    fxChorusSection.setBounds (chorusArea.removeFromTop (24)); layoutKnobGrid (chorusKnobs, chorusArea.reduced (0, 5), 3);
+    fxDelaySection.setBounds (delayArea.removeFromTop (24)); layoutKnobGrid (delayKnobs, delayArea.reduced (0, 5), 3);
+    fxReverbSection.setBounds (reverbArea.removeFromTop (24)); layoutKnobGrid (reverbKnobs, reverbArea.reduced (0, 5), 4);
 
     auto settings = settingsPage.getLocalBounds().reduced (12);
     aiSection.setBounds (settings.removeFromTop (24)); settings.removeFromTop (8);
@@ -1089,7 +1135,16 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     referenceLevel.setBounds (auditionRow.reduced (1, 1));
     w.removeFromTop (5);
 
-    const int analyzerHeight = juce::jlimit (128, 220, (int) std::round (w.getHeight() * 0.27));
+    auto region = w.removeFromTop (28);
+    regionStartLabel.setBounds (region.removeFromLeft (42));
+    regionStart.setBounds (region.removeFromLeft (100).reduced (1));
+    regionEndLabel.setBounds (region.removeFromLeft (32));
+    regionEnd.setBounds (region.removeFromLeft (100).reduced (1));
+    applyReferenceRegion.setBounds (region.reduced (2));
+    auto tableActions = w.removeFromTop (27);
+    createReferenceTable.setBounds (tableActions.removeFromLeft (tableActions.getWidth() / 2).reduced (2));
+    chopReferenceTable.setBounds (tableActions.reduced (2)); w.removeFromTop (3);
+    const int analyzerHeight = juce::jlimit (90, 220, (int) std::round (w.getHeight() * 0.22));
     analyzerBounds = w.removeFromTop (analyzerHeight); w.removeFromTop (5);
     pipelineBounds = w.removeFromTop (32); w.removeFromTop (5);
 
@@ -1105,7 +1160,7 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     footer.removeFromTop (3); progressBar.setBounds (footer.removeFromTop (18)); footer.removeFromTop (3); status.setBounds (footer);
 
     const int candidateGap = 4;
-    const int cardH = juce::jmax (42, (w.getHeight() - candidateGap * 2) / 3);
+    const int cardH = juce::jmax (24, (w.getHeight() - candidateGap * 2) / 3);
     candidateA.setBounds (w.removeFromTop (cardH)); w.removeFromTop (candidateGap);
     candidateB.setBounds (w.removeFromTop (cardH)); w.removeFromTop (candidateGap);
     candidateC.setBounds (w);
@@ -1322,7 +1377,9 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessorEditor::createLocalVaria
     std::array<MatchResult, 3> results {};
     if (! proc.currentFeatures) return results;
     const auto reference = *proc.currentFeatures;
-    auto base = refined && proc.lastMatch.confidence > 0.0f ? proc.getCurrentVoiceParameters() : SoundMatcher::initialFit (reference).params;
+    auto base = refined && proc.lastMatch.confidence > 0.0f ? proc.getMainVoiceParameters() : SoundMatcher::initialFit (reference).params;
+    base.distortionMode = (int) paramValue (proc, "distortionMode", 0);
+    base.distortionMix = paramValue (proc, "distortionMix", 1);
     base.referenceWavetable = proc.referenceWavetable;
 
     std::array<VoiceParameters, 3> seeds { base, base, base };
@@ -1370,8 +1427,10 @@ void RetroMatchSynthAudioProcessorEditor::runVariantSearch (WorkMode mode, Varia
     if (mode == WorkMode::ai)
     {
         const auto settingsCopy = aiSettings;
-        auto base = proc.lastMatch.confidence > 0.0f ? proc.getCurrentVoiceParameters() : SoundMatcher::initialFit (*proc.currentFeatures).params;
-        base.referenceWavetable = proc.referenceWavetable;
+        auto base = proc.lastMatch.confidence > 0.0f ? proc.getMainVoiceParameters() : SoundMatcher::initialFit (*proc.currentFeatures).params;
+        base.distortionMode = (int) paramValue (proc, "distortionMode", 0);
+    base.distortionMix = paramValue (proc, "distortionMix", 1);
+    base.referenceWavetable = proc.referenceWavetable;
         auto generatedBatch = AISeedProvider::generateVariants (*proc.currentFeatures, base, proc.matchSettings, settingsCopy,
                                                                 [this] (float p) { matchProgress.store (p); },
                                                                 [&thread] { return thread.threadShouldExit(); });
@@ -1592,11 +1651,24 @@ void RetroMatchSynthAudioProcessorEditor::rebindFmOperatorEditor()
 void RetroMatchSynthAudioProcessorEditor::timerCallback()
 {
     updateLightPalette();
+    const float start = proc.getAnalysisStartSeconds();
+    const float end = proc.getAnalysisEndSeconds() > 0 ? proc.getAnalysisEndSeconds() : proc.getReferenceAnalysisDuration();
+    if (start != shownRegionStart || end != shownRegionEnd)
+    {
+        const double duration = juce::jmax (0.001, (double) proc.getReferenceAnalysisDuration());
+        regionStart.setRange (0, duration, 0.001); regionEnd.setRange (0, duration, 0.001);
+        regionStart.setValue (start, juce::dontSendNotification); regionEnd.setValue (end, juce::dontSendNotification);
+        shownRegionStart = start; shownRegionEnd = end;
+    }
+    const bool canSelect = proc.hasReferenceSample() && ! (worker && worker->isThreadRunning());
+    regionStart.setEnabled (canSelect); regionEnd.setEnabled (canSelect);
+    applyReferenceRegion.setEnabled (canSelect); createReferenceTable.setEnabled (canSelect); chopReferenceTable.setEnabled (canSelect);
     progressDisplay = matchProgress.load();
     if (worker != nullptr && ! worker->isThreadRunning()) progressBar.setVisible (false);
     updateReferenceAuditionControls();
     repaint (workspaceBounds);
     filterGraph.repaint();
+    if (synthVisual) synthVisual->repaint();
     envelopeGraph.repaint();
     lfoScope.repaint();
     outputMeter.repaint();

@@ -19,6 +19,7 @@ struct ReferenceWavetableData
 class ReferenceWavetableExtractor
 {
 public:
+    static std::shared_ptr<ReferenceWavetableData> chop (const juce::File&, double startSeconds, double endSeconds, int slices = 5);
     static std::shared_ptr<ReferenceWavetableData> extract (const juce::File& file, float expectedFundamentalHz,
                                                            double startSeconds = 0.0, double endSeconds = -1.0);
 

@@ -175,6 +175,7 @@ void HybridVoice::startNote (int midiNoteNumber, float velocity, juce::Synthesis
     baseHz = (float) juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
     level = velocity;
     phase1 = phase2 = subPhase = lfoPhase = 0.0;
+    extraLfoPhase.fill (0);
     fmPhase.fill (0.0);
     for (size_t i = 0; i < unisonPhase.size(); ++i)
         unisonPhase[i] = (double) i / unisonPhase.size() * 0.17;
@@ -219,6 +220,9 @@ float HybridVoice::getModSourceValue (int source, float lfo, float envelopeValue
         case ModSource::randomNote:   return randomNoteValue;
         case ModSource::ampEnvelope: return envelopeValue * 2.0f - 1.0f;
         case ModSource::mseg1:       return msegValue;
+        case ModSource::lfo2:        return extraLfoValue[0];
+        case ModSource::lfo3:        return extraLfoValue[1];
+        case ModSource::lfo4:        return extraLfoValue[2];
         default:                      return 0.0f;
     }
 }
@@ -320,6 +324,16 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
     for (int i = 0; i < count; ++i)
     {
         const float lfo = std::sin ((float) (juce::MathConstants<double>::twoPi * lfoPhase));
+        for (size_t k = 0; k < extraLfoPhase.size(); ++k)
+        {
+            const float phase = (float) extraLfoPhase[k];
+            extraLfoValue[k] = params.extraLfoShape[k] == 1 ? 1.0f - 4.0f * std::abs (phase - 0.5f)
+                              : params.extraLfoShape[k] == 2 ? (phase < 0.5f ? 1.0f : -1.0f)
+                              : params.extraLfoShape[k] == 3 ? phase * 2.0f - 1.0f
+                              : std::sin (juce::MathConstants<float>::twoPi * phase);
+            extraLfoPhase[k] += juce::jlimit (0.01f, 30.0f, params.extraLfoRate[k]) / sr;
+            extraLfoPhase[k] -= std::floor (extraLfoPhase[k]);
+        }
         const float env = ampEnv.getNextSample();
         const float msegValue = params.mseg.enabled ? mseg.getNextSample() : 0.0f;
 
@@ -350,6 +364,7 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
 
         for (const auto& slot : params.modSlots) applySlot (slot);
         for (const auto& slot : params.modGraphSlots) applySlot (slot);
+        for (const auto& slot : params.moduleModSlots) applySlot (slot);
 
         const float globalSemis = params.masterTuneCents / 100.0f + pitchWheelSemitones + matrixPitch;
         const float f1 = baseHz * std::pow (2.0f, (globalSemis + params.lfoPitch * lfo) / 12.0f);
@@ -480,7 +495,7 @@ SynthEngine::SynthEngine()
     synth.addSound (new BasicSound());
 }
 
-void SynthEngine::prepare (double sr, int samplesPerBlock, int channels)
+void SynthEngine::prepare (double sr, int samplesPerBlock, int channels, bool withLayers)
 {
     sampleRate = sr;
     synth.setCurrentPlaybackSampleRate (sr);
@@ -517,11 +532,23 @@ void SynthEngine::prepare (double sr, int samplesPerBlock, int channels)
     fixedLatencySamples = juce::jmax (intrinsicLatencySamples[0], juce::jmax (intrinsicLatencySamples[1], intrinsicLatencySamples[2]));
     latencyCompensation.setMaximumDelayInSamples (juce::jmax (1, fixedLatencySamples + 8));
     latencyCompensation.prepare (spec);
+    layerScratch.setSize (safeChannels, safeBlockSize);
+    moduleRack.prepare (sr, samplesPerBlock, channels);
+    if (withLayers)
+        for (auto& layer : layerEngines)
+        {
+            if (! layer) layer = std::make_unique<SynthEngine>();
+            layer->prepare (sr, samplesPerBlock, channels, false);
+        }
     reset();
 }
 
 void SynthEngine::reset()
 {
+    synth.allNotesOff (0, false);
+    for (auto& layer : layerEngines) if (layer) layer->reset();
+    layerActive.fill (false);
+    moduleRack.reset();
     chorus.reset();
     delay.reset();
     reverb.reset();
@@ -559,6 +586,7 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
     const auto channels = audio.getNumChannels();
     const int quality = qualityIndex (current.oversamplingQuality);
 
+    moduleRack.process (audio, current.fxModules, 0);
     const auto processDrive = [&] (auto& block)
     {
         if (current.drive <= 0.0001f) return;
@@ -568,7 +596,13 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
         {
             auto* x = block.getChannelPointer (ch);
             for (size_t i = 0; i < block.getNumSamples(); ++i)
-                x[i] = std::tanh (x[i] * gain) * norm;
+            {
+                const float dry = x[i];
+                float wet = std::tanh (dry * gain) * norm;
+                if (current.distortionMode == 1) wet = juce::jlimit (-1.0f, 1.0f, dry * gain);
+                if (current.distortionMode == 2) wet = std::sin (dry * gain);
+                x[i] = juce::jmap (juce::jlimit (0.0f, 1.0f, current.distortionMix), dry, wet);
+            }
         }
     };
 
@@ -632,6 +666,7 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
         }
     }
 
+    moduleRack.process (audio, current.fxModules, 1);
     audio.applyGain (juce::Decibels::decibelsToGain (current.outputGainDb));
 }
 
@@ -658,4 +693,32 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
     synth.renderNextBlock (audio, midi, 0, audio.getNumSamples());
     processEffects (audio);
     compensateLatency (audio);
+    audio.applyGain (juce::jlimit (0.0f, 1.0f, current.mainLayerGain));
+    for (size_t i = 0; i < layerEngines.size(); ++i)
+    {
+        auto* layer = layerEngines[i].get();
+        if (! layer) continue;
+        if (! current.layers[i])
+        {
+            if (layerActive[i]) layer->reset();
+            layerActive[i] = false;
+            continue;
+        }
+        auto p = *current.layers[i];
+        p.layers.fill (nullptr); p.mainLayerGain = 1.0f;
+        p.masterTuneCents += juce::jlimit (-24.0f, 24.0f, current.layerTune[i]) * 100.0f;
+        p.oversamplingQuality = current.oversamplingQuality;
+        layer->setParameters (p);
+        layerActive[i] = true;
+        layerScratch.setSize (audio.getNumChannels(), audio.getNumSamples(), false, false, true);
+        layerScratch.clear();
+        layer->render (layerScratch, midi);
+        const float pan = juce::jlimit (-1.0f, 1.0f, current.layerPan[i]);
+        for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+        {
+            const float balance = ch == 0 ? juce::jmin (1.0f, 1.0f - pan) : juce::jmin (1.0f, 1.0f + pan);
+            audio.addFrom (ch, 0, layerScratch, ch, 0, audio.getNumSamples(),
+                           juce::jlimit (0.0f, 1.0f, current.layerGain[i]) * balance);
+        }
+    }
 }

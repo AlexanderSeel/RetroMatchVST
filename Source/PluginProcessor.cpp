@@ -3,6 +3,11 @@
 #include "UI/MsegPage.h"
 #include "UI/UserWavetablePage.h"
 #include "UI/MidiMappingPage.h"
+#include "UI/LayersPage.h"
+#include "UI/FxRackPage.h"
+#include "UI/ModulatorsPage.h"
+#include "Engine/PresetLibrary.h"
+#include "UI/PresetsPage.h"
 #include <cmath>
 
 namespace
@@ -40,6 +45,14 @@ public:
             tabbed->addTab ("MSEG", juce::Colour (0xff10201d), new MsegPage (proc.apvts), true);
             tabbed->addTab ("WAVETABLE", juce::Colour (0xff101b20), new UserWavetablePage (proc), true);
             tabbed->addTab ("MIDI MAP", juce::Colour (0xff171b20), new MidiMappingPage (proc), true);
+            tabbed->addTab ("LAYERS", juce::Colour (0xff101719), new LayersPage (proc), true);
+            tabbed->addTab ("PRESETS", juce::Colour (0xff101719), new PresetsPage (proc), true);
+            auto* builtInFx = tabbed->getTabContentComponent (4);
+            tabbed->removeTab (4);
+            tabbed->addTab ("FX", juce::Colour (0xff101719), new FxRackPage (proc, builtInFx), true, 4);
+            auto* builtInMod = tabbed->getTabContentComponent (3);
+            tabbed->removeTab (3);
+            tabbed->addTab ("MOD", juce::Colour (0xff101719), new ModulatorsPage (proc, builtInMod), true, 3);
         }
         resized();
     }
@@ -78,7 +91,13 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
 
     auto setDefault = [&state] (const juce::String& id, const juce::var& value)
     {
-        if (! state.hasProperty (id)) state.setProperty (id, value, nullptr);
+        if (! state.getChildWithProperty ("id", id).isValid())
+        {
+            juce::ValueTree parameter ("PARAM");
+            parameter.setProperty ("id", id, nullptr);
+            parameter.setProperty ("value", state.getProperty (id, value), nullptr);
+            state.appendChild (parameter, nullptr);
+        }
     };
 
     setDefault ("oversamplingQuality", 0);
@@ -87,6 +106,13 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
     setDefault ("msegLoopStart", 1);
     setDefault ("msegLoopEnd", 2);
     setDefault ("userWavetableMix", 0.0f);
+    setDefault ("distortionMode", 0); setDefault ("distortionMix", 1.0f); setDefault ("mainLayerGain", 1.0f);
+    for (int i = 1; i <= VoiceParameters::extraLayerCount; ++i)
+    {
+        const auto prefix = "layer" + juce::String (i);
+        setDefault (prefix + "Enabled", false); setDefault (prefix + "Gain", 0.5f);
+        setDefault (prefix + "Pan", 0.0f); setDefault (prefix + "Tune", 0.0f);
+    }
 
     const std::array<float, MsegParameters::pointCount> levels {{ 0.0f, 1.0f, 0.78f, 0.58f, 0.28f, 0.0f }};
     const std::array<float, MsegParameters::segmentCount> times {{ 0.025f, 0.090f, 0.180f, 0.320f, 0.420f }};
@@ -105,6 +131,20 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
         setDefault ("modGraph" + index + "Dest", 0);
         setDefault ("modGraph" + index + "Amount", 0.0f);
     }
+    for (int i = 1; i <= FxModuleParameters::slotCount; ++i)
+    {
+        const auto prefix = "fxModule" + juce::String (i);
+        setDefault (prefix + "Type", 0); setDefault (prefix + "Stage", 0); setDefault (prefix + "Bypass", false);
+        setDefault (prefix + "Amount", 0.5f); setDefault (prefix + "Rate", 0.25f); setDefault (prefix + "Feedback", 0.25f); setDefault (prefix + "Mix", 0.5f);
+    }
+    for (int i = 2; i <= 4; ++i)
+    {
+        const auto prefix = "lfoModule" + juce::String (i); setDefault (prefix + "Rate", i == 2 ? 0.5f : i == 3 ? 2.0f : 5.0f); setDefault (prefix + "Shape", 0);
+    }
+    for (int i = 1; i <= 4; ++i)
+    {
+        const auto prefix = "moduleMod" + juce::String (i); setDefault (prefix + "Source", 0); setDefault (prefix + "Dest", 0); setDefault (prefix + "Amount", 0.0f);
+    }
     return state;
 }
 }
@@ -120,6 +160,7 @@ void RetroMatchSynthAudioProcessor::prepareToPlay (double sr, int bs)
     const int channels = getTotalNumOutputChannels();
     engine.prepare (sr, bs, channels);
     renderMidi.ensureSize (131072);
+    { const juce::ScopedLock lock (editorMidiLock); editorMidi.clear(); editorMidi.ensureSize (16384); }
     melodyTransport.stop();
     setLatencySamples (engine.getLatencySamples());
 
@@ -137,10 +178,15 @@ bool RetroMatchSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
     return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
-VoiceParameters RetroMatchSynthAudioProcessor::readParams() const
+VoiceParameters RetroMatchSynthAudioProcessor::readParams (const juce::ValueTree& snapshot) const
 {
     VoiceParameters p;
-    auto v = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
+    auto v = [this, &snapshot] (const juce::String& id)
+    {
+        if (! snapshot.isValid()) return apvts.getRawParameterValue (id)->load();
+        auto* parameter = apvts.getParameter (id);
+        return (float) snapshot.getProperty (id, parameter->convertFrom0to1 (parameter->getDefaultValue()));
+    };
 
     p.osc1Wave = (int) v ("osc1Wave");
     p.osc2Wave = (int) v ("osc2Wave");
@@ -173,16 +219,16 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams() const
     for (int i = 0; i < VoiceParameters::fmOperatorCount; ++i)
     {
         const auto index = juce::String (i + 1);
-        p.fmOpRatio[(size_t) i] = apvts.getRawParameterValue ("fmOp" + index + "Ratio")->load();
-        p.fmOpLevel[(size_t) i] = apvts.getRawParameterValue ("fmOp" + index + "Level")->load();
-        p.fmOpFixedMode[(size_t) i] = (int) apvts.getRawParameterValue ("fmOp" + index + "Mode")->load();
-        p.fmOpFixedHz[(size_t) i] = apvts.getRawParameterValue ("fmOp" + index + "FixedHz")->load();
-        p.fmOpAttack[(size_t) i] = apvts.getRawParameterValue ("fmOp" + index + "Attack")->load();
-        p.fmOpDecay[(size_t) i] = apvts.getRawParameterValue ("fmOp" + index + "Decay")->load();
-        p.fmOpSustain[(size_t) i] = apvts.getRawParameterValue ("fmOp" + index + "Sustain")->load();
-        p.fmOpRelease[(size_t) i] = apvts.getRawParameterValue ("fmOp" + index + "Release")->load();
-        p.fmOpKeyScale[(size_t) i] = apvts.getRawParameterValue ("fmOp" + index + "KeyScale")->load();
-        p.fmOpVelocity[(size_t) i] = apvts.getRawParameterValue ("fmOp" + index + "Velocity")->load();
+        p.fmOpRatio[(size_t) i] = v ("fmOp" + index + "Ratio");
+        p.fmOpLevel[(size_t) i] = v ("fmOp" + index + "Level");
+        p.fmOpFixedMode[(size_t) i] = (int) v ("fmOp" + index + "Mode");
+        p.fmOpFixedHz[(size_t) i] = v ("fmOp" + index + "FixedHz");
+        p.fmOpAttack[(size_t) i] = v ("fmOp" + index + "Attack");
+        p.fmOpDecay[(size_t) i] = v ("fmOp" + index + "Decay");
+        p.fmOpSustain[(size_t) i] = v ("fmOp" + index + "Sustain");
+        p.fmOpRelease[(size_t) i] = v ("fmOp" + index + "Release");
+        p.fmOpKeyScale[(size_t) i] = v ("fmOp" + index + "KeyScale");
+        p.fmOpVelocity[(size_t) i] = v ("fmOp" + index + "Velocity");
     }
     p.harmonicTilt = v ("harmonicTilt");
     p.oddEvenBalance = v ("oddEven");
@@ -202,9 +248,9 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams() const
     for (int i = 0; i < VoiceParameters::modSlotCount; ++i)
     {
         const auto index = juce::String (i + 1);
-        p.modSlots[(size_t) i].source = (int) apvts.getRawParameterValue ("mod" + index + "Source")->load();
-        p.modSlots[(size_t) i].destination = (int) apvts.getRawParameterValue ("mod" + index + "Dest")->load();
-        p.modSlots[(size_t) i].amount = apvts.getRawParameterValue ("mod" + index + "Amount")->load();
+        p.modSlots[(size_t) i].source = (int) v ("mod" + index + "Source");
+        p.modSlots[(size_t) i].destination = (int) v ("mod" + index + "Dest");
+        p.modSlots[(size_t) i].amount = v ("mod" + index + "Amount");
     }
 
     p.mseg.enabled = v ("msegEnabled") >= 0.5f;
@@ -212,21 +258,39 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams() const
     p.mseg.loopStartPoint = juce::jlimit (0, MsegParameters::pointCount - 2, (int) v ("msegLoopStart"));
     p.mseg.loopEndPoint = juce::jlimit (1, MsegParameters::pointCount - 1, (int) v ("msegLoopEnd") + 1);
     for (int i = 0; i < MsegParameters::pointCount; ++i)
-        p.mseg.levels[(size_t) i] = apvts.getRawParameterValue ("msegLevel" + juce::String (i + 1))->load();
+        p.mseg.levels[(size_t) i] = v ("msegLevel" + juce::String (i + 1));
     for (int i = 0; i < MsegParameters::segmentCount; ++i)
     {
-        p.mseg.times[(size_t) i] = apvts.getRawParameterValue ("msegTime" + juce::String (i + 1))->load();
-        p.mseg.curves[(size_t) i] = apvts.getRawParameterValue ("msegCurve" + juce::String (i + 1))->load();
+        p.mseg.times[(size_t) i] = v ("msegTime" + juce::String (i + 1));
+        p.mseg.curves[(size_t) i] = v ("msegCurve" + juce::String (i + 1));
     }
     for (int i = 0; i < VoiceParameters::modGraphSlotCount; ++i)
     {
         const auto index = juce::String (i + 1);
-        p.modGraphSlots[(size_t) i].source = (int) apvts.getRawParameterValue ("modGraph" + index + "Source")->load();
-        p.modGraphSlots[(size_t) i].destination = (int) apvts.getRawParameterValue ("modGraph" + index + "Dest")->load();
-        p.modGraphSlots[(size_t) i].amount = apvts.getRawParameterValue ("modGraph" + index + "Amount")->load();
+        p.modGraphSlots[(size_t) i].source = (int) v ("modGraph" + index + "Source");
+        p.modGraphSlots[(size_t) i].destination = (int) v ("modGraph" + index + "Dest");
+        p.modGraphSlots[(size_t) i].amount = v ("modGraph" + index + "Amount");
     }
 
+    for (int i = 0; i < FxModuleParameters::slotCount; ++i)
+    {
+        const auto prefix = "fxModule" + juce::String (i + 1); auto& module = p.fxModules[(size_t) i];
+        module.type = (int) v (prefix + "Type"); module.stage = (int) v (prefix + "Stage"); module.bypass = v (prefix + "Bypass") >= 0.5f;
+        module.amount = v (prefix + "Amount"); module.rate = v (prefix + "Rate"); module.feedback = v (prefix + "Feedback"); module.mix = v (prefix + "Mix");
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        const auto prefix = "lfoModule" + juce::String (i + 2);
+        p.extraLfoRate[(size_t) i] = v (prefix + "Rate"); p.extraLfoShape[(size_t) i] = (int) v (prefix + "Shape");
+    }
+    for (int i = 0; i < 4; ++i)
+    {
+        const auto prefix = "moduleMod" + juce::String (i + 1); auto& slot = p.moduleModSlots[(size_t) i];
+        slot.source = (int) v (prefix + "Source"); slot.destination = (int) v (prefix + "Dest"); slot.amount = v (prefix + "Amount");
+    }
     p.drive = v ("drive");
+    p.distortionMode = (int) v ("distortionMode");
+    p.distortionMix = v ("distortionMix");
     p.chorusMix = v ("chorusMix");
     p.chorusRate = v ("chorusRate");
     p.chorusDepth = v ("chorusDepth");
@@ -239,6 +303,23 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams() const
     p.stereoWidth = v ("stereoWidth");
     p.outputGainDb = v ("outputGain");
     p.oversamplingQuality = juce::jlimit (0, 2, (int) v ("oversamplingQuality"));
+    if (snapshot.isValid())
+    {
+        p.referenceWavetable = ReferenceWavetableData::fromBase64 (snapshot["referenceTable"].toString());
+        p.userWavetable = ReferenceWavetableData::fromBase64 (snapshot["userTable"].toString());
+    }
+    else
+    {
+        p.mainLayerGain = v ("mainLayerGain");
+        for (int i = 0; i < VoiceParameters::extraLayerCount; ++i)
+        {
+            const auto prefix = "layer" + juce::String (i + 1);
+            if (v (prefix + "Enabled") >= 0.5f) p.layers[(size_t) i] = savedLayers[(size_t) i].load();
+            p.layerGain[(size_t) i] = v (prefix + "Gain");
+            p.layerPan[(size_t) i] = v (prefix + "Pan");
+            p.layerTune[(size_t) i] = v (prefix + "Tune");
+        }
+    }
     return p;
 }
 
@@ -282,14 +363,16 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
     }
     renderMidi.clear();
     renderMidi.addEvents (m, 0, b.getNumSamples(), 0);
+    {
+        const juce::ScopedTryLock lock (editorMidiLock);
+        if (lock.isLocked()) { renderMidi.addEvents (editorMidi, 0, -1, 0); editorMidi.clear(); }
+    }
     melodyTransport.process (renderMidi, b.getNumSamples(), getSampleRate());
 
     const auto mode = getReferenceAuditionMode();
-    if (mode != ReferenceAuditionMode::referenceOnly)
-    {
-        engine.setParameters (readParams());
-        engine.render (b, renderMidi);
-    }
+    engine.setParameters (readParams());
+    engine.render (b, renderMidi);
+    if (mode == ReferenceAuditionMode::referenceOnly) b.clear();
 
     if (mode != ReferenceAuditionMode::synthOnly && referencePlayer.hasSample())
     {
@@ -414,6 +497,91 @@ bool RetroMatchSynthAudioProcessor::setReferenceAnalysisRegion (float startSecon
     return true;
 }
 
+bool RetroMatchSynthAudioProcessor::createUserWavetableFromReference (float start, float end, bool chop)
+{
+    if (! loadedReferenceFile.existsAsFile()) return false;
+    auto table = chop ? ReferenceWavetableExtractor::chop (loadedReferenceFile, start, end)
+                      : ReferenceWavetableExtractor::extract (loadedReferenceFile, midiNoteToHz (referenceBaseMidiNote.load()), start, end);
+    if (! table || ! table->valid) return false;
+    userWavetable = std::move (table);
+    userWavetableName = loadedReferenceFile.getFileNameWithoutExtension() + " [" + juce::String (start, 3) + " - " + juce::String (end, 3) + " s]";
+    userWavetableDescription = chop ? "5 sample slices / pitch-normalized frames / click a frame or scan WT POSITION" : "Sample selection / 5 frames / adjust USER WT MIX and WT POSITION";
+    auto* mix = apvts.getParameter ("userWavetableMix");
+    mix->setValueNotifyingHost (mix->convertTo0to1 (0.8f));
+    return true;
+}
+
+bool RetroMatchSynthAudioProcessor::hasLayer (int index) const
+{
+    return juce::isPositiveAndBelow (index, VoiceParameters::extraLayerCount)
+        && savedLayers[(size_t) index].load() != nullptr;
+}
+
+juce::String RetroMatchSynthAudioProcessor::getLayerName (int index) const
+{
+    return apvts.state.getChildWithName ("SYNTH_LAYERS").getChildWithProperty ("index", index)["name"].toString();
+}
+
+void RetroMatchSynthAudioProcessor::captureLayer (int index)
+{
+    if (! juce::isPositiveAndBelow (index, VoiceParameters::extraLayerCount)) return;
+    juce::ValueTree snapshot ("LAYER");
+    for (auto* parameter : getParameters())
+        if (auto* identified = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
+            snapshot.setProperty (identified->paramID, apvts.getRawParameterValue (identified->paramID)->load(), nullptr);
+    snapshot.setProperty ("index", index, nullptr);
+    snapshot.setProperty ("name", loadedSampleName.isEmpty() ? "Current patch" : loadedSampleName + " / " + juce::String (getAnalysisStartSeconds(), 2) + " s", nullptr);
+    if (referenceWavetable) snapshot.setProperty ("referenceTable", referenceWavetable->toBase64(), nullptr);
+    if (userWavetable) snapshot.setProperty ("userTable", userWavetable->toBase64(), nullptr);
+    auto bank = apvts.state.getOrCreateChildWithName ("SYNTH_LAYERS", nullptr);
+    auto previous = bank.getChildWithProperty ("index", index);
+    if (previous.isValid()) bank.removeChild (previous, nullptr);
+    bank.appendChild (snapshot, nullptr);
+    std::shared_ptr<const VoiceParameters> parameters = std::make_shared<VoiceParameters> (readParams (snapshot));
+    savedLayers[(size_t) index].store (parameters);
+    apvts.getParameter ("layer" + juce::String (index + 1) + "Enabled")->setValueNotifyingHost (1.0f);
+}
+
+void RetroMatchSynthAudioProcessor::clearLayer (int index)
+{
+    if (! juce::isPositiveAndBelow (index, VoiceParameters::extraLayerCount)) return;
+    auto bank = apvts.state.getChildWithName ("SYNTH_LAYERS");
+    auto previous = bank.getChildWithProperty ("index", index);
+    if (previous.isValid()) bank.removeChild (previous, nullptr);
+    savedLayers[(size_t) index].store (std::shared_ptr<const VoiceParameters> {});
+    apvts.getParameter ("layer" + juce::String (index + 1) + "Enabled")->setValueNotifyingHost (0.0f);
+}
+
+bool RetroMatchSynthAudioProcessor::loadLayerToMain (int index)
+{
+    if (! hasLayer (index)) return false;
+    auto snapshot = apvts.state.getChildWithName ("SYNTH_LAYERS").getChildWithProperty ("index", index);
+    for (auto* parameter : getParameters())
+        if (auto* identified = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
+            if (! identified->paramID.startsWith ("layer") && identified->paramID != "mainLayerGain" && snapshot.hasProperty (identified->paramID))
+            {
+                auto* ranged = apvts.getParameter (identified->paramID);
+                ranged->setValueNotifyingHost (ranged->convertTo0to1 ((float) snapshot[identified->paramID]));
+            }
+    referenceWavetable = ReferenceWavetableData::fromBase64 (snapshot["referenceTable"].toString());
+    userWavetable = ReferenceWavetableData::fromBase64 (snapshot["userTable"].toString());
+    userWavetableName = userWavetable ? getLayerName (index) : juce::String {};
+    userWavetableDescription = userWavetable ? "Stored layer wavetable" : juce::String {};
+    return true;
+}
+
+void RetroMatchSynthAudioProcessor::restoreLayers()
+{
+    const auto bank = apvts.state.getChildWithName ("SYNTH_LAYERS");
+    for (int i = 0; i < VoiceParameters::extraLayerCount; ++i)
+    {
+        const auto snapshot = bank.getChildWithProperty ("index", i);
+        std::shared_ptr<const VoiceParameters> parameters;
+        if (snapshot.isValid()) parameters = std::make_shared<VoiceParameters> (readParams (snapshot));
+        savedLayers[(size_t) i].store (parameters);
+    }
+}
+
 bool RetroMatchSynthAudioProcessor::loadUserWavetable (const juce::File& file, int sourceFrameSize)
 {
     juce::String description;
@@ -476,23 +644,21 @@ void RetroMatchSynthAudioProcessor::setReferenceAuditionMode (ReferenceAuditionM
 
 void RetroMatchSynthAudioProcessor::noteOnFromEditor (int midiNote, float velocity)
 {
-    const auto mode = getReferenceAuditionMode();
-    if (mode != ReferenceAuditionMode::referenceOnly)
-        engine.noteOnFromUi (midiNote, velocity);
-    if (mode != ReferenceAuditionMode::synthOnly)
-        referencePlayer.noteOnFromUi (midiNote, velocity);
+    const juce::ScopedLock lock (editorMidiLock);
+    editorMidi.addEvent (juce::MidiMessage::noteOn (1, juce::jlimit (0, 127, midiNote), juce::jlimit (0.0f, 1.0f, velocity)), 0);
 }
 
 void RetroMatchSynthAudioProcessor::noteOffFromEditor (int midiNote, float velocity)
 {
-    engine.noteOffFromUi (midiNote, velocity);
-    referencePlayer.noteOffFromUi (midiNote, velocity);
+    const juce::ScopedLock lock (editorMidiLock);
+    editorMidi.addEvent (juce::MidiMessage::noteOff (1, juce::jlimit (0, 127, midiNote), velocity), 0);
 }
 
 void RetroMatchSynthAudioProcessor::allEditorNotesOff()
 {
-    engine.allNotesOffFromUi();
-    referencePlayer.allNotesOff();
+    const juce::ScopedLock lock (editorMidiLock);
+    editorMidi.clear();
+    editorMidi.addEvent (juce::MidiMessage::allNotesOff (1), 0);
 }
 
 void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
@@ -542,13 +708,40 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
         set ("mod" + index + "Amount", q.modSlots[(size_t) i].amount);
     }
 
+    for (int i = 0; i < FxModuleParameters::slotCount; ++i)
+    {
+        const auto prefix = "fxModule" + juce::String (i + 1); const auto& module = q.fxModules[(size_t) i];
+        set (prefix + "Type", (float) module.type); set (prefix + "Stage", (float) module.stage); set (prefix + "Bypass", module.bypass ? 1.0f : 0.0f);
+        set (prefix + "Amount", module.amount); set (prefix + "Rate", module.rate); set (prefix + "Feedback", module.feedback); set (prefix + "Mix", module.mix);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        const auto prefix = "lfoModule" + juce::String (i + 2); set (prefix + "Rate", q.extraLfoRate[(size_t) i]); set (prefix + "Shape", (float) q.extraLfoShape[(size_t) i]);
+    }
+    for (int i = 0; i < 4; ++i)
+    {
+        const auto prefix = "moduleMod" + juce::String (i + 1); const auto& slot = q.moduleModSlots[(size_t) i];
+        set (prefix + "Source", (float) slot.source); set (prefix + "Dest", (float) slot.destination); set (prefix + "Amount", slot.amount);
+    }
+    set ("userWavetableMix", q.userWavetableMix);
+    set ("msegEnabled", q.mseg.enabled ? 1.0f : 0.0f);
+    set ("msegLoopEnabled", q.mseg.loopEnabled ? 1.0f : 0.0f);
+    set ("msegLoopStart", (float) q.mseg.loopStartPoint); set ("msegLoopEnd", (float) q.mseg.loopEndPoint - 1);
+    for (int i = 0; i < MsegParameters::pointCount; ++i) set ("msegLevel" + juce::String (i + 1), q.mseg.levels[(size_t) i]);
+    for (int i = 0; i < MsegParameters::segmentCount; ++i)
+    { set ("msegTime" + juce::String (i + 1), q.mseg.times[(size_t) i]); set ("msegCurve" + juce::String (i + 1), q.mseg.curves[(size_t) i]); }
+    for (int i = 0; i < VoiceParameters::modGraphSlotCount; ++i)
+    {
+        const auto prefix = "modGraph" + juce::String (i + 1); const auto& slot = q.modGraphSlots[(size_t) i];
+        set (prefix + "Source", (float) slot.source); set (prefix + "Dest", (float) slot.destination); set (prefix + "Amount", slot.amount);
+    }
     set ("drive", q.drive); set ("chorusMix", q.chorusMix); set ("chorusRate", q.chorusRate); set ("chorusDepth", q.chorusDepth);
     set ("delayMix", q.delayMix); set ("delayTime", q.delayTime); set ("delayFeedback", q.delayFeedback);
     set ("reverbMix", q.reverbMix); set ("reverbSize", q.reverbSize); set ("reverbDamping", q.reverbDamping);
     set ("stereoWidth", q.stereoWidth); set ("outputGain", q.outputGainDb);
 
-    // Render quality, MSEG graph and user wavetable mix are user/host-authored
-    // layers. Matcher candidate selection intentionally never overwrites them.
+    // Render quality and stored synth instances remain user-authored.
+    // The matcher now applies modulation and module routing from its winning patch.
     lastMatch = result;
     updateCandidatePreview (result);
 }
@@ -567,6 +760,7 @@ MatchResult RetroMatchSynthAudioProcessor::fitReference()
     seed.params.referenceWavetableMix = referenceWavetable && seed.params.osc1Wave != 0 ? 0.32f : 0.0f;
     seed.params.userWavetable = userWavetable;
     seed.params.userWavetableMix = authored.userWavetableMix;
+    seed.params.distortionMode = authored.distortionMode; seed.params.distortionMix = authored.distortionMix;
     auto evaluated = SoundMatcher::evaluateFit (*currentFeatures, seed.params);
     evaluated.explanation = seed.explanation + " Initial rendered similarity: " + juce::String (evaluated.similarity.total * 100.0f, 1) + "%";
     applyMatchResult (evaluated);
@@ -583,6 +777,8 @@ MatchResult RetroMatchSynthAudioProcessor::refineReference (SoundMatcher::Progre
     seed.referenceWavetable = referenceWavetable;
     seed.userWavetable = userWavetable;
     seed.userWavetableMix = authored.userWavetableMix;
+    seed.layers.fill (nullptr); seed.mainLayerGain = 1.0f;
+    seed.distortionMode = authored.distortionMode; seed.distortionMix = authored.distortionMix;
     return SoundMatcher::refineFit (reference, seed, settings, std::move (progress), std::move (cancel));
 }
 
@@ -714,14 +910,87 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
 
     // User wavetable is appended after every previously released parameter.
     l.add (std::make_unique<P> ("userWavetableMix", "User Wavetable Mix", juce::NormalisableRange<float> (0, 1), 0.0f));
+    l.add (std::make_unique<juce::AudioParameterChoice> ("distortionMode", "Distortion Mode", juce::StringArray { "Soft saturation", "Hard clip", "Sine fold" }, 0));
+    l.add (std::make_unique<P> ("distortionMix", "Distortion Mix", juce::NormalisableRange<float> (0, 1), 1.0f));
+    l.add (std::make_unique<P> ("mainLayerGain", "Main Layer Level", juce::NormalisableRange<float> (0, 1), 1.0f));
+    for (int i = 1; i <= VoiceParameters::extraLayerCount; ++i)
+    {
+        const auto prefix = "layer" + juce::String (i);
+        const auto name = "Layer " + juce::String (i + 1);
+        l.add (std::make_unique<juce::AudioParameterBool> (prefix + "Enabled", name + " Enabled", false));
+        l.add (std::make_unique<P> (prefix + "Gain", name + " Level", juce::NormalisableRange<float> (0, 1), 0.5f));
+        l.add (std::make_unique<P> (prefix + "Pan", name + " Pan", juce::NormalisableRange<float> (-1, 1), 0.0f));
+        l.add (std::make_unique<P> (prefix + "Tune", name + " Tune", juce::NormalisableRange<float> (-24, 24, 0.01f), 0.0f));
+    }
+    juce::StringArray moduleTypes;
+    for (const auto& descriptor : fxModuleCatalog) moduleTypes.add (descriptor.name);
+    for (int i = 1; i <= FxModuleParameters::slotCount; ++i)
+    {
+        const auto prefix = "fxModule" + juce::String (i);
+        l.add (std::make_unique<C> (prefix + "Type", prefix + " Type", moduleTypes, 0));
+        l.add (std::make_unique<C> (prefix + "Stage", prefix + " Stage", juce::StringArray { "PRE", "POST" }, 0));
+        l.add (std::make_unique<juce::AudioParameterBool> (prefix + "Bypass", prefix + " Bypass", false));
+        for (const auto* suffix : { "Amount", "Rate", "Feedback", "Mix" })
+            l.add (std::make_unique<P> (prefix + suffix, prefix + " " + suffix, juce::NormalisableRange<float> (0, 1), juce::String (suffix) == "Rate" || juce::String (suffix) == "Feedback" ? 0.25f : 0.5f));
+    }
+    for (int i = 2; i <= 4; ++i)
+    {
+        const auto prefix = "lfoModule" + juce::String (i);
+        l.add (std::make_unique<P> (prefix + "Rate", prefix + " Rate", juce::NormalisableRange<float> (0.01f, 30.0f, 0, 0.35f), i == 2 ? 0.5f : i == 3 ? 2.0f : 5.0f));
+        l.add (std::make_unique<C> (prefix + "Shape", prefix + " Shape", juce::StringArray { "Sine", "Triangle", "Square", "Ramp" }, 0));
+    }
+    for (int i = 1; i <= 4; ++i)
+    {
+        const auto prefix = "moduleMod" + juce::String (i);
+        l.add (std::make_unique<C> (prefix + "Source", prefix + " Source", juce::StringArray { "Off", "LFO 1", "Velocity", "Key Track", "Random Note", "Amp Env", "MSEG", "LFO 2", "LFO 3", "LFO 4" }, 0));
+        l.add (std::make_unique<C> (prefix + "Dest", prefix + " Destination", actualModDestinations, 0));
+        l.add (std::make_unique<P> (prefix + "Amount", prefix + " Amount", juce::NormalisableRange<float> (-1, 1), 0.0f));
+    }
     return l;
+}
+
+void RetroMatchSynthAudioProcessor::applyPresetParameters (const VoiceParameters& parameters, const juce::String& name)
+{
+    melodyTransport.stop(); setReferenceAuditionMode (ReferenceAuditionMode::synthOnly);
+    for (auto* parameter : getParameters())
+        if (auto* identified = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
+            if (identified->paramID != "oversamplingQuality") parameter->setValueNotifyingHost (parameter->getDefaultValue());
+    for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) clearLayer (i);
+    for (int i = 0; i < VoiceParameters::extraLayerCount; ++i)
+        if (parameters.layers[(size_t) i])
+        {
+            MatchResult layer; layer.params = *parameters.layers[(size_t) i]; applyMatchResult (layer); captureLayer (i);
+            const auto prefix = "layer" + juce::String (i + 1);
+            auto set = [this, &prefix] (const char* suffix, float value) { auto* p = apvts.getParameter (prefix + suffix); p->setValueNotifyingHost (p->convertTo0to1 (value)); };
+            set ("Gain", parameters.layerGain[(size_t) i]); set ("Pan", parameters.layerPan[(size_t) i]); set ("Tune", parameters.layerTune[(size_t) i]);
+        }
+    MatchResult main; main.params = parameters; applyMatchResult (main);
+    apvts.getParameter ("distortionMode")->setValueNotifyingHost (apvts.getParameter ("distortionMode")->convertTo0to1 ((float) parameters.distortionMode));
+    apvts.getParameter ("distortionMix")->setValueNotifyingHost (parameters.distortionMix);
+    apvts.state.setProperty ("patchName", name, nullptr);
+    candidateBank = {}; currentCandidateFeatures.reset();
+}
+
+void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) factoryPresetCatalog.size())) return;
+    applyPresetParameters (makeFactoryPreset (index), factoryPresetCatalog[(size_t) index].name);
+}
+
+void RetroMatchSynthAudioProcessor::randomizePreset()
+{
+    auto& random = juce::Random::getSystemRandom(); const auto seed = random.nextInt64();
+    const int family = random.nextInt ((int) factoryPresetCatalog.size());
+    auto patch = SoundMatcher::makeVariation (makeFactoryPreset (family), seed, 0.10f + random.nextFloat() * 0.15f);
+    patch.outputGainDb = -12; patch.noiseMix = juce::jmin (patch.noiseMix, 0.15f);
+    applyPresetParameters (patch, "Random / " + juce::String (factoryPresetCatalog[(size_t) family].name) + " / " + juce::String::toHexString (seed).substring (0, 6));
 }
 
 bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
 {
     auto xml = apvts.copyState().createXml();
     if (! xml) return false;
-    xml->setAttribute ("presetVersion", "1.2");
+    xml->setAttribute ("presetVersion", "1.3");
     if (referenceWavetable && referenceWavetable->valid) xml->setAttribute ("referenceWavetable", referenceWavetable->toBase64());
     if (userWavetable && userWavetable->valid)
     {
@@ -743,6 +1012,7 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
     if (! xml || ! xml->hasTagName (apvts.state.getType())) return false;
     melodyTransport.stop();
     apvts.replaceState (stateWithPost10Defaults (*xml));
+    restoreLayers();
     analysisStartSeconds.store ((float) xml->getDoubleAttribute ("analysisStartSeconds", 0.0));
     analysisEndSeconds.store ((float) xml->getDoubleAttribute ("analysisEndSeconds", -1.0));
     { const juce::ScopedLock lock (midiMappingLock); midiMappings.clear(); for (int i = 0; i < xml->getIntAttribute ("midiMapCount", 0); ++i) midiMappings.push_back ({ xml->getStringAttribute ("midiMap" + juce::String (i) + "Id"), xml->getIntAttribute ("midiMap" + juce::String (i) + "CC", 0) }); }
@@ -807,6 +1077,7 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
             melodyTransport.stop();
             lightPalette.store (juce::jlimit (0, 3, xml->getIntAttribute ("lightPalette", 0)));
             apvts.replaceState (stateWithPost10Defaults (*xml));
+            restoreLayers();
             analysisStartSeconds.store ((float) xml->getDoubleAttribute ("analysisStartSeconds", 0.0));
             analysisEndSeconds.store ((float) xml->getDoubleAttribute ("analysisEndSeconds", -1.0));
             { const juce::ScopedLock lock (midiMappingLock); midiMappings.clear(); for (int i = 0; i < xml->getIntAttribute ("midiMapCount", 0); ++i) midiMappings.push_back ({ xml->getStringAttribute ("midiMap" + juce::String (i) + "Id"), xml->getIntAttribute ("midiMap" + juce::String (i) + "CC", 0) }); }
@@ -830,6 +1101,8 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildCandidateBank()
     base.referenceWavetable = referenceWavetable;
     base.userWavetable = userWavetable;
     base.userWavetableMix = authored.userWavetableMix;
+    base.layers.fill (nullptr); base.mainLayerGain = 1.0f;
+    base.distortionMode = authored.distortionMode; base.distortionMix = authored.distortionMix;
     std::array<VoiceParameters, 3> seeds { base, base, base };
     seeds[1].fmMix = juce::jmax (0.18f, base.fmMix); seeds[1].fmAlgorithm = (base.fmAlgorithm + 2) % 6; seeds[1].referenceWavetableMix *= 0.45f;
     seeds[2].supersawMix = juce::jmax (0.16f, base.supersawMix); seeds[2].wavetableMix = juce::jmax (0.20f, base.wavetableMix); seeds[2].referenceWavetableMix *= 0.70f;
@@ -863,6 +1136,7 @@ void RetroMatchSynthAudioProcessor::morphCandidates (int a, int b, float amount)
     q.referenceWavetable = referenceWavetable;
     q.userWavetable = userWavetable;
     q.userWavetableMix = authored.userWavetableMix;
+    q.distortionMode = authored.distortionMode; q.distortionMix = authored.distortionMix;
     MatchResult r; r.params=q; if (currentFeatures) r=SoundMatcher::evaluateFit (*currentFeatures,q,matchSettings); applyMatchResult(r);
 }
 

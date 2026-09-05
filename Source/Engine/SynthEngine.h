@@ -5,6 +5,7 @@
 #include <vector>
 #include "ReferenceWavetable.h"
 #include "MSEG.h"
+#include "ModuleRack.h"
 
 enum class ModSource : int
 {
@@ -14,7 +15,8 @@ enum class ModSource : int
     keyTrack,
     randomNote,
     ampEnvelope,
-    mseg1
+    mseg1,
+    lfo2, lfo3, lfo4
 };
 
 enum class ModDestination : int
@@ -92,8 +94,14 @@ struct VoiceParameters
     // normalized values of the original mod slot choices never change.
     MsegParameters mseg;
     std::array<ModSlotParameters, modGraphSlotCount> modGraphSlots {};
+    std::array<ModSlotParameters, 4> moduleModSlots {};
+    std::array<float, 3> extraLfoRate {{ 0.5f, 2.0f, 5.0f }};
+    std::array<int, 3> extraLfoShape {};
+    std::array<FxModuleParameters, FxModuleParameters::slotCount> fxModules {};
 
     float drive = 0.0f;
+    int distortionMode = 0; // soft saturation (legacy), hard clip, sine fold
+    float distortionMix = 1.0f;
     float chorusMix = 0.0f, chorusRate = 0.35f, chorusDepth = 0.25f;
     float delayMix = 0.0f, delayTime = 0.28f, delayFeedback = 0.22f;
     float reverbMix = 0.0f, reverbSize = 0.45f, reverbDamping = 0.45f;
@@ -103,6 +111,11 @@ struct VoiceParameters
     // Global render-quality preference. This is deliberately not a matcher mutation
     // dimension: 0 = 1x, 1 = 2x, 2 = 4x nonlinear oversampling.
     int oversamplingQuality = 0;
+
+    static constexpr int extraLayerCount = 7;
+    std::array<std::shared_ptr<const VoiceParameters>, extraLayerCount> layers {};
+    std::array<float, extraLayerCount> layerGain {{ 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f }}, layerPan {}, layerTune {};
+    float mainLayerGain = 1.0f;
 };
 
 class HybridVoice : public juce::SynthesiserVoice
@@ -137,6 +150,8 @@ private:
     std::vector<float> cutoffScratch, gainScratch, wavefoldScratch;
     juce::Random random;
     double sr = 44100.0, phase1 = 0.0, phase2 = 0.0, subPhase = 0.0, lfoPhase = 0.0;
+    std::array<double, 3> extraLfoPhase {};
+    std::array<float, 3> extraLfoValue {};
     std::array<double, VoiceParameters::fmOperatorCount> fmPhase {};
     std::array<double, supersawVoiceCount> unisonPhase {};
     float fmFeedbackState = 0.0f;
@@ -163,13 +178,15 @@ class SynthEngine
 {
 public:
     SynthEngine();
-    void prepare (double sampleRate, int samplesPerBlock, int channels);
+    void prepare (double sampleRate, int samplesPerBlock, int channels, bool withLayers = true);
     void setParameters (const VoiceParameters&);
     void setRandomSeed (int64 baseSeed)
     {
         for (int i = 0; i < synth.getNumVoices(); ++i)
             if (auto* v = dynamic_cast<HybridVoice*> (synth.getVoice (i)))
                 v->setRandomSeed (baseSeed + (int64) i * (int64) 0x1f123bb5);
+        for (size_t i = 0; i < layerEngines.size(); ++i)
+            if (layerEngines[i]) layerEngines[i]->setRandomSeed (baseSeed + (int64) (i + 1) * 7919);
     }
     void render (juce::AudioBuffer<float>&, juce::MidiBuffer&);
     void reset();
@@ -194,7 +211,11 @@ public:
 
 private:
     juce::Synthesiser synth;
+    std::array<std::unique_ptr<SynthEngine>, VoiceParameters::extraLayerCount> layerEngines;
+    std::array<bool, VoiceParameters::extraLayerCount> layerActive {};
+    juce::AudioBuffer<float> layerScratch;
     VoiceParameters current;
+    ModuleRack moduleRack;
     double sampleRate = 44100.0;
 
     juce::dsp::Chorus<float> chorus;

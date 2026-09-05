@@ -8,6 +8,7 @@
 #include <atomic>
 #include <tuple>
 #include <vector>
+class SynthInstanceVisual;
 
 class RetroMatchSynthAudioProcessorEditor : public juce::AudioProcessorEditor,
                                             public juce::FileDragAndDropTarget,
@@ -140,6 +141,7 @@ private:
     std::unique_ptr<juce::Drawable> logo;
     juce::Rectangle<int> logoBounds;
     std::unique_ptr<juce::Component> melodyPage, signalPage;
+    std::unique_ptr<SynthInstanceVisual> synthVisual;
     void updateLightPalette();
 
     // Persistent reference -> match -> audition workspace.
@@ -155,6 +157,10 @@ private:
     juce::TextButton resetReferencePitch { "RESET" };
     juce::TextButton auditionSynth { "SYNTH" }, auditionReference { "REF SOLO" }, auditionMix { "MIX" };
     juce::Slider referenceLevel;
+    juce::Slider regionStart, regionEnd;
+    juce::Label regionStartLabel, regionEndLabel;
+    juce::TextButton applyReferenceRegion { "APPLY" }, createReferenceTable { "CREATE WAVETABLE" }, chopReferenceTable { "CHOP TO WAVETABLE" };
+    float shownRegionStart = -1.0f, shownRegionEnd = -1.0f;
 
     std::atomic<float> matchProgress { 0.0f };
     double progressDisplay = 0.0;
@@ -170,7 +176,9 @@ private:
     juce::Label fmCoreSection, fmOperatorsSection, fmDetailSection;
     juce::Label filterSection, ampSection;
     juce::Label modLfoSection, modMatrixSection;
-    juce::Label fxChorusSection, fxDelaySection, fxReverbSection;
+    juce::Label fxDistortionSection, fxChorusSection, fxDelaySection, fxReverbSection;
+    juce::ComboBox distortionChoice;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> distortionAttachment;
     juce::Label aiSection, backendSection, privacySection, aiLogSection;
 
     juce::Label osc1Label, osc2Label, filterLabel, fmAlgorithmLabel;

@@ -90,6 +90,16 @@ public:
     bool isMidiLearning() const noexcept { return midiLearning.load(); }
 
     bool loadUserWavetable (const juce::File&, int sourceFrameSize = 0);
+    bool createUserWavetableFromReference (float startSeconds, float endSeconds, bool chop = false);
+    void captureLayer (int index);
+    void clearLayer (int index);
+    bool loadLayerToMain (int index);
+    bool hasLayer (int index) const;
+    juce::String getLayerName (int index) const;
+    std::shared_ptr<const VoiceParameters> getLayerParameters (int index) const
+    {
+        return juce::isPositiveAndBelow (index, VoiceParameters::extraLayerCount) ? savedLayers[(size_t) index].load() : nullptr;
+    }
     void clearUserWavetable();
     bool hasUserWavetable() const noexcept { return userWavetable != nullptr && userWavetable->valid; }
     std::shared_ptr<const ReferenceWavetableData> getUserWavetable() const { return userWavetable; }
@@ -119,8 +129,15 @@ public:
     bool selectCandidate (int index);
     void morphCandidates (int a, int b, float amount);
     VoiceParameters getCurrentVoiceParameters() const { return readParams(); }
+    VoiceParameters getMainVoiceParameters() const
+    {
+        auto p = readParams(); p.layers.fill (nullptr); p.mainLayerGain = 1.0f; return p;
+    }
 
     bool savePreset (const juce::File&);
+    void loadFactoryPreset (int index);
+    void randomizePreset();
+    juce::String getPresetName() const { return apvts.state.getProperty ("patchName", "Custom patch").toString(); }
     bool loadPreset (const juce::File&);
     bool exportPreviewWav (const juce::File&, float seconds = 2.5f) const;
 
@@ -135,6 +152,9 @@ public:
 private:
     SynthEngine engine;
     juce::MidiBuffer renderMidi;
+    juce::MidiBuffer editorMidi;
+    juce::CriticalSection editorMidiLock;
+    std::array<std::atomic<std::shared_ptr<const VoiceParameters>>, VoiceParameters::extraLayerCount> savedLayers;
     ReferenceSamplePlayer referencePlayer;
     juce::AudioBuffer<float> referenceScratch;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> referenceLatencyDelay { 512 };
@@ -155,7 +175,9 @@ private:
     float detectedReferenceHz = 0.0f;
     float detectedReferencePitchConfidence = 0.0f;
 
-    VoiceParameters readParams() const;
+    VoiceParameters readParams (const juce::ValueTree& snapshot = {}) const;
+    void restoreLayers();
+    void applyPresetParameters (const VoiceParameters&, const juce::String& name);
     void updateCandidatePreview (const MatchResult&);
     void invalidateMatchesAfterReferencePitchChange();
     void delayReferenceForLatency (juce::AudioBuffer<float>&);

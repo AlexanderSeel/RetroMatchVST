@@ -2,6 +2,7 @@
 #include "../Source/Analysis/SampleAnalyzer.h"
 #include "../Source/Engine/MSEG.h"
 #include "../Source/Engine/ReferenceWavetable.h"
+#include "../Source/Engine/PresetLibrary.h"
 #include "../Source/Matching/OfflineRenderer.h"
 #include "../Source/Matching/SoundMatcher.h"
 #include <cmath>
@@ -50,6 +51,88 @@ bool runMelodyTests();
 int main (int argc, char** argv)
 {
     if (! runMelodyTests()) return 1;
+    {
+        VoiceParameters tone; tone.osc1Wave = 1; tone.osc2Mix = 0; tone.release = 0.02f;
+        const auto dry = OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220);
+        for (int type = 1; type < (int) fxModuleCatalog.size(); ++type)
+        {
+            tone.fxModules[0] = { type, 0, false, 0.45f, 0.4f, 0.5f, 0.75f };
+            // The quiet synth fixture must exceed the compressor threshold.
+            if (type == 13) tone.fxModules[0].amount = 1.0f;
+            auto rendered = OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220);
+            if (! finiteAudio (rendered) || maxDifference (dry, rendered) < 1.0e-5f)
+            { std::cerr << "FX type=" << type << " difference=" << maxDifference (dry, rendered) << " finite=" << finiteAudio (rendered) << "\n"; return fail ("FX rack type failed to process audio"); }
+            tone.fxModules[0].bypass = true;
+            if (maxDifference (dry, OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220)) > 1.0e-6f)
+                return fail ("FX module bypass changed audio");
+        }
+        tone.fxModules[0] = { 1, 0, false, 0.25f, 0.3f, 0.2f, 1.0f };
+        tone.fxModules[1] = { 3, 0, false, 0.55f, 0.8f, 0.5f, 1.0f };
+        const auto forward = OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220);
+        std::swap (tone.fxModules[0], tone.fxModules[1]);
+        if (maxDifference (forward, OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220)) < 0.001f)
+            return fail ("FX rack ordering had no effect");
+        tone.fxModules[1] = {}; tone.drive = 0.6f;
+        const auto pre = OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220);
+        tone.fxModules[0].stage = 1;
+        if (maxDifference (pre, OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220)) < 0.001f)
+            return fail ("pre/post FX routing had no effect");
+        tone.fxModules = {}; tone.drive = 0;
+        tone.moduleModSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::amplitude, 0.9f };
+        const auto slow = OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220);
+        tone.extraLfoRate[0] = 12;
+        if (maxDifference (slow, OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220)) < 0.01f)
+            return fail ("independent LFO module was not routed");
+        bool routes = false, modules = false, envelopes = false;
+        for (int i = 0; i < 64; ++i)
+        {
+            const auto variation = SoundMatcher::makeVariation (VoiceParameters {}, i);
+            for (const auto& slot : variation.moduleModSlots) routes |= slot.source != 0 && slot.destination != 0;
+            for (const auto& module : variation.fxModules) modules |= module.type != 0;
+            envelopes |= variation.mseg.enabled;
+        }
+        if (! routes || ! modules || ! envelopes) return fail ("matcher failed to explore routes, FX and MSEG topology");
+        for (int i = 0; i < (int) factoryPresetCatalog.size(); ++i)
+        {
+            const auto audio = OfflineRenderer::renderPatch (makeFactoryPreset (i), 22050, 0.65f, 220);
+            if (! finiteAudio (audio) || audio.getMagnitude (0, audio.getNumSamples()) < 0.001f)
+                return fail ("factory preset rendered silence or invalid audio");
+        }
+    }
+    {
+        VoiceParameters tone; tone.osc1Wave = 0; tone.osc2Mix = 0; tone.release = 0.02f;
+        const auto clean = OfflineRenderer::renderPatch (tone, 22050, 0.5f, 220);
+        tone.drive = 0.7f; tone.distortionMix = 0;
+        if (maxDifference (clean, OfflineRenderer::renderPatch (tone, 22050, 0.5f, 220)) > 1.0e-6f)
+            return fail ("dry distortion mix changed the signal");
+        tone.distortionMix = 1;
+        auto previous = clean;
+        for (int mode = 0; mode < 3; ++mode)
+        {
+            tone.distortionMode = mode;
+            auto rendered = OfflineRenderer::renderPatch (tone, 22050, 0.5f, 220);
+            if (! finiteAudio (rendered) || maxDifference (previous, rendered) < 0.001f)
+                return fail ("distortion modes are silent, non-finite or identical");
+            previous = std::move (rendered);
+        }
+        tone.drive = 0;
+        VoiceParameters layered; layered.mainLayerGain = 0;
+        layered.layers[0] = std::make_shared<VoiceParameters> (tone);
+        layered.layerGain[0] = 0.5f; layered.layerPan[0] = -1;
+        auto audio = OfflineRenderer::renderPatch (layered, 22050, 0.5f, 220);
+        if (! finiteAudio (audio) || audio.getMagnitude (0, 0, audio.getNumSamples()) < 0.01f
+            || audio.getMagnitude (1, 0, audio.getNumSamples()) > 1.0e-6f)
+            return fail ("layer-only MIDI rendering or independent pan failed");
+        layered.layerTune[0] = 12;
+        auto pitched = OfflineRenderer::renderPatch (layered, 22050, 0.5f, 220);
+        if (maxDifference (audio, pitched) < 0.01f) return fail ("layer tuning had no effect");
+        layered.layers[1] = layered.layers[0]; layered.layerPan[1] = 1;
+        audio = OfflineRenderer::renderPatch (layered, 22050, 0.5f, 220);
+        if (audio.getMagnitude (1, 0, audio.getNumSamples()) < 0.01f) return fail ("third synth layer did not render");
+        layered.layers.fill (nullptr);
+        audio = OfflineRenderer::renderPatch (layered, 22050, 0.5f, 220);
+        if (audio.getMagnitude (0, audio.getNumSamples()) > 1.0e-6f) return fail ("cleared layers still rendered");
+    }
     // Optional local reference benchmarks; audio remains outside the repository.
     for (int arg = 1; arg < argc; ++arg)
     {
@@ -98,6 +181,17 @@ int main (int argc, char** argv)
                 juce::MathConstants<double>::twoPi * recordingHz * (i - recordingRate) / recordingRate)));
     }
     const auto recordingFeatures = SampleAnalyzer::analyzeFile (recording.getFile());
+    if (ReferenceWavetableExtractor::extract (recording.getFile(), recordingHz, 0.0, 0.8))
+        return fail ("wavetable extraction ignored the region end and read later audio");
+    if (ReferenceWavetableExtractor::extract (recording.getFile(), recordingHz, 1.99, 1.8)
+        || ReferenceWavetableExtractor::extract (recording.getFile(), recordingHz, 2.0, 2.0)
+        || ReferenceWavetableExtractor::extract (recording.getFile(), recordingHz, 1.5, 1.50001))
+        return fail ("invalid or too-short wavetable region was accepted");
+    if (! ReferenceWavetableExtractor::extract (recording.getFile(), recordingHz, 1.2, 1.8))
+        return fail ("audible sample selection did not produce a wavetable");
+    if (! ReferenceWavetableExtractor::chop (recording.getFile(), 1.1, 1.9)
+        || ReferenceWavetableExtractor::chop (recording.getFile(), 0.1, 0.9))
+        return fail ("sample chopping accepted silence or rejected five audible slices");
     if (! recordingFeatures || recordingFeatures->duration > 1.02f
         || std::abs (recordingFeatures->fundamentalHz - recordingHz) > 2.0f
         || recordingFeatures->spectralCentroidHz > recordingHz * 1.1f)

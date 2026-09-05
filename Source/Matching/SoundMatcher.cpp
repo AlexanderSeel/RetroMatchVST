@@ -15,7 +15,7 @@ void isolateOscillator (VoiceParameters& p, int waveform)
     p.fmAmount = p.fmMix = p.wavefold = p.drive = 0.0f;
     p.chorusMix = p.delayMix = p.reverbMix = 0.0f;
     p.lfoPitch = p.lfoCutoff = p.lfoAmp = 0.0f;
-    p.modSlots = {};
+    p.modSlots = {}; p.moduleModSlots = {}; p.modGraphSlots = {}; p.fxModules = {}; p.mseg.enabled = false;
     p.filterType = 0;
     p.resonance = 0.014f; // Approximately Butterworth Q in the engine's mapping.
 }
@@ -184,6 +184,7 @@ VoiceParameters SoundMatcher::mutate (const VoiceParameters& source, juce::Rando
     p.wavetableMix = mutateLinear (p.wavetableMix, 0.0f, 1.0f, amount, random);
     p.wavetablePosition = mutateLinear (p.wavetablePosition, 0.0f, 1.0f, amount, random);
     p.wavetableWarp = mutateLinear (p.wavetableWarp, -1.0f, 1.0f, amount * 0.65f, random);
+    if (p.userWavetable) p.userWavetableMix = mutateLinear (p.userWavetableMix, 0, 1, amount, random);
     p.referenceWavetableMix = mutateLinear (p.referenceWavetableMix, 0.0f, 1.0f, amount, random);
     p.supersawMix = mutateLinear (p.supersawMix, 0.0f, 1.0f, amount, random);
     p.unisonDetune = mutateLinear (p.unisonDetune, 0.0f, 70.0f, amount * 0.65f, random);
@@ -223,21 +224,58 @@ VoiceParameters SoundMatcher::mutate (const VoiceParameters& source, juce::Rando
     p.resonance = mutateLinear (p.resonance, 0.01f, 0.95f, amount, random);
 
     p.lfoRate = mutateLog (p.lfoRate, 0.03f, 20.0f, amount * 0.65f, random);
-    p.lfoPitch = mutateLinear (p.lfoPitch, 0.0f, 1.5f, amount * 0.5f, random);
+    p.lfoPitch = mutateLinear (p.lfoPitch, 0.0f, 2.0f, amount * 0.5f, random);
     p.lfoCutoff = mutateLinear (p.lfoCutoff, 0.0f, 3.0f, amount * 0.5f, random);
     p.lfoAmp = mutateLinear (p.lfoAmp, 0.0f, 1.0f, amount * 0.5f, random);
-    for (auto& slot : p.modSlots)
-        if (slot.source != (int) ModSource::none && slot.destination != (int) ModDestination::none)
-            slot.amount = mutateLinear (slot.amount, -1.0f, 1.0f, amount * 0.45f, random);
+    auto mutateRoutes = [&] (auto& slots, int maxSource)
+    {
+        for (auto& slot : slots)
+        {
+            if (allowTopology && random.nextFloat() < 0.15f)
+            {
+                slot.source = random.nextInt (maxSource + 1);
+                slot.destination = random.nextInt ((int) ModDestination::wavefold + 1);
+                slot.amount = (random.nextFloat() * 2 - 1) * 0.35f;
+            }
+            if (slot.source != 0 && slot.destination != 0) slot.amount = mutateLinear (slot.amount, -1, 1, amount * 0.65f, random);
+        }
+    };
+    mutateRoutes (p.modSlots, (int) ModSource::ampEnvelope);
+    mutateRoutes (p.modGraphSlots, (int) ModSource::mseg1);
+    mutateRoutes (p.moduleModSlots, (int) ModSource::lfo4);
+    for (size_t i = 0; i < p.extraLfoRate.size(); ++i)
+    {
+        p.extraLfoRate[i] = mutateLog (p.extraLfoRate[i], 0.01f, 30, amount, random);
+        if (allowTopology && random.nextFloat() < 0.15f) p.extraLfoShape[i] = random.nextInt (4);
+    }
+    if (allowTopology && random.nextFloat() < 0.12f) p.mseg.enabled = ! p.mseg.enabled;
+    if (p.mseg.enabled)
+    {
+        for (auto& level : p.mseg.levels) level = mutateLinear (level, 0, 1, amount, random);
+        for (auto& time : p.mseg.times) time = mutateLog (time, 0.001f, 4, amount, random);
+        for (auto& curve : p.mseg.curves) curve = mutateLinear (curve, -1, 1, amount, random);
+    }
+    if (allowTopology && random.nextFloat() < 0.2f)
+    {
+        auto& module = p.fxModules[(size_t) random.nextInt (FxModuleParameters::slotCount)];
+        module.type = random.nextInt ((int) fxModuleCatalog.size()); module.stage = random.nextInt (2); module.bypass = false;
+    }
+    for (auto& module : p.fxModules) if (module.type != 0)
+    {
+        module.amount = mutateLinear (module.amount, 0, 1, amount, random);
+        module.rate = mutateLinear (module.rate, 0, 1, amount, random);
+        module.feedback = mutateLinear (module.feedback, 0, 1, amount, random);
+        module.mix = mutateLinear (module.mix, 0, 1, amount, random);
+    }
 
     p.drive = mutateLinear (p.drive, 0.0f, 1.0f, amount, random);
-    p.chorusMix = mutateLinear (p.chorusMix, 0.0f, 0.65f, amount, random);
-    p.chorusRate = mutateLog (p.chorusRate, 0.03f, 5.0f, amount * 0.5f, random);
+    p.chorusMix = mutateLinear (p.chorusMix, 0.0f, 1.0f, amount, random);
+    p.chorusRate = mutateLog (p.chorusRate, 0.02f, 10.0f, amount * 0.5f, random);
     p.chorusDepth = mutateLinear (p.chorusDepth, 0.0f, 1.0f, amount, random);
-    p.delayMix = mutateLinear (p.delayMix, 0.0f, 0.55f, amount, random);
-    p.delayTime = mutateLinear (p.delayTime, 0.04f, 0.85f, amount, random);
+    p.delayMix = mutateLinear (p.delayMix, 0.0f, 1.0f, amount, random);
+    p.delayTime = mutateLinear (p.delayTime, 0.01f, 1.9f, amount, random);
     p.delayFeedback = mutateLinear (p.delayFeedback, 0.0f, 0.75f, amount, random);
-    p.reverbMix = mutateLinear (p.reverbMix, 0.0f, 0.55f, amount, random);
+    p.reverbMix = mutateLinear (p.reverbMix, 0.0f, 1.0f, amount, random);
     p.reverbSize = mutateLinear (p.reverbSize, 0.05f, 1.0f, amount, random);
     p.reverbDamping = mutateLinear (p.reverbDamping, 0.0f, 1.0f, amount, random);
     p.stereoWidth = mutateLinear (p.stereoWidth, 0.0f, 2.0f, amount, random);
@@ -303,6 +341,7 @@ void SoundMatcher::applyLocks (VoiceParameters& c, const VoiceParameters& s, con
         c.osc1Mix = s.osc1Mix; c.osc2Mix = s.osc2Mix; c.subMix = s.subMix; c.noiseMix = s.noiseMix;
         c.ringMix = s.ringMix; c.additiveMix = s.additiveMix; c.osc1Wave = s.osc1Wave; c.osc2Wave = s.osc2Wave;
         c.pulseWidth = s.pulseWidth; c.harmonicTilt = s.harmonicTilt; c.oddEvenBalance = s.oddEvenBalance;
+        c.userWavetableMix = s.userWavetableMix;
         c.wavetableMix = s.wavetableMix; c.wavetablePosition = s.wavetablePosition; c.wavetableWarp = s.wavetableWarp; c.referenceWavetableMix = s.referenceWavetableMix;
         c.supersawMix = s.supersawMix; c.unisonDetune = s.unisonDetune; c.unisonSpread = s.unisonSpread; c.wavefold = s.wavefold;
     }
@@ -325,10 +364,12 @@ void SoundMatcher::applyLocks (VoiceParameters& c, const VoiceParameters& s, con
     if (settings.lockModulation)
     {
         c.lfoRate = s.lfoRate; c.lfoPitch = s.lfoPitch; c.lfoCutoff = s.lfoCutoff; c.lfoAmp = s.lfoAmp;
-        c.modSlots = s.modSlots;
+        c.modSlots = s.modSlots; c.modGraphSlots = s.modGraphSlots; c.moduleModSlots = s.moduleModSlots;
+        c.mseg = s.mseg; c.extraLfoRate = s.extraLfoRate; c.extraLfoShape = s.extraLfoShape;
     }
     if (settings.lockEffects)
     {
+        c.fxModules = s.fxModules; c.distortionMode = s.distortionMode; c.distortionMix = s.distortionMix;
         c.drive = s.drive; c.chorusMix = s.chorusMix; c.chorusRate = s.chorusRate; c.chorusDepth = s.chorusDepth;
         c.delayMix = s.delayMix; c.delayTime = s.delayTime; c.delayFeedback = s.delayFeedback;
         c.reverbMix = s.reverbMix; c.reverbSize = s.reverbSize; c.reverbDamping = s.reverbDamping;
@@ -412,7 +453,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
         const int parentIndex = juce::jmin ((int) elite.size() - 1,
                                             (int) std::floor (std::pow (random.nextFloat(), 2.2f) * elite.size()));
         auto candidate = mutate (elite[(size_t) parentIndex].params, random, amount, topology);
-        if (i % 2 == 0)
+        if (i % 4 == 0)
         {
             // Alternate broad exploration with envelope/filter-only steps so
             // refining a clean candidate doesn't turn every unused layer on.
@@ -421,6 +462,13 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
             candidate.attack = mutated.attack; candidate.decay = mutated.decay;
             candidate.sustain = mutated.sustain; candidate.release = mutated.release;
             candidate.cutoff = mutated.cutoff; candidate.resonance = mutated.resonance;
+        }
+        else if (i % 4 == 1)
+        {
+            const auto mutated = candidate; candidate = elite[(size_t) parentIndex].params;
+            candidate.lfoRate = mutated.lfoRate; candidate.lfoPitch = mutated.lfoPitch; candidate.lfoCutoff = mutated.lfoCutoff; candidate.lfoAmp = mutated.lfoAmp;
+            candidate.modSlots = mutated.modSlots; candidate.modGraphSlots = mutated.modGraphSlots; candidate.moduleModSlots = mutated.moduleModSlots;
+            candidate.extraLfoRate = mutated.extraLfoRate; candidate.extraLfoShape = mutated.extraLfoShape; candidate.mseg = mutated.mseg; candidate.fxModules = mutated.fxModules;
         }
         applyLocks (candidate, seed, settings);
 
@@ -449,7 +497,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
     auto best = elite.front();
     best.evaluatedCandidates = evaluated;
     best.confidence = best.similarity.total;
-    best.explanation = "Population closed-loop match: candidate patches are rendered, re-analysed, ranked and evolved across VA, wavetable, supersaw/unison, wavefolding, additive and six-operator FM (including operator envelopes/fixed modes) against global spectrum, time-varying spectrum, cepstral timbre, envelope, harmonic, pitch and stereo descriptors.";
+    best.explanation = "Population closed-loop match: candidate patches are rendered, re-analysed, ranked and evolved across VA, wavetable, supersaw/unison, wavefolding, additive and six-operator FM (including operator envelopes/fixed modes) plus modulation-route topology, independent LFOs, MSEG shapes and modular pre/post effects against global spectrum, time-varying spectrum, cepstral timbre, envelope, harmonic, pitch and stereo descriptors.";
     if (progress) progress (1.0f);
     return best;
 }

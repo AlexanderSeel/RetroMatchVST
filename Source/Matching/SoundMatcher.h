@@ -39,6 +39,10 @@ public:
     using CancelCallback = std::function<bool()>;
 
     static MatchResult initialFit (const SoundFeatures& f);
+    static VoiceParameters makeVariation (const VoiceParameters& source, int64 seed, float amount = 0.15f)
+    {
+        juce::Random random (seed); return mutate (source, random, juce::jlimit (0.0f, 1.0f, amount), true);
+    }
     static MatchResult evaluateFit (const SoundFeatures& reference, const VoiceParameters& params,
                                     const MatchSettings& settings = {});
     static MatchResult refineFit (const SoundFeatures& reference,
