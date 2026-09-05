@@ -374,6 +374,8 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
         const float wt = wavetableWave (phase1, dynamicWavetablePosition, params.wavetableWarp);
         const float refWt = (params.referenceWavetable != nullptr && params.referenceWavetable->valid)
                           ? params.referenceWavetable->sample (phase1, dynamicWavetablePosition) : 0.0f;
+        const float userWt = (params.userWavetable != nullptr && params.userWavetable->valid)
+                           ? params.userWavetable->sample (phase1, dynamicWavetablePosition) : 0.0f;
 
         float uniL = 0.0f, uniR = 0.0f;
         if (params.supersawMix > 0.0001f)
@@ -396,7 +398,8 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
         }
 
         const float mono = o1 * params.osc1Mix + o2 * params.osc2Mix + sub * params.subMix + noise * params.noiseMix
-                         + ring * params.ringMix + additive * params.additiveMix + fm6 * dynamicFmMix + wt * params.wavetableMix + refWt * params.referenceWavetableMix;
+                         + ring * params.ringMix + additive * params.additiveMix + fm6 * dynamicFmMix + wt * params.wavetableMix
+                         + refWt * params.referenceWavetableMix + userWt * params.userWavetableMix;
         scratchLeft[i] = (mono + uniL * params.supersawMix) * 0.21f;
         if (scratchRight != nullptr) scratchRight[i] = (mono + uniR * params.supersawMix) * 0.21f;
 
