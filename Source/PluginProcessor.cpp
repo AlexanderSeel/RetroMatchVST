@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "UI/MsegPage.h"
+#include "UI/UserWavetablePage.h"
 #include <cmath>
 
 namespace
@@ -34,8 +35,9 @@ public:
             }
 
             // Keep the legacy MOD tab unchanged for automation/UI compatibility and
-            // give the post-1.0 modulation graph a dedicated full-size editor page.
+            // add post-1.0 editors as dedicated full-size pages.
             tabbed->addTab ("MSEG", juce::Colour (0xff10201d), new MsegPage (proc.apvts), true);
+            tabbed->addTab ("WAVETABLE", juce::Colour (0xff101b20), new UserWavetablePage (proc), true);
         }
         resized();
     }
@@ -82,6 +84,7 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
     setDefault ("msegLoopEnabled", false);
     setDefault ("msegLoopStart", 1);
     setDefault ("msegLoopEnd", 2);
+    setDefault ("userWavetableMix", 0.0f);
 
     const std::array<float, MsegParameters::pointCount> levels {{ 0.0f, 1.0f, 0.78f, 0.58f, 0.28f, 0.0f }};
     const std::array<float, MsegParameters::segmentCount> times {{ 0.025f, 0.090f, 0.180f, 0.320f, 0.420f }};
@@ -152,6 +155,8 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams() const
     p.wavetableWarp = v ("wavetableWarp");
     p.referenceWavetableMix = v ("referenceWavetableMix");
     p.referenceWavetable = referenceWavetable;
+    p.userWavetableMix = v ("userWavetableMix");
+    p.userWavetable = userWavetable;
     p.supersawMix = v ("supersawMix");
     p.unisonDetune = v ("unisonDetune");
     p.unisonSpread = v ("unisonSpread");
@@ -287,7 +292,6 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
     }
     else if (mode == ReferenceAuditionMode::synthOnly)
     {
-        // Keep a future switch back to reference audition free from stale delayed samples.
         referenceLatencyDelay.reset();
     }
 
@@ -344,6 +348,34 @@ bool RetroMatchSynthAudioProcessor::loadReferenceSample (const juce::File& f)
     candidateBank = {};
     selectedCandidate = 0;
     return true;
+}
+
+bool RetroMatchSynthAudioProcessor::loadUserWavetable (const juce::File& file, int sourceFrameSize)
+{
+    juce::String description;
+    auto imported = ReferenceWavetableExtractor::importSet (file, sourceFrameSize, &description);
+    if (imported == nullptr || ! imported->valid) return false;
+
+    userWavetable = std::move (imported);
+    userWavetableName = file.getFileName();
+    userWavetableDescription = description;
+
+    if (auto* parameter = apvts.getParameter ("userWavetableMix"))
+    {
+        const float current = parameter->convertFrom0to1 (parameter->getValue());
+        if (current <= 0.0001f)
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (0.65f));
+    }
+    return true;
+}
+
+void RetroMatchSynthAudioProcessor::clearUserWavetable()
+{
+    userWavetable.reset();
+    userWavetableName.clear();
+    userWavetableDescription.clear();
+    if (auto* parameter = apvts.getParameter ("userWavetableMix"))
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (0.0f));
 }
 
 bool RetroMatchSynthAudioProcessor::setReferenceBaseMidiNote (int midiNote)
@@ -450,8 +482,8 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
     set ("reverbMix", q.reverbMix); set ("reverbSize", q.reverbSize); set ("reverbDamping", q.reverbDamping);
     set ("stereoWidth", q.stereoWidth); set ("outputGain", q.outputGainDb);
 
-    // Render quality and the post-1.0 MSEG graph are user/host-authored layers.
-    // Matcher candidate selection intentionally never overwrites them.
+    // Render quality, MSEG graph and user wavetable mix are user/host-authored
+    // layers. Matcher candidate selection intentionally never overwrites them.
     lastMatch = result;
     updateCandidatePreview (result);
 }
@@ -465,8 +497,11 @@ MatchResult RetroMatchSynthAudioProcessor::fitReference()
 {
     if (! currentFeatures) return {};
     auto seed = SoundMatcher::initialFit (*currentFeatures);
+    const auto authored = readParams();
     seed.params.referenceWavetable = referenceWavetable;
     seed.params.referenceWavetableMix = referenceWavetable ? 0.32f : 0.0f;
+    seed.params.userWavetable = userWavetable;
+    seed.params.userWavetableMix = authored.userWavetableMix;
     auto evaluated = SoundMatcher::evaluateFit (*currentFeatures, seed.params);
     evaluated.explanation = seed.explanation + " Initial rendered similarity: " + juce::String (evaluated.similarity.total * 100.0f, 1) + "%";
     applyMatchResult (evaluated);
@@ -478,11 +513,13 @@ MatchResult RetroMatchSynthAudioProcessor::refineReference (SoundMatcher::Progre
     if (! currentFeatures) return {};
     const auto settings = matchSettings;
     const auto reference = *currentFeatures;
-    auto seed = lastMatch.confidence > 0.0f ? readParams() : SoundMatcher::initialFit (reference).params;
+    const auto authored = readParams();
+    auto seed = lastMatch.confidence > 0.0f ? lastMatch.params : SoundMatcher::initialFit (reference).params;
     seed.referenceWavetable = referenceWavetable;
     if (referenceWavetable && seed.referenceWavetableMix <= 0.0f) seed.referenceWavetableMix = 0.22f;
-    auto result = SoundMatcher::refineFit (reference, seed, settings, std::move (progress), std::move (cancel));
-    return result;
+    seed.userWavetable = userWavetable;
+    seed.userWavetableMix = authored.userWavetableMix;
+    return SoundMatcher::refineFit (reference, seed, settings, std::move (progress), std::move (cancel));
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcessor::createLayout()
@@ -580,8 +617,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
     // Existing post-1.0 quality parameter remains first after the frozen v1.0 surface.
     l.add (std::make_unique<C> ("oversamplingQuality", "Nonlinear Oversampling", juce::StringArray { "1x", "2x", "4x" }, 0));
 
-    // MSEG/modulation-graph parameters are append-only. Do not insert new values into
-    // the legacy modSource/modDestination choice arrays above.
     l.add (std::make_unique<B> ("msegEnabled", "MSEG 1 Enabled", false));
     l.add (std::make_unique<B> ("msegLoopEnabled", "MSEG 1 Loop Enabled", false));
     l.add (std::make_unique<C> ("msegLoopStart", "MSEG 1 Loop Start", juce::StringArray { "P1", "P2", "P3", "P4", "P5" }, 1));
@@ -612,6 +647,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
         l.add (std::make_unique<C> ("modGraph" + index + "Dest", "Graph " + index + " Destination", graphDestinations, 0));
         l.add (std::make_unique<P> ("modGraph" + index + "Amount", "Graph " + index + " Amount", juce::NormalisableRange<float> (-1, 1), 0));
     }
+
+    // User wavetable is appended after every previously released parameter.
+    l.add (std::make_unique<P> ("userWavetableMix", "User Wavetable Mix", juce::NormalisableRange<float> (0, 1), 0.0f));
     return l;
 }
 
@@ -619,8 +657,14 @@ bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
 {
     auto xml = apvts.copyState().createXml();
     if (! xml) return false;
-    xml->setAttribute ("presetVersion", "1.1");
+    xml->setAttribute ("presetVersion", "1.2");
     if (referenceWavetable && referenceWavetable->valid) xml->setAttribute ("referenceWavetable", referenceWavetable->toBase64());
+    if (userWavetable && userWavetable->valid)
+    {
+        xml->setAttribute ("userWavetable", userWavetable->toBase64());
+        xml->setAttribute ("userWavetableName", userWavetableName);
+        xml->setAttribute ("userWavetableDescription", userWavetableDescription);
+    }
     xml->setAttribute ("product", "RetroMatchSynth");
     return xml->writeTo (file, {});
 }
@@ -630,13 +674,19 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
     auto xml = juce::XmlDocument::parse (file);
     if (! xml || ! xml->hasTagName (apvts.state.getType())) return false;
     apvts.replaceState (stateWithPost10Defaults (*xml));
-    if (xml->hasAttribute ("referenceWavetable")) referenceWavetable = ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable"));
+
+    referenceWavetable = xml->hasAttribute ("referenceWavetable")
+        ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable")) : nullptr;
+    userWavetable = xml->hasAttribute ("userWavetable")
+        ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("userWavetable")) : nullptr;
+    userWavetableName = userWavetable ? xml->getStringAttribute ("userWavetableName", "Embedded wavetable") : juce::String {};
+    userWavetableDescription = userWavetable ? xml->getStringAttribute ("userWavetableDescription", "Embedded 5 x 2048 table") : juce::String {};
     return true;
 }
 
 bool RetroMatchSynthAudioProcessor::exportPreviewWav (const juce::File& file, float seconds) const
 {
-    auto params = readParams(); params.referenceWavetable = referenceWavetable;
+    auto params = readParams();
     const double sr = getSampleRate() > 1000.0 ? getSampleRate() : 44100.0;
     const float f0 = currentFeatures && currentFeatures->fundamentalHz > 20.0f ? currentFeatures->fundamentalHz : 261.6256f;
     auto audio = OfflineRenderer::renderPatch (params, sr, juce::jlimit (0.25f, 12.0f, seconds), f0, 256);
@@ -659,6 +709,12 @@ void RetroMatchSynthAudioProcessor::getStateInformation (juce::MemoryBlock& d)
     {
         if (referenceWavetable && referenceWavetable->valid)
             xml->setAttribute ("referenceWavetable", referenceWavetable->toBase64());
+        if (userWavetable && userWavetable->valid)
+        {
+            xml->setAttribute ("userWavetable", userWavetable->toBase64());
+            xml->setAttribute ("userWavetableName", userWavetableName);
+            xml->setAttribute ("userWavetableDescription", userWavetableDescription);
+        }
         xml->setAttribute ("referenceAuditionMode", referenceAuditionMode.load());
         xml->setAttribute ("referenceAuditionLevel", (double) referenceAuditionLevel.load());
         copyXmlToBinary (*xml, d);
@@ -672,8 +728,12 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
         if (xml->hasTagName (apvts.state.getType()))
         {
             apvts.replaceState (stateWithPost10Defaults (*xml));
-            if (xml->hasAttribute ("referenceWavetable"))
-                referenceWavetable = ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable"));
+            referenceWavetable = xml->hasAttribute ("referenceWavetable")
+                ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable")) : nullptr;
+            userWavetable = xml->hasAttribute ("userWavetable")
+                ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("userWavetable")) : nullptr;
+            userWavetableName = userWavetable ? xml->getStringAttribute ("userWavetableName", "Embedded wavetable") : juce::String {};
+            userWavetableDescription = userWavetable ? xml->getStringAttribute ("userWavetableDescription", "Embedded 5 x 2048 table") : juce::String {};
             referenceAuditionMode.store (juce::jlimit (0, 2, xml->getIntAttribute ("referenceAuditionMode", 0)));
             referenceAuditionLevel.store (juce::jlimit (0.0f, 1.0f, (float) xml->getDoubleAttribute ("referenceAuditionLevel", 0.70)));
         }
@@ -683,8 +743,11 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
 std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildCandidateBank()
 {
     if (! currentFeatures) return {};
-    auto base = lastMatch.confidence > 0.0f ? lastMatch.params : readParams();
+    const auto authored = readParams();
+    auto base = lastMatch.confidence > 0.0f ? lastMatch.params : authored;
     base.referenceWavetable = referenceWavetable;
+    base.userWavetable = userWavetable;
+    base.userWavetableMix = authored.userWavetableMix;
     std::array<VoiceParameters, 3> seeds { base, base, base };
     seeds[0].referenceWavetableMix = referenceWavetable ? juce::jmax (0.18f, base.referenceWavetableMix) : 0.0f;
     seeds[1].fmMix = juce::jmax (0.18f, base.fmMix); seeds[1].fmAlgorithm = (base.fmAlgorithm + 2) % 6; seeds[1].referenceWavetableMix *= 0.45f;
@@ -715,7 +778,10 @@ void RetroMatchSynthAudioProcessor::morphCandidates (int a, int b, float amount)
     q.attack=mix(x.attack,y.attack); q.decay=mix(x.decay,y.decay); q.sustain=mix(x.sustain,y.sustain); q.release=mix(x.release,y.release);
     q.drive=mix(x.drive,y.drive); q.chorusMix=mix(x.chorusMix,y.chorusMix); q.delayMix=mix(x.delayMix,y.delayMix); q.reverbMix=mix(x.reverbMix,y.reverbMix); q.stereoWidth=mix(x.stereoWidth,y.stereoWidth);
     q.osc1Wave = amount < 0.5f ? x.osc1Wave : y.osc1Wave; q.osc2Wave = amount < 0.5f ? x.osc2Wave : y.osc2Wave; q.fmAlgorithm = amount < 0.5f ? x.fmAlgorithm : y.fmAlgorithm; q.filterType = amount < 0.5f ? x.filterType : y.filterType;
+    const auto authored = readParams();
     q.referenceWavetable = referenceWavetable;
+    q.userWavetable = userWavetable;
+    q.userWavetableMix = authored.userWavetableMix;
     MatchResult r; r.params=q; if (currentFeatures) r=SoundMatcher::evaluateFit (*currentFeatures,q,matchSettings); applyMatchResult(r);
 }
 
