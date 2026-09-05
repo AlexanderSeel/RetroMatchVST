@@ -61,15 +61,20 @@ if 'Source/Reference/ReferenceSamplePlayer.cpp' not in cmake:
 
 mseg_path = ROOT / 'Source/Engine/MSEG.h'
 mseg_page_path = ROOT / 'Source/UI/MsegPage.h'
+user_wavetable_page_path = ROOT / 'Source/UI/UserWavetablePage.h'
 if not mseg_path.exists(): errors.append('Source/Engine/MSEG.h is missing')
 if not mseg_page_path.exists(): errors.append('Source/UI/MsegPage.h is missing')
+if not user_wavetable_page_path.exists(): errors.append('Source/UI/UserWavetablePage.h is missing')
 
 processor = (ROOT / 'Source/PluginProcessor.cpp').read_text(encoding='utf-8')
 processor_h = (ROOT / 'Source/PluginProcessor.h').read_text(encoding='utf-8')
 engine_h = (ROOT / 'Source/Engine/SynthEngine.h').read_text(encoding='utf-8')
 engine_cpp = (ROOT / 'Source/Engine/SynthEngine.cpp').read_text(encoding='utf-8')
+reference_wavetable_h = (ROOT / 'Source/Engine/ReferenceWavetable.h').read_text(encoding='utf-8')
+reference_wavetable_cpp = (ROOT / 'Source/Engine/ReferenceWavetable.cpp').read_text(encoding='utf-8')
 mseg = mseg_path.read_text(encoding='utf-8') if mseg_path.exists() else ''
 mseg_page = mseg_page_path.read_text(encoding='utf-8') if mseg_page_path.exists() else ''
+user_wavetable_page = user_wavetable_page_path.read_text(encoding='utf-8') if user_wavetable_page_path.exists() else ''
 matcher = (ROOT / 'Source/Matching/SoundMatcher.cpp').read_text(encoding='utf-8')
 analyzer = (ROOT / 'Source/Analysis/SampleAnalyzer.cpp').read_text(encoding='utf-8')
 analyzer_h = (ROOT / 'Source/Analysis/SampleAnalyzer.h').read_text(encoding='utf-8')
@@ -88,8 +93,12 @@ required_tokens = {
     'nonlinear oversampling processor': ['"oversamplingQuality"', 'setLatencySamples (engine.getLatencySamples())', 'referenceLatencyDelay', 'stateWithPost10Defaults'],
     'MSEG engine': ['MsegParameters', 'MultiSegmentEnvelope', 'loopStartPoint', 'loopEndPoint', 'noteOn()', 'noteOff()', 'shapeProgress'],
     'MSEG voice routing': ['mseg.setSampleRate', 'mseg.setParameters', 'mseg.noteOn', 'mseg.noteOff', 'params.modGraphSlots', 'ModSource::mseg1'],
-    'MSEG processor state': ['"msegEnabled"', '"msegLoopEnabled"', '"msegLevel"', '"msegTime"', '"msegCurve"', '"modGraph"', 'presetVersion", "1.1"'],
+    'MSEG processor state': ['"msegEnabled"', '"msegLoopEnabled"', '"msegLevel"', '"msegTime"', '"msegCurve"', '"modGraph"'],
     'MSEG editor': ['ENABLE MSEG 1', 'LOOP WHILE NOTE HELD', 'POST-1.0 MODULATION GRAPH', 'MSEG 1', 'modGraph'],
+    'user wavetable importer': ['importSet', 'importSetFromBuffer', 'chooseSourceFrameSize', 'cyclicFrameSample', 'source frame', '5 x 2048'],
+    'user wavetable engine': ['userWavetableMix', 'userWavetable', 'params.userWavetable->sample'],
+    'user wavetable processor': ['"userWavetableMix"', 'loadUserWavetable', 'clearUserWavetable', '"userWavetable"', 'userWavetableDescription', 'presetVersion", "1.2"'],
+    'user wavetable editor': ['LOAD WAVETABLE', 'SOURCE CYCLE', 'USER WT MIX', 'AUTO (prefer 2048)', 'getUserWavetable'],
     'matcher search dimensions': ['p.wavetableMix', 'p.supersawMix', 'p.wavefold', 'p.fmOpFixedMode', 'p.fmOpAttack'],
     'operator UI': ['rebindFmOperatorEditor', 'SELECTED OPERATOR DETAIL'],
     'editing tabs': ['tabs.addTab ("SYNTH"', 'tabs.addTab ("FM"', 'tabs.addTab ("FILTER + AMP"', 'tabs.addTab ("MOD"', 'tabs.addTab ("FX"', 'tabs.addTab ("SETTINGS"'],
@@ -115,6 +124,10 @@ texts = {
     'MSEG voice routing': engine_h + engine_cpp,
     'MSEG processor state': processor,
     'MSEG editor': processor + mseg_page,
+    'user wavetable importer': reference_wavetable_h + reference_wavetable_cpp,
+    'user wavetable engine': engine_h + engine_cpp,
+    'user wavetable processor': processor + processor_h,
+    'user wavetable editor': processor + user_wavetable_page,
     'matcher search dimensions': matcher,
     'operator UI': editor_all,
     'editing tabs': editor_all,
@@ -142,15 +155,19 @@ if 'sessionApiKey' not in ai_settings or 'setValue ("ai.' not in ai_settings:
     errors.append('AI settings persistence/session-secret separation is missing')
 
 # Host automation compatibility is append-only. The v1.0 outputGain endpoint must
-# remain before the post-1.0 quality choice, and the new MSEG layer must remain
-# after that quality choice.
+# remain before post-1.0 quality/MSEG additions, and userWavetableMix must be the
+# newest parameter after the existing graph surface.
 output_gain_position = processor.find('"outputGain", "Output Gain"')
 oversampling_position = processor.find('"oversamplingQuality", "Nonlinear Oversampling"')
 mseg_position = processor.find('"msegEnabled", "MSEG 1 Enabled"')
+graph_amount_position = processor.rfind('"modGraph" + index + "Amount"')
+user_wavetable_position = processor.find('"userWavetableMix", "User Wavetable Mix"')
 if output_gain_position < 0 or oversampling_position <= output_gain_position:
     errors.append('oversamplingQuality must be appended after the complete v1.0 parameter surface')
 if mseg_position <= oversampling_position:
     errors.append('MSEG parameters must remain appended after oversamplingQuality')
+if graph_amount_position < 0 or user_wavetable_position <= graph_amount_position:
+    errors.append('userWavetableMix must remain appended after the complete MSEG/graph parameter surface')
 
 # Never append MSEG to the original mod slot source choices: adding an item would
 # change the normalized automation values of existing choice parameters. MSEG is
@@ -164,6 +181,8 @@ if graph_sources_literal not in processor:
 
 if 'tabbed->addTab ("MSEG"' not in processor or 'new MsegPage (proc.apvts)' not in processor:
     errors.append('dedicated MSEG editor tab is not attached to the processor editor')
+if 'tabbed->addTab ("WAVETABLE"' not in processor or 'new UserWavetablePage (proc)' not in processor:
+    errors.append('dedicated user wavetable editor tab is not attached to the processor editor')
 if 'stateWithPost10Defaults' not in processor:
     errors.append('post-1.0 preset/session migration helper is missing')
 
@@ -191,7 +210,9 @@ print(' - nonlinear 1x/2x/4x oversampling and fixed-latency plumbing present')
 print(' - oversamplingQuality remains appended after the v1.0 parameter surface')
 print(' - six-point MSEG engine and append-only modulation graph present')
 print(' - legacy MOD choice ranges remain unchanged; MSEG routing is isolated to new graph slots')
-print(' - post-1.0 state migration and dedicated MSEG editor tab present')
+print(' - arbitrary user wavetable import, embedded state and separate oscillator layer present')
+print(' - userWavetableMix remains appended after the existing post-1.0 graph surface')
+print(' - dedicated MSEG and WAVETABLE editor tabs present')
 print(' - reference-to-variant workspace and editing tabs present')
 print(' - Quick/Refine/AI three-variant workflow present')
 print(' - optional virtual keyboard audition path present')
