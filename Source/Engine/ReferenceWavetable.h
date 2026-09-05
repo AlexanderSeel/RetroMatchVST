@@ -19,7 +19,8 @@ struct ReferenceWavetableData
 class ReferenceWavetableExtractor
 {
 public:
-    static std::shared_ptr<ReferenceWavetableData> extract (const juce::File& file, float expectedFundamentalHz);
+    static std::shared_ptr<ReferenceWavetableData> extract (const juce::File& file, float expectedFundamentalHz,
+                                                           double startSeconds = 0.0, double endSeconds = -1.0);
 
     // Imports common single-cycle and multi-frame wavetable files into RetroMatch's
     // immutable five-frame x 2048 internal representation. sourceFrameSize == 0

@@ -23,9 +23,10 @@ PitchEstimate estimateFundamentalAutocorrelation (const float* x, int n, double 
     for (auto& v : y) v -= (float) mean;
 
     const int minLag = juce::jmax (1, (int) (reducedSr / 1800.0));
-    const int maxLag = juce::jmin (reducedN / 2, (int) (reducedSr / 35.0));
+    const int maxLag = juce::jmin (reducedN / 2, (int) (reducedSr / 25.0));
     double best = 0.0;
     int bestLag = 0;
+    std::vector<double> correlations ((size_t) maxLag + 1, 0.0);
 
     for (int lag = minLag; lag <= maxLag; ++lag)
     {
@@ -38,12 +39,29 @@ PitchEstimate estimateFundamentalAutocorrelation (const float* x, int n, double 
             c += a * b; e1 += a * a; e2 += b * b;
         }
         c /= std::sqrt (e1 * e2);
+        correlations[(size_t) lag] = c;
         if (c > best) { best = c; bestLag = lag; }
     }
 
     if (bestLag > 0)
     {
-        out.hz = (float) (reducedSr / bestLag);
+        // Prefer the first strong local peak: later integer multiples can win
+        // by a tiny amount when the true period falls between sample positions.
+        for (int lag = minLag + 1; lag < maxLag; ++lag)
+            if (correlations[(size_t) lag] >= std::max (0.5, best * 0.97)
+                && correlations[(size_t) lag] > correlations[(size_t) lag - 1]
+                && correlations[(size_t) lag] >= correlations[(size_t) lag + 1])
+            { bestLag = lag; best = correlations[(size_t) lag]; break; }
+        double offset = 0.0;
+        if (bestLag > minLag && bestLag < maxLag)
+        {
+            const auto left = correlations[(size_t) bestLag - 1];
+            const auto right = correlations[(size_t) bestLag + 1];
+            const auto curvature = left - 2.0 * best + right;
+            if (std::abs (curvature) > 1.0e-12)
+                offset = juce::jlimit (-0.5, 0.5, 0.5 * (left - right) / curvature);
+        }
+        out.hz = (float) (reducedSr / (bestLag + offset));
         out.confidence = juce::jlimit (0.0f, 1.0f, (float) best);
     }
     return out;
@@ -225,20 +243,40 @@ static void makeTimbreCepstrum (SoundFeatures& f)
         f.timbreCepstrum[(size_t) k] = (float) (raw[(size_t) k] / norm);
 }
 
-std::optional<SoundFeatures> SampleAnalyzer::analyzeFile (const juce::File& file, float expectedFundamentalHz)
+std::optional<SoundFeatures> SampleAnalyzer::analyzeFile (const juce::File& file, float expectedFundamentalHz,
+                                                          double startSeconds, double endSeconds)
 {
     juce::AudioFormatManager fm;
     fm.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (file));
     if (! reader) return std::nullopt;
 
-    const auto maxSamples = (int64_t) juce::jmin<double> ((double) reader->lengthInSamples, reader->sampleRate * 12.0);
+    const double fileDuration = (double) reader->lengthInSamples / reader->sampleRate;
+    const double start = juce::jlimit (0.0, juce::jmax (0.0, fileDuration - 1.0 / reader->sampleRate), startSeconds);
+    const double end = endSeconds > start ? juce::jlimit (start + 1.0 / reader->sampleRate, fileDuration, endSeconds) : fileDuration;
+    const int64_t startSample = (int64_t) std::llround (start * reader->sampleRate);
+    const auto maxSamples = (int64_t) juce::jmin<double> ((double) reader->lengthInSamples - startSample,
+                                                          juce::jmin (reader->sampleRate * 12.0, (end - start) * reader->sampleRate));
     const int sampleCount = (int) maxSamples;
     const int channels = juce::jlimit (1, 2, (int) reader->numChannels);
     juce::AudioBuffer<float> decoded (channels, sampleCount);
-    if (! reader->read (&decoded, 0, sampleCount, 0, true, true)) return std::nullopt;
+    if (! reader->read (&decoded, 0, sampleCount, startSample, true, true)) return std::nullopt;
 
-    return analyzeBuffer (decoded, reader->sampleRate, expectedFundamentalHz);
+    // Ignore recording pre-roll when locating the attack and the first FFT.
+    // Leave 10 ms ahead of the threshold crossing to retain the attack slope.
+    const float threshold = decoded.getMagnitude (0, sampleCount) * 0.01f;
+    int onset = 0;
+    if (threshold > 1.0e-7f)
+        for (; onset < sampleCount; ++onset)
+        {
+            float magnitude = 0.0f;
+            for (int ch = 0; ch < channels; ++ch)
+                magnitude = std::max (magnitude, std::abs (decoded.getSample (ch, onset)));
+            if (magnitude >= threshold) break;
+        }
+    onset = juce::jlimit (0, juce::jmax (0, sampleCount - 1), onset - (int) (reader->sampleRate * 0.01));
+    juce::AudioBuffer<float> active (decoded.getArrayOfWritePointers(), channels, onset, sampleCount - onset);
+    return analyzeBuffer (active, reader->sampleRate, expectedFundamentalHz);
 }
 
 SoundFeatures SampleAnalyzer::analyzeBuffer (const juce::AudioBuffer<float>& audio, double sr, float expectedFundamentalHz)

@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "RetroLookAndFeel.h"
 #include "../PluginProcessor.h"
 #include <array>
 #include <memory>
@@ -7,6 +8,11 @@
 class UserWavetablePage final : public juce::Component
 {
 public:
+    void lookAndFeelChanged() override
+    {
+        title.setColour (juce::Label::textColourId, findColour (RetroLookAndFeel::primaryLed));
+        mixLabel.setColour (juce::Label::textColourId, findColour (RetroLookAndFeel::secondaryLed));
+    }
     explicit UserWavetablePage (RetroMatchSynthAudioProcessor& processor)
         : proc (processor)
     {
@@ -107,9 +113,9 @@ public:
                 if (i == 0) wave.startNewSubPath (x, y); else wave.lineTo (x, y);
             }
 
-            g.setColour (juce::Colour (0xff65d5bc).withAlpha (0.16f));
+            g.setColour (findColour (RetroLookAndFeel::primaryLed).withAlpha (0.16f));
             g.strokePath (wave, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved));
-            g.setColour (frame == 2 ? juce::Colour (0xffd1ad5d) : juce::Colour (0xff65d5bc));
+            g.setColour (frame == 2 ? findColour (RetroLookAndFeel::secondaryLed) : findColour (RetroLookAndFeel::primaryLed));
             g.strokePath (wave, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved));
             g.setFont (juce::Font (juce::FontOptions (8.0f, juce::Font::bold)));
             g.drawText ("F" + juce::String (frame + 1), (int) row.getX(), (int) row.getY(), 25, 14, juce::Justification::centredLeft);

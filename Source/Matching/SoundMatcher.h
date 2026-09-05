@@ -11,7 +11,7 @@ struct MatchSettings
     int topologyTrials = 24;
     int populationSize = 6;
     double renderSampleRate = 44100.0;
-    float maxRenderSeconds = 2.5f;
+    float maxRenderSeconds = 12.0f;
 
     bool lockPitch = false;
     bool lockOscillators = false;

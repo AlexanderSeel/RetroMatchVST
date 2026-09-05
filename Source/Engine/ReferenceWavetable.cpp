@@ -67,7 +67,8 @@ std::shared_ptr<ReferenceWavetableData> ReferenceWavetableData::fromBase64 (cons
     return d;
 }
 
-std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::extract (const juce::File& file, float expectedFundamentalHz)
+std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::extract (const juce::File& file, float expectedFundamentalHz,
+                                                                                double startSeconds, double endSeconds)
 {
     juce::AudioFormatManager fm; fm.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (file));
@@ -78,36 +79,55 @@ std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::extract (co
     const int period = juce::jlimit (8, 8192, (int) std::round (sr / f0));
     if (reader->lengthInSamples < period * 2) return {};
 
-    const int readSamples = (int) juce::jmin<int64> (reader->lengthInSamples, (int64) sr * 6);
+    const double duration = (double) reader->lengthInSamples / sr;
+    const double startSec = juce::jlimit (0.0, duration, startSeconds);
+    const int64 startSample = (int64) std::llround (startSec * sr);
+    const int readSamples = (int) juce::jmin<int64> (reader->lengthInSamples - startSample, (int64) sr * 6);
     juce::AudioBuffer<float> audio ((int) juce::jmax ((unsigned int) 1, reader->numChannels), readSamples);
-    reader->read (&audio, 0, readSamples, 0, true, true);
+    reader->read (&audio, 0, readSamples, startSample, true, true);
     juce::AudioBuffer<float> mono (1, readSamples); mono.clear();
     for (int c = 0; c < audio.getNumChannels(); ++c) mono.addFrom (0, 0, audio, c, 0, readSamples, 1.0f / audio.getNumChannels());
 
     auto result = std::make_shared<ReferenceWavetableData>(); result->fundamentalHz = f0;
     const int margin = period;
+    const float* x = mono.getReadPointer (0);
+    const float audibleThreshold = mono.getMagnitude (0, readSamples) * 0.01f;
+    int activeStart = 0;
+    while (activeStart < readSamples - 2 * period && std::abs (x[activeStart]) < audibleThreshold) ++activeStart;
     for (int frame = 0; frame < ReferenceWavetableData::frameCount; ++frame)
     {
         const float t = (frame + 0.5f) / ReferenceWavetableData::frameCount;
-        int centre = margin + (int) (t * juce::jmax (1, readSamples - 2 * margin));
+        int centre = activeStart + margin + (int) (t * juce::jmax (1, readSamples - activeStart - 2 * margin));
         int start = juce::jlimit (0, readSamples - period - 1, centre - period / 2);
         // Nudge toward a positive-going zero crossing for phase stability.
-        const float* x = mono.getReadPointer (0);
         int best = start;
-        for (int n = juce::jmax (1, start - period / 3); n < juce::jmin (readSamples - period - 1, start + period / 3); ++n)
-            if (x[n - 1] <= 0.0f && x[n] > 0.0f) { best = n; break; }
+        int bestDistance = period + 1;
+        for (int n = juce::jmax (1, start - period); n < juce::jmin (readSamples - period - 1, start + period); ++n)
+            if (x[n - 1] <= 0.0f && x[n] > 0.0f && std::abs (n - start) < bestDistance)
+            { best = n; bestDistance = std::abs (n - start); }
         start = best;
+        double cycleStart = start;
+        if (start > 0 && x[start - 1] <= 0.0f && x[start] > 0.0f)
+            cycleStart = start - 1 + (double) -x[start - 1] / (x[start] - x[start - 1]);
+        const double cycleLength = sr / f0;
+        auto interpolate = [&] (double position)
+        {
+            position = juce::jlimit (0.0, (double) readSamples - 1, position);
+            const int a = (int) position;
+            return juce::jmap ((float) (position - a), x[a], x[juce::jmin (readSamples - 1, a + 1)]);
+        };
 
         float peak = 1.0e-6f;
         for (int i = 0; i < ReferenceWavetableData::tableSize; ++i)
         {
-            const double src = start + (i / (double) ReferenceWavetableData::tableSize) * period;
+            const double src = cycleStart + (i / (double) ReferenceWavetableData::tableSize) * cycleLength;
             const int a = juce::jlimit (0, readSamples - 1, (int) std::floor (src));
             const int b = juce::jmin (readSamples - 1, a + 1);
             const float m = (float) (src - a);
             float v = juce::jmap (m, x[a], x[b]);
             // Remove a linear endpoint trend to reduce clicks when cycling.
-            const float edge = juce::jmap (i / (float) (ReferenceWavetableData::tableSize - 1), x[start], x[juce::jmin (readSamples - 1, start + period)]);
+            const float edge = juce::jmap (i / (float) ReferenceWavetableData::tableSize,
+                                          interpolate (cycleStart), interpolate (cycleStart + cycleLength));
             v -= edge;
             result->frames[(size_t) frame][(size_t) i] = v;
             peak = juce::jmax (peak, std::abs (v));

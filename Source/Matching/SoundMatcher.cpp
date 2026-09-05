@@ -6,6 +6,20 @@
 
 namespace
 {
+void isolateOscillator (VoiceParameters& p, int waveform)
+{
+    p.osc1Wave = waveform;
+    p.osc1Mix = 0.85f;
+    p.osc2Mix = p.subMix = p.noiseMix = p.ringMix = p.additiveMix = 0.0f;
+    p.wavetableMix = p.referenceWavetableMix = p.userWavetableMix = p.supersawMix = 0.0f;
+    p.fmAmount = p.fmMix = p.wavefold = p.drive = 0.0f;
+    p.chorusMix = p.delayMix = p.reverbMix = 0.0f;
+    p.lfoPitch = p.lfoCutoff = p.lfoAmp = 0.0f;
+    p.modSlots = {};
+    p.filterType = 0;
+    p.resonance = 0.014f; // Approximately Butterworth Q in the engine's mapping.
+}
+
 float tuneCentsForReference (float hz)
 {
     if (hz < 25.0f || hz > 5000.0f) return 0.0f;
@@ -99,12 +113,40 @@ MatchResult SoundMatcher::initialFit (const SoundFeatures& f)
     p.reverbMix = juce::jlimit (0.0f, 0.40f, juce::jmax (0.0f, f.releaseSeconds - 0.15f) * 0.16f);
     p.stereoWidth = juce::jlimit (0.7f, 1.8f, 1.0f + f.stereoWidth * 0.75f);
 
-    if (f.spectralMotion > 0.09f && f.sustainLevel > 0.35f)
+    // Very short recordings are usually plucks, hits, or one-shot basses.
+    // Envelope tails and room noise can make their measured release look long,
+    // which previously caused the seed to bloom into a pad. Keep the seed
+    // transient and dry when the source is short or strongly transient.
+    const bool shortTransient = f.duration < 1.35f || f.transientScore > 0.72f;
+    if (shortTransient)
+    {
+        p.attack = juce::jlimit (0.001f, 0.045f, p.attack);
+        p.decay = juce::jlimit (0.02f, 0.42f, p.decay);
+        p.sustain = juce::jlimit (0.03f, 0.55f, p.sustain * 0.72f);
+        p.release = juce::jlimit (0.025f, 0.42f, juce::jmin (p.release, juce::jmax (0.06f, f.duration * 0.38f)));
+        p.reverbMix = 0.0f;
+        p.chorusMix = juce::jmin (p.chorusMix, 0.06f);
+        p.wavetableMix *= 0.45f;
+        p.supersawMix *= 0.35f;
+        p.fmMix *= 0.65f;
+    }
+
+    if (! shortTransient && f.spectralMotion > 0.09f && f.sustainLevel > 0.35f)
     {
         p.lfoRate = juce::jlimit (0.08f, 4.0f, 0.25f + f.spectralMotion * 3.0f);
         p.modSlots[0].source = (int) ModSource::lfo1;
         p.modSlots[0].destination = (int) ModDestination::cutoff;
         p.modSlots[0].amount = juce::jlimit (0.05f, 0.45f, f.spectralMotion * 0.75f);
+    }
+
+    // A sine has an almost entirely odd spectrum too. Odd/even balance alone
+    // must not classify it as a square or add a sub-octave to every bass sound.
+    if (f.pitchConfidence > 0.8f && f.fundamentalHz > 20.0f
+        && f.spectralRolloffHz < f.fundamentalHz * 1.5f
+        && f.spectralCentroidHz < f.fundamentalHz * 1.6f)
+    {
+        isolateOscillator (p, 0);
+        p.cutoff = juce::jlimit (1200.0f, 19000.0f, f.fundamentalHz * 8.0f);
     }
 
     r.confidence = juce::jlimit (0.12f, 0.72f,
@@ -324,18 +366,33 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
     {
         if (cancel && cancel()) break;
         auto candidate = seed;
-        candidate.osc1Wave = random.nextInt (5);
-        candidate.osc2Wave = random.nextInt (5);
-        candidate.filterType = random.nextInt (3);
-        candidate.fmAlgorithm = random.nextInt (6);
-        if (random.nextBool()) candidate.fmAmount = random.nextFloat() * 0.30f;
-        if (random.nextBool()) candidate.fmMix = random.nextFloat() * 0.55f;
-        if (random.nextBool()) candidate.ringMix = random.nextFloat() * 0.25f;
-        if (random.nextBool()) candidate.wavetableMix = random.nextFloat() * 0.55f;
-        if (random.nextBool()) candidate.supersawMix = random.nextFloat() * 0.48f;
-        if (random.nextFloat() < 0.35f) candidate.wavefold = random.nextFloat() * 0.42f;
-        if (random.nextFloat() < 0.25f) candidate.fmOpFixedMode[(size_t) random.nextInt (VoiceParameters::fmOperatorCount)] = 1;
-        candidate = mutate (candidate, random, 0.13f, false);
+        if (i < 5)
+        {
+            // Explicit sparse topologies can reach exact zero mixes, which a
+            // simultaneous mutation of every layer almost never discovers.
+            isolateOscillator (candidate, i == 4 ? 0 : i);
+            if (i == 4 && candidate.referenceWavetable && candidate.referenceWavetable->valid)
+            {
+                candidate.osc1Mix = 0.0f;
+                candidate.referenceWavetableMix = 0.85f;
+                candidate.cutoff = 19000.0f;
+            }
+        }
+        else
+        {
+            candidate.osc1Wave = random.nextInt (5);
+            candidate.osc2Wave = random.nextInt (5);
+            candidate.filterType = random.nextInt (3);
+            candidate.fmAlgorithm = random.nextInt (6);
+            if (random.nextBool()) candidate.fmAmount = random.nextFloat() * 0.30f;
+            if (random.nextBool()) candidate.fmMix = random.nextFloat() * 0.55f;
+            if (random.nextBool()) candidate.ringMix = random.nextFloat() * 0.25f;
+            if (random.nextBool()) candidate.wavetableMix = random.nextFloat() * 0.55f;
+            if (random.nextBool()) candidate.supersawMix = random.nextFloat() * 0.48f;
+            if (random.nextFloat() < 0.35f) candidate.wavefold = random.nextFloat() * 0.42f;
+            if (random.nextFloat() < 0.25f) candidate.fmOpFixedMode[(size_t) random.nextInt (VoiceParameters::fmOperatorCount)] = 1;
+            candidate = mutate (candidate, random, 0.13f, false);
+        }
         applyLocks (candidate, seed, settings);
         insertElite (evaluateFit (reference, candidate, settings));
         ++evaluated;
@@ -355,6 +412,16 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
         const int parentIndex = juce::jmin ((int) elite.size() - 1,
                                             (int) std::floor (std::pow (random.nextFloat(), 2.2f) * elite.size()));
         auto candidate = mutate (elite[(size_t) parentIndex].params, random, amount, topology);
+        if (i % 2 == 0)
+        {
+            // Alternate broad exploration with envelope/filter-only steps so
+            // refining a clean candidate doesn't turn every unused layer on.
+            const auto mutated = candidate;
+            candidate = elite[(size_t) parentIndex].params;
+            candidate.attack = mutated.attack; candidate.decay = mutated.decay;
+            candidate.sustain = mutated.sustain; candidate.release = mutated.release;
+            candidate.cutoff = mutated.cutoff; candidate.resonance = mutated.resonance;
+        }
         applyLocks (candidate, seed, settings);
 
         // Lightweight crossover between good candidates helps escape local minima without

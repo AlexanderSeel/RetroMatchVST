@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 #include "UI/MsegPage.h"
 #include "UI/UserWavetablePage.h"
+#include "UI/MidiMappingPage.h"
 #include <cmath>
 
 namespace
@@ -13,7 +14,7 @@ public:
         : RetroMatchSynthAudioProcessorEditor (processor), proc (processor)
     {
         qualityLabel.setText ("NONLINEAR OS", juce::dontSendNotification);
-        qualityLabel.setColour (juce::Label::textColourId, juce::Colour (0xffd1ad5d));
+        qualityLabel.setColour (juce::Label::textColourId, getLookAndFeel().findColour (RetroLookAndFeel::secondaryLed));
         qualityLabel.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
         qualityLabel.setJustificationType (juce::Justification::centredRight);
 
@@ -38,6 +39,7 @@ public:
             // add post-1.0 editors as dedicated full-size pages.
             tabbed->addTab ("MSEG", juce::Colour (0xff10201d), new MsegPage (proc.apvts), true);
             tabbed->addTab ("WAVETABLE", juce::Colour (0xff101b20), new UserWavetablePage (proc), true);
+            tabbed->addTab ("MIDI MAP", juce::Colour (0xff171b20), new MidiMappingPage (proc), true);
         }
         resized();
     }
@@ -117,6 +119,8 @@ void RetroMatchSynthAudioProcessor::prepareToPlay (double sr, int bs)
 {
     const int channels = getTotalNumOutputChannels();
     engine.prepare (sr, bs, channels);
+    renderMidi.ensureSize (131072);
+    melodyTransport.stop();
     setLatencySamples (engine.getLatencySamples());
 
     referencePlayer.prepare (sr);
@@ -259,12 +263,32 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
 {
     juce::ScopedNoDenormals noDenormals;
     b.clear();
+    for (const auto metadata : m)
+    {
+        const auto message = metadata.getMessage();
+        if (! message.isController()) continue;
+        const int cc = message.getControllerNumber();
+        const float value = message.getControllerValue() / 127.0f;
+        const juce::ScopedLock lock (midiMappingLock);
+        if (midiLearning.load())
+        {
+            midiMappings.erase (std::remove_if (midiMappings.begin(), midiMappings.end(), [this] (const auto& x) { return x.parameterId == midiLearnParameter; }), midiMappings.end());
+            midiMappings.push_back ({ midiLearnParameter, cc }); midiLearning.store (false);
+        }
+        else
+            for (const auto& mapping : midiMappings)
+                if (mapping.cc == cc)
+                    if (auto* parameter = apvts.getParameter (mapping.parameterId)) parameter->setValue (parameter->convertTo0to1 (value));
+    }
+    renderMidi.clear();
+    renderMidi.addEvents (m, 0, b.getNumSamples(), 0);
+    melodyTransport.process (renderMidi, b.getNumSamples(), getSampleRate());
 
     const auto mode = getReferenceAuditionMode();
     if (mode != ReferenceAuditionMode::referenceOnly)
     {
         engine.setParameters (readParams());
-        engine.render (b, m);
+        engine.render (b, renderMidi);
     }
 
     if (mode != ReferenceAuditionMode::synthOnly && referencePlayer.hasSample())
@@ -273,7 +297,7 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
             referenceScratch.setSize (b.getNumChannels(), b.getNumSamples(), false, false, true);
 
         referenceScratch.clear();
-        referencePlayer.render (referenceScratch, m, 0, b.getNumSamples());
+        referencePlayer.render (referenceScratch, renderMidi, 0, b.getNumSamples());
         delayReferenceForLatency (referenceScratch);
         const float gain = referenceAuditionLevel.load();
 
@@ -305,6 +329,7 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
         outputPeakLeft.store (juce::jmax (left, previousLeft * 0.88f), std::memory_order_relaxed);
         outputPeakRight.store (juce::jmax (right, previousRight * 0.88f), std::memory_order_relaxed);
     }
+    visualAudio.push (b);
 }
 
 float RetroMatchSynthAudioProcessor::midiNoteToHz (int midiNote)
@@ -328,16 +353,39 @@ void RetroMatchSynthAudioProcessor::invalidateMatchesAfterReferencePitchChange()
     selectedCandidate = 0;
 }
 
+void RetroMatchSynthAudioProcessor::beginMidiLearn (const juce::String& parameterId)
+{
+    const juce::ScopedLock lock (midiMappingLock);
+    midiLearnParameter = parameterId;
+    midiLearning.store (parameterId.isNotEmpty());
+}
+
+void RetroMatchSynthAudioProcessor::removeMidiMapping (const juce::String& parameterId)
+{
+    const juce::ScopedLock lock (midiMappingLock);
+    midiMappings.erase (std::remove_if (midiMappings.begin(), midiMappings.end(), [&parameterId] (const auto& x) { return x.parameterId == parameterId; }), midiMappings.end());
+}
+
+std::vector<RetroMatchSynthAudioProcessor::MidiMapping> RetroMatchSynthAudioProcessor::getMidiMappings() const
+{
+    const juce::ScopedLock lock (midiMappingLock);
+    return midiMappings;
+}
+
 bool RetroMatchSynthAudioProcessor::loadReferenceSample (const juce::File& f)
 {
     auto analysed = SampleAnalyzer::analyzeFile (f);
     if (! analysed) return false;
+    setMelodyClip ({});
 
     detectedReferenceHz = analysed->fundamentalHz;
     detectedReferencePitchConfidence = analysed->pitchConfidence;
     detectedReferenceMidiNote = hzToNearestMidiNote (detectedReferenceHz);
     referenceBaseMidiNote.store (detectedReferenceMidiNote);
     loadedReferenceFile = f;
+    analysisSourceDuration.store (analysed->duration);
+    analysisStartSeconds.store (0.0f);
+    analysisEndSeconds.store (analysed->duration);
 
     currentFeatures = std::move (analysed);
     currentCandidateFeatures.reset();
@@ -347,6 +395,22 @@ bool RetroMatchSynthAudioProcessor::loadReferenceSample (const juce::File& f)
     lastMatch = {};
     candidateBank = {};
     selectedCandidate = 0;
+    return true;
+}
+
+bool RetroMatchSynthAudioProcessor::setReferenceAnalysisRegion (float startSeconds, float endSeconds)
+{
+    if (! loadedReferenceFile.existsAsFile()) return false;
+    const float duration = analysisSourceDuration.load();
+    const float start = juce::jlimit (0.0f, juce::jmax (0.0f, duration - 0.002f), startSeconds);
+    const float end = juce::jlimit (start + 0.002f, juce::jmax (start + 0.002f, duration), endSeconds);
+    auto analysed = SampleAnalyzer::analyzeFile (loadedReferenceFile, midiNoteToHz (referenceBaseMidiNote.load()), start, end);
+    if (! analysed) return false;
+    analysisStartSeconds.store (start);
+    analysisEndSeconds.store (end);
+    currentFeatures = std::move (analysed);
+    referenceWavetable = ReferenceWavetableExtractor::extract (loadedReferenceFile, currentFeatures->fundamentalHz, start, end);
+    invalidateMatchesAfterReferencePitchChange();
     return true;
 }
 
@@ -402,6 +466,7 @@ bool RetroMatchSynthAudioProcessor::resetReferenceBaseMidiNote()
 
 void RetroMatchSynthAudioProcessor::setReferenceAuditionMode (ReferenceAuditionMode mode)
 {
+    melodyTransport.stop();
     const int value = juce::jlimit ((int) ReferenceAuditionMode::synthOnly,
                                     (int) ReferenceAuditionMode::mixed,
                                     (int) mode);
@@ -499,7 +564,7 @@ MatchResult RetroMatchSynthAudioProcessor::fitReference()
     auto seed = SoundMatcher::initialFit (*currentFeatures);
     const auto authored = readParams();
     seed.params.referenceWavetable = referenceWavetable;
-    seed.params.referenceWavetableMix = referenceWavetable ? 0.32f : 0.0f;
+    seed.params.referenceWavetableMix = referenceWavetable && seed.params.osc1Wave != 0 ? 0.32f : 0.0f;
     seed.params.userWavetable = userWavetable;
     seed.params.userWavetableMix = authored.userWavetableMix;
     auto evaluated = SoundMatcher::evaluateFit (*currentFeatures, seed.params);
@@ -516,7 +581,6 @@ MatchResult RetroMatchSynthAudioProcessor::refineReference (SoundMatcher::Progre
     const auto authored = readParams();
     auto seed = lastMatch.confidence > 0.0f ? lastMatch.params : SoundMatcher::initialFit (reference).params;
     seed.referenceWavetable = referenceWavetable;
-    if (referenceWavetable && seed.referenceWavetableMix <= 0.0f) seed.referenceWavetableMix = 0.22f;
     seed.userWavetable = userWavetable;
     seed.userWavetableMix = authored.userWavetableMix;
     return SoundMatcher::refineFit (reference, seed, settings, std::move (progress), std::move (cancel));
@@ -666,6 +730,10 @@ bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
         xml->setAttribute ("userWavetableDescription", userWavetableDescription);
     }
     xml->setAttribute ("product", "RetroMatchSynth");
+    xml->setAttribute ("analysisStartSeconds", (double) analysisStartSeconds.load());
+    xml->setAttribute ("analysisEndSeconds", (double) analysisEndSeconds.load());
+    const auto mappings = getMidiMappings(); xml->setAttribute ("midiMapCount", (int) mappings.size());
+    for (int i = 0; i < (int) mappings.size(); ++i) { xml->setAttribute ("midiMap" + juce::String (i) + "Id", mappings[(size_t) i].parameterId); xml->setAttribute ("midiMap" + juce::String (i) + "CC", mappings[(size_t) i].cc); }
     return xml->writeTo (file, {});
 }
 
@@ -673,7 +741,11 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
 {
     auto xml = juce::XmlDocument::parse (file);
     if (! xml || ! xml->hasTagName (apvts.state.getType())) return false;
+    melodyTransport.stop();
     apvts.replaceState (stateWithPost10Defaults (*xml));
+    analysisStartSeconds.store ((float) xml->getDoubleAttribute ("analysisStartSeconds", 0.0));
+    analysisEndSeconds.store ((float) xml->getDoubleAttribute ("analysisEndSeconds", -1.0));
+    { const juce::ScopedLock lock (midiMappingLock); midiMappings.clear(); for (int i = 0; i < xml->getIntAttribute ("midiMapCount", 0); ++i) midiMappings.push_back ({ xml->getStringAttribute ("midiMap" + juce::String (i) + "Id"), xml->getIntAttribute ("midiMap" + juce::String (i) + "CC", 0) }); }
 
     referenceWavetable = xml->hasAttribute ("referenceWavetable")
         ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable")) : nullptr;
@@ -707,6 +779,7 @@ void RetroMatchSynthAudioProcessor::getStateInformation (juce::MemoryBlock& d)
 {
     if (auto xml = apvts.copyState().createXml())
     {
+        xml->setAttribute ("lightPalette", lightPalette.load());
         if (referenceWavetable && referenceWavetable->valid)
             xml->setAttribute ("referenceWavetable", referenceWavetable->toBase64());
         if (userWavetable && userWavetable->valid)
@@ -717,6 +790,10 @@ void RetroMatchSynthAudioProcessor::getStateInformation (juce::MemoryBlock& d)
         }
         xml->setAttribute ("referenceAuditionMode", referenceAuditionMode.load());
         xml->setAttribute ("referenceAuditionLevel", (double) referenceAuditionLevel.load());
+        xml->setAttribute ("analysisStartSeconds", (double) analysisStartSeconds.load());
+        xml->setAttribute ("analysisEndSeconds", (double) analysisEndSeconds.load());
+        const auto mappings = getMidiMappings(); xml->setAttribute ("midiMapCount", (int) mappings.size());
+        for (int i = 0; i < (int) mappings.size(); ++i) { xml->setAttribute ("midiMap" + juce::String (i) + "Id", mappings[(size_t) i].parameterId); xml->setAttribute ("midiMap" + juce::String (i) + "CC", mappings[(size_t) i].cc); }
         copyXmlToBinary (*xml, d);
     }
 }
@@ -727,7 +804,12 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
     {
         if (xml->hasTagName (apvts.state.getType()))
         {
+            melodyTransport.stop();
+            lightPalette.store (juce::jlimit (0, 3, xml->getIntAttribute ("lightPalette", 0)));
             apvts.replaceState (stateWithPost10Defaults (*xml));
+            analysisStartSeconds.store ((float) xml->getDoubleAttribute ("analysisStartSeconds", 0.0));
+            analysisEndSeconds.store ((float) xml->getDoubleAttribute ("analysisEndSeconds", -1.0));
+            { const juce::ScopedLock lock (midiMappingLock); midiMappings.clear(); for (int i = 0; i < xml->getIntAttribute ("midiMapCount", 0); ++i) midiMappings.push_back ({ xml->getStringAttribute ("midiMap" + juce::String (i) + "Id"), xml->getIntAttribute ("midiMap" + juce::String (i) + "CC", 0) }); }
             referenceWavetable = xml->hasAttribute ("referenceWavetable")
                 ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable")) : nullptr;
             userWavetable = xml->hasAttribute ("userWavetable")
@@ -749,7 +831,6 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildCandidateBank()
     base.userWavetable = userWavetable;
     base.userWavetableMix = authored.userWavetableMix;
     std::array<VoiceParameters, 3> seeds { base, base, base };
-    seeds[0].referenceWavetableMix = referenceWavetable ? juce::jmax (0.18f, base.referenceWavetableMix) : 0.0f;
     seeds[1].fmMix = juce::jmax (0.18f, base.fmMix); seeds[1].fmAlgorithm = (base.fmAlgorithm + 2) % 6; seeds[1].referenceWavetableMix *= 0.45f;
     seeds[2].supersawMix = juce::jmax (0.16f, base.supersawMix); seeds[2].wavetableMix = juce::jmax (0.20f, base.wavetableMix); seeds[2].referenceWavetableMix *= 0.70f;
     auto settings = matchSettings; settings.iterations = juce::jmax (36, settings.iterations / 2); settings.topologyTrials = juce::jmax (8, settings.topologyTrials / 2);

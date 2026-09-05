@@ -21,6 +21,8 @@ else()
   FetchContent_MakeAvailable(JUCE)
 endif()
 
+
+
 set(RETROMATCH_FORMATS VST3 Standalone)
 if(APPLE)
   list(APPEND RETROMATCH_FORMATS AU)
@@ -34,6 +36,8 @@ juce_add_plugin(RetroMatchSynth
   PLUGIN_CODE Rms2
   FORMATS ${RETROMATCH_FORMATS}
   PRODUCT_NAME "RetroMatch Synth"
+  ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Assets/retromatch-icon.png"
+  ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Assets/retromatch-icon.png"
   PLUGIN_NAME "RetroMatch Synth"
   DESCRIPTION "Hybrid sample-to-synth matching instrument"
   IS_SYNTH TRUE
@@ -47,6 +51,7 @@ juce_add_plugin(RetroMatchSynth
   COPY_PLUGIN_AFTER_BUILD ${RETROMATCH_COPY_PLUGIN})
 
 juce_generate_juce_header(RetroMatchSynth)
+juce_add_binary_data(RetroMatchArtwork SOURCES Assets/retromatch-mark.svg)
 
 target_sources(RetroMatchSynth PRIVATE
   Source/PluginProcessor.cpp
@@ -57,6 +62,7 @@ target_sources(RetroMatchSynth PRIVATE
   Source/Engine/ReferenceWavetable.cpp
   Source/Reference/ReferenceSamplePlayer.cpp
   Source/Analysis/SampleAnalyzer.cpp
+  Source/Analysis/MelodyAnalyzer.cpp
   Source/Matching/OfflineRenderer.cpp
   Source/Matching/SimilarityScorer.cpp
   Source/Matching/SoundMatcher.cpp)
@@ -67,6 +73,7 @@ target_compile_definitions(RetroMatchSynth PUBLIC
   JUCE_VST3_CAN_REPLACE_VST2=0)
 
 target_link_libraries(RetroMatchSynth PRIVATE
+  RetroMatchArtwork
   juce::juce_audio_utils
   juce::juce_dsp
   juce::juce_gui_extra
@@ -83,9 +90,11 @@ if(RETROMATCH_BUILD_TESTS)
   juce_generate_juce_header(RetroMatchTests)
   target_sources(RetroMatchTests PRIVATE
     Tests/SmokeTests.cpp
+    Tests/MelodyTests.cpp
     Source/Engine/SynthEngine.cpp
     Source/Engine/ReferenceWavetable.cpp
     Source/Analysis/SampleAnalyzer.cpp
+    Source/Analysis/MelodyAnalyzer.cpp
     Source/Matching/OfflineRenderer.cpp
     Source/Matching/SimilarityScorer.cpp
     Source/Matching/SoundMatcher.cpp)
@@ -93,6 +102,7 @@ if(RETROMATCH_BUILD_TESTS)
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0)
   target_link_libraries(RetroMatchTests PRIVATE
+    juce::juce_data_structures
     juce::juce_audio_basics
     juce::juce_audio_formats
     juce::juce_dsp
@@ -101,4 +111,16 @@ if(RETROMATCH_BUILD_TESTS)
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
   add_test(NAME RetroMatchSmoke COMMAND RetroMatchTests)
+endif()
+
+option(RETROMATCH_BUILD_UI_TESTS "Build offscreen editor snapshot/lifecycle probe" OFF)
+if(RETROMATCH_BUILD_UI_TESTS)
+  juce_add_console_app(RetroMatchEditorPreview PRODUCT_NAME "RetroMatch Editor Preview")
+  juce_generate_juce_header(RetroMatchEditorPreview)
+  target_sources(RetroMatchEditorPreview PRIVATE Tests/EditorPreview.cpp)
+  target_compile_definitions(RetroMatchEditorPreview PRIVATE
+    JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+    JucePlugin_Name="RetroMatch Synth")
+  target_link_libraries(RetroMatchEditorPreview PRIVATE RetroMatchSynth RetroMatchArtwork
+    juce::juce_audio_utils juce::juce_dsp juce::juce_gui_extra)
 endif()

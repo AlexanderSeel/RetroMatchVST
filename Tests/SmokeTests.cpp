@@ -46,8 +46,82 @@ int fail (const char* message)
 }
 }
 
-int main()
+bool runMelodyTests();
+int main (int argc, char** argv)
 {
+    if (! runMelodyTests()) return 1;
+    // Optional local reference benchmarks; audio remains outside the repository.
+    for (int arg = 1; arg < argc; ++arg)
+    {
+        const juce::File file (juce::String::fromUTF8 (argv[arg]));
+        const auto features = SampleAnalyzer::analyzeFile (file);
+        if (! features) return fail ("could not read benchmark reference");
+        auto seed = SoundMatcher::initialFit (*features).params;
+        seed.referenceWavetable = ReferenceWavetableExtractor::extract (file, features->fundamentalHz);
+        if (seed.osc1Wave != 0 && seed.referenceWavetable) seed.referenceWavetableMix = 0.32f;
+        const auto quick = SoundMatcher::evaluateFit (*features, seed);
+        const auto refined = SoundMatcher::refineFit (*features, seed);
+        std::cout << file.getFileName() << " Hz=" << features->fundamentalHz
+                  << " quick=" << quick.similarity.total << " refined=" << refined.similarity.total << std::endl;
+        if (refined.similarity.total < quick.similarity.total) return fail ("reference benchmark regressed");
+    }
+    for (const double rate : { 44100.0, 48000.0 })
+        for (const float hz : { 27.5f, 32.7032f, 41.2034f, 55.0f, 82.4069f, 523.2511f })
+        {
+            juce::AudioBuffer<float> sine (1, (int) rate);
+            for (int i = 0; i < sine.getNumSamples(); ++i)
+                sine.setSample (0, i, 0.5f * std::sin ((float) (juce::MathConstants<double>::twoPi * hz * i / rate)));
+            const auto features = SampleAnalyzer::analyzeBuffer (sine, rate);
+            if (std::abs (1200.0f * std::log2 (features.fundamentalHz / hz)) > 5.0f)
+                return fail ("sine pitch detection has an octave or tuning error");
+            const auto clean = SoundMatcher::initialFit (features).params;
+            const auto rendered = OfflineRenderer::renderPatch (clean, rate, 1.0f, hz);
+            const auto measured = SampleAnalyzer::analyzeBuffer (rendered, rate, hz);
+            if (measured.spectralRolloffHz > hz * 1.5f || measured.spectralCentroidHz > hz * 1.6f)
+                return fail ("clean sine matching introduced audible harmonic layers");
+        }
+    // Recording pre-roll must not become the analyzed timbre or a normalized
+    // noise frame. A non-integer cycle length also probes table seam distortion.
+    juce::TemporaryFile recording (".wav");
+    constexpr int recordingRate = 44100, recordingSamples = recordingRate * 2;
+    constexpr float recordingHz = 1046.5023f;
+    {
+        juce::FileOutputStream stream (recording.getFile());
+        if (! stream.openedOk()) return fail ("could not create pre-roll fixture");
+        stream.write ("RIFF", 4); stream.writeInt (36 + recordingSamples * 2);
+        stream.write ("WAVEfmt ", 8); stream.writeInt (16);
+        stream.writeShort (1); stream.writeShort (1); stream.writeInt (recordingRate);
+        stream.writeInt (recordingRate * 2); stream.writeShort (2); stream.writeShort (16);
+        stream.write ("data", 4); stream.writeInt (recordingSamples * 2);
+        for (int i = 0; i < recordingSamples; ++i)
+            stream.writeShort (i < recordingRate ? 0 : (short) (16000.0 * std::sin (
+                juce::MathConstants<double>::twoPi * recordingHz * (i - recordingRate) / recordingRate)));
+    }
+    const auto recordingFeatures = SampleAnalyzer::analyzeFile (recording.getFile());
+    if (! recordingFeatures || recordingFeatures->duration > 1.02f
+        || std::abs (recordingFeatures->fundamentalHz - recordingHz) > 2.0f
+        || recordingFeatures->spectralCentroidHz > recordingHz * 1.1f)
+        return fail ("recording pre-roll corrupted analysis");
+    const auto extracted = ReferenceWavetableExtractor::extract (recording.getFile(), recordingHz);
+    if (! extracted || ! extracted->valid) return fail ("pre-roll wavetable extraction failed");
+    for (const auto& frame : extracted->frames)
+    {
+        double sine = 0.0, cosine = 0.0, energy = 0.0;
+        for (int i = 0; i < ReferenceWavetableData::tableSize; ++i)
+        {
+            const double phase = juce::MathConstants<double>::twoPi * i / ReferenceWavetableData::tableSize;
+            sine += frame[(size_t) i] * std::sin (phase);
+            cosine += frame[(size_t) i] * std::cos (phase);
+            energy += frame[(size_t) i] * frame[(size_t) i];
+        }
+        const double fundamentalEnergy = 2.0 * (sine * sine + cosine * cosine) / ReferenceWavetableData::tableSize;
+        if (energy < 1.0 || fundamentalEnergy / energy < 0.999)
+            return fail ("fractional-cycle extraction distorted a sine");
+    }
+    VoiceParameters longProbe;
+    const auto longRender = OfflineRenderer::renderPatch (longProbe, 22050.0, 5.25f, 110.0f);
+    if (longRender.getNumSamples() != (int) std::ceil (22050.0 * 5.25))
+        return fail ("offline renderer truncated a long reference");
     // v1.0 reference wavetable state round-trip.
     auto wt = std::make_shared<ReferenceWavetableData>();
     wt->valid = true; wt->fundamentalHz = 220.0f;

@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "RetroLookAndFeel.h"
 #include <array>
 #include <memory>
 #include "../Engine/SynthEngine.h"
@@ -97,9 +98,9 @@ public:
         g.setColour (juce::Colour (0xff263034));
         g.drawRoundedRectangle (outer, 9.0f, 1.0f);
 
-        drawSection (g, graphBounds.toFloat(), "MSEG 1  //  SIX-POINT ENVELOPE", juce::Colour (0xff65d5bc));
-        drawSection (g, shapeBounds.toFloat(), "SEGMENT TIME + CURVE", juce::Colour (0xffd1ad5d));
-        drawSection (g, routeBounds.toFloat(), "POST-1.0 MODULATION GRAPH", juce::Colour (0xff59bcd6));
+        drawSection (g, graphBounds.toFloat(), "MSEG 1  //  SIX-POINT ENVELOPE", findColour (RetroLookAndFeel::primaryLed));
+        drawSection (g, shapeBounds.toFloat(), "SEGMENT TIME + CURVE", findColour (RetroLookAndFeel::secondaryLed));
+        drawSection (g, routeBounds.toFloat(), "POST-1.0 MODULATION GRAPH", findColour (RetroLookAndFeel::tertiaryLed));
 
         auto graph = graphBounds.toFloat().reduced (15.0f, 30.0f).withTrimmedBottom (8.0f);
         if (graph.getWidth() < 40.0f || graph.getHeight() < 40.0f) return;
@@ -143,15 +144,15 @@ public:
                           a.getX() + (b.getX() - a.getX()) * 0.66f - bend, b.getY(), b.getX(), b.getY());
         }
 
-        g.setColour (juce::Colour (0xff65d5bc).withAlpha (0.16f));
+        g.setColour (findColour (RetroLookAndFeel::primaryLed).withAlpha (0.16f));
         g.strokePath (path, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.setColour (juce::Colour (0xff65d5bc));
+        g.setColour (findColour (RetroLookAndFeel::primaryLed));
         g.strokePath (path, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         for (int i = 0; i < MsegParameters::pointCount; ++i)
         {
             const auto p = points[(size_t) i];
-            g.setColour (juce::Colour (0xffd1ad5d));
+            g.setColour (findColour (RetroLookAndFeel::secondaryLed));
             g.fillEllipse (juce::Rectangle<float> (p.x - 4.0f, p.y - 4.0f, 8.0f, 8.0f));
             g.setColour (juce::Colour (0xffdce7e2));
             g.setFont (juce::Font (juce::FontOptions (8.0f, juce::Font::bold)));

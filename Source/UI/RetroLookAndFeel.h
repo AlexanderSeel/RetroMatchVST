@@ -4,6 +4,32 @@
 class RetroLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
+    enum { primaryLed = 0x2400001, secondaryLed, tertiaryLed };
+    static juce::String paletteName (int index)
+    { return juce::StringArray { "MINT", "AMBER", "ICE", "VIOLET" }[juce::jlimit (0, 3, index)]; }
+    void setPalette (int index)
+    {
+        const juce::uint32 primary[] { 0xff76ffe0, 0xffffbd65, 0xff73d8ff, 0xffc9a0ff };
+        const juce::uint32 secondary[] { 0xfff3c077, 0xffa6e08b, 0xffff8da9, 0xff78f1e2 };
+        const juce::uint32 tertiary[] { 0xff75cfff, 0xffffe5aa, 0xff96afff, 0xffff91b8 };
+        index = juce::jlimit (0, 3, index);
+        setColour (primaryLed, juce::Colour (primary[index]));
+        setColour (secondaryLed, juce::Colour (secondary[index]));
+        setColour (tertiaryLed, juce::Colour (tertiary[index]));
+        setColour (juce::Slider::thumbColourId, findColour (primaryLed));
+        setColour (juce::TextButton::textColourOnId, findColour (primaryLed));
+        setColour (juce::TextButton::textColourOffId, findColour (secondaryLed));
+        setColour (juce::ComboBox::arrowColourId, findColour (primaryLed));
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, findColour (primaryLed).withAlpha (0.18f));
+    }
+    int getTabButtonBestWidth (juce::TabBarButton& button, int) override
+    { return std::max (72, button.getButtonText().length() * 9 + 26); }
+    void drawTabButtonText (juce::TabBarButton& button, juce::Graphics& g, bool, bool) override
+    {
+        g.setColour (button.getToggleState() ? findColour (primaryLed) : juce::Colour (0xffb9c8c8));
+        g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        g.drawFittedText (button.getButtonText(), button.getActiveArea().reduced (3, 0), juce::Justification::centred, 1);
+    }
     RetroLookAndFeel()
     {
         setColour (juce::ResizableWindow::backgroundColourId, juce::Colour (0xff080b0d));
@@ -22,6 +48,7 @@ public:
         setColour (juce::ComboBox::arrowColourId, juce::Colour (0xffb9c8c2));
         setColour (juce::PopupMenu::backgroundColourId, juce::Colour (0xff101719));
         setColour (juce::PopupMenu::textColourId, juce::Colour (0xffdde5de));
+        setPalette (0);
     }
 
     void drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
@@ -33,8 +60,8 @@ public:
         const auto centre = outer.getCentre();
         const float angle = start + pos * (end - start);
         const bool active = slider.isMouseOverOrDragging();
-        const auto amber = juce::Colour (0xffe0b85e);
-        const auto cyan = juce::Colour (0xff62cde0);
+        const auto amber = findColour (primaryLed);
+        const auto cyan = findColour (secondaryLed);
         const auto ledAccent = active ? cyan : amber;
 
         // Recessed socket shadow: several soft layers give the control physical depth
@@ -78,7 +105,7 @@ public:
             juce::Path segment;
             segment.addCentredArc (centre.x, centre.y, ledRadius, ledRadius, 0.0f, a0, a1, true);
             const bool lit = i < litSegments;
-            if (lit && active)
+            if (lit)
             {
                 g.setColour (ledAccent.withAlpha (0.20f));
                 g.strokePath (segment, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
@@ -99,6 +126,15 @@ public:
                                                  body.getBottom() - body.getHeight() * 0.08f,
                                                  true));
         g.fillEllipse (body);
+        // Fine radial grip cuts catch light around the raised metal rim.
+        for (int i = 0; i < 44; ++i)
+        {
+            const float a = i * juce::MathConstants<float>::twoPi / 44.0f;
+            const float radius = body.getWidth() * 0.48f;
+            g.setColour (juce::Colours::white.withAlpha (i < 22 ? 0.11f : 0.035f));
+            g.drawLine (centre.x + std::sin (a) * radius, centre.y + std::cos (a) * radius,
+                        centre.x + std::sin (a) * (radius - 2.5f), centre.y + std::cos (a) * (radius - 2.5f), 0.7f);
+        }
         g.setColour (juce::Colour (0xff747d80));
         g.drawEllipse (body, 1.15f);
         g.setColour (juce::Colour (0xff050708).withAlpha (0.72f));
@@ -161,8 +197,8 @@ public:
         g.drawLine (bounds.getX() + 5.0f, bounds.getY() + 1.5f, bounds.getRight() - 5.0f, bounds.getY() + 1.5f, 1.0f);
 
         const bool active = button.getToggleState() || down;
-        const auto ledColour = active ? juce::Colour (0xff61d8bd)
-                                      : (highlighted ? juce::Colour (0xffe1b65d) : juce::Colour (0xff44514f));
+        const auto ledColour = active ? findColour (primaryLed)
+                                      : (highlighted ? findColour (secondaryLed) : juce::Colour (0xff44514f));
         auto led = juce::Rectangle<float> (bounds.getX() + 10.0f, bounds.getCentreY() - 3.0f, 6.0f, 6.0f);
         if (active || highlighted)
         {
@@ -178,7 +214,7 @@ public:
         g.setColour (juce::Colour (0xffffffff).withAlpha (0.45f));
         g.fillEllipse (led.withSizeKeepingCentre (2.0f, 2.0f).translated (-1.0f, -1.0f));
 
-        g.setColour (active ? juce::Colour (0xff78bda9) : (highlighted ? juce::Colour (0xff9d844b) : juce::Colour (0xff4a585c)));
+        g.setColour (active ? findColour (primaryLed).withAlpha (0.7f) : (highlighted ? findColour (secondaryLed).withAlpha (0.7f) : juce::Colour (0xff4a585c)));
         g.drawRoundedRectangle (bounds, 5.0f, active ? 1.5f : 1.0f);
     }
 

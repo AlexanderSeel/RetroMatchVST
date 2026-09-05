@@ -6,10 +6,13 @@
 #include "Matching/OfflineRenderer.h"
 #include "Reference/ReferenceSamplePlayer.h"
 #include <atomic>
+#include "Engine/MelodyTransport.h"
+#include "UI/AudioVisualBuffer.h"
 
 class RetroMatchSynthAudioProcessor : public juce::AudioProcessor
 {
 public:
+    struct MidiMapping { juce::String parameterId; int cc = 0; };
     enum class ReferenceAuditionMode : int
     {
         synthOnly = 0,
@@ -51,6 +54,27 @@ public:
     juce::String userWavetableDescription;
     std::array<MatchResult, 3> candidateBank {};
     int selectedCandidate = 0;
+    std::atomic<int> lightPalette { 0 };
+    AudioVisualBuffer visualAudio;
+    MelodyTransport melodyTransport;
+    juce::File getReferenceFile() const { return loadedReferenceFile; }
+    float getReferenceAnalysisDuration() const noexcept { return analysisSourceDuration.load(); }
+    float getAnalysisStartSeconds() const noexcept { return analysisStartSeconds.load(); }
+    float getAnalysisEndSeconds() const noexcept { return analysisEndSeconds.load(); }
+    bool setReferenceAnalysisRegion (float startSeconds, float endSeconds);
+    MelodyClip getMelodyClip() const { return MelodyClip::fromState (apvts.state.getChildWithName ("MELODY")); }
+    void setMelodyClip (const MelodyClip& clip)
+    {
+        melodyTransport.stop();
+        auto previous = apvts.state.getChildWithName ("MELODY");
+        if (previous.isValid()) apvts.state.removeChild (previous, nullptr);
+        apvts.state.appendChild (clip.toState(), nullptr);
+    }
+    void playMelody()
+    {
+        setReferenceAuditionMode (ReferenceAuditionMode::synthOnly);
+        melodyTransport.start (getMelodyClip());
+    }
 
     bool loadReferenceSample (const juce::File&);
     bool setReferenceBaseMidiNote (int midiNote);
@@ -60,6 +84,10 @@ public:
     float getDetectedReferenceHz() const noexcept { return detectedReferenceHz; }
     float getDetectedReferencePitchConfidence() const noexcept { return detectedReferencePitchConfidence; }
     bool hasReferenceSample() const noexcept { return referencePlayer.hasSample(); }
+    void beginMidiLearn (const juce::String& parameterId);
+    void removeMidiMapping (const juce::String& parameterId);
+    std::vector<MidiMapping> getMidiMappings() const;
+    bool isMidiLearning() const noexcept { return midiLearning.load(); }
 
     bool loadUserWavetable (const juce::File&, int sourceFrameSize = 0);
     void clearUserWavetable();
@@ -106,6 +134,7 @@ public:
 
 private:
     SynthEngine engine;
+    juce::MidiBuffer renderMidi;
     ReferenceSamplePlayer referencePlayer;
     juce::AudioBuffer<float> referenceScratch;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> referenceLatencyDelay { 512 };
@@ -113,6 +142,13 @@ private:
     std::atomic<int> referenceAuditionMode { (int) ReferenceAuditionMode::synthOnly };
     std::atomic<float> referenceAuditionLevel { 0.70f };
     std::atomic<int> referenceBaseMidiNote { 60 };
+    std::atomic<float> analysisStartSeconds { 0.0f };
+    std::atomic<float> analysisEndSeconds { -1.0f };
+    std::atomic<float> analysisSourceDuration { 0.0f };
+    mutable juce::CriticalSection midiMappingLock;
+    std::vector<MidiMapping> midiMappings;
+    juce::String midiLearnParameter;
+    std::atomic<bool> midiLearning { false };
     std::atomic<float> outputPeakLeft { 0.0f };
     std::atomic<float> outputPeakRight { 0.0f };
     int detectedReferenceMidiNote = 60;

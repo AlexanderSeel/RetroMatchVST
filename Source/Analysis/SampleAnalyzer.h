@@ -31,6 +31,7 @@ struct SoundFeatures
 class SampleAnalyzer
 {
 public:
-    static std::optional<SoundFeatures> analyzeFile (const juce::File& file, float expectedFundamentalHz = 0.0f);
+    static std::optional<SoundFeatures> analyzeFile (const juce::File& file, float expectedFundamentalHz = 0.0f,
+                                                     double startSeconds = 0.0, double endSeconds = -1.0);
     static SoundFeatures analyzeBuffer (const juce::AudioBuffer<float>& audio, double sampleRate, float expectedFundamentalHz = 0.0f);
 };

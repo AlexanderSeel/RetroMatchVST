@@ -26,16 +26,37 @@ public:
 private:
     enum class WorkMode { quick, refine, ai };
 
+    class MidiLearnSlider final : public juce::Slider
+    {
+    public:
+        MidiLearnSlider() : juce::Slider (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow) {}
+        std::function<void()> onLearn, onClear;
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (! e.mods.isRightButtonDown()) { juce::Slider::mouseDown (e); return; }
+            juce::PopupMenu menu; menu.addItem (1, "MIDI Learn (move a CC)"); menu.addItem (2, "Clear MIDI Mapping");
+            auto learn = onLearn; auto clear = onClear;
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [learn, clear] (int result)
+            { if (result == 1 && learn) learn(); else if (result == 2 && clear) clear(); });
+        }
+    };
+
     class TabPage final : public juce::Component
     {
     public:
         TabPage() { setOpaque (true); }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff0b1012));
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xff222c30), 0, 0,
+                juce::Colour (0xff0c1216), 0, (float) getHeight(), false));
+            g.fillAll();
             auto bounds = getLocalBounds().toFloat().reduced (1.0f);
-            g.setColour (juce::Colour (0xff263034));
+            for (int y = 3; y < getHeight(); y += 4)
+            { g.setColour (juce::Colours::white.withAlpha (0.012f)); g.drawHorizontalLine (y, 2, (float) getWidth() - 2); }
+            g.setColour (juce::Colour (0xff5a686d));
             g.drawRoundedRectangle (bounds, 9.0f, 1.0f);
+            g.setColour (juce::Colours::black.withAlpha (0.6f));
+            g.drawRoundedRectangle (bounds.reduced (2), 8.0f, 2.0f);
         }
     };
 
@@ -114,6 +135,12 @@ private:
     juce::Label title, subtitle, status;
     juce::TextButton savePatch { "SAVE PATCH" }, loadPatch { "LOAD PATCH" }, exportPreview { "EXPORT WAV" };
     juce::TextButton keyboardToggle { "KEYS" };
+    juce::TextButton lightSwitch { "LED: MINT" };
+    int displayedPalette = -1;
+    std::unique_ptr<juce::Drawable> logo;
+    juce::Rectangle<int> logoBounds;
+    std::unique_ptr<juce::Component> melodyPage, signalPage;
+    void updateLightPalette();
 
     // Persistent reference -> match -> audition workspace.
     juce::TextButton load { "LOAD REFERENCE" }, quick { "QUICK x3" }, refine { "REFINE x3" }, aiVariants { "AI x3" };

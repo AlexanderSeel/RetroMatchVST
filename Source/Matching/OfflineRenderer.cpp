@@ -7,7 +7,7 @@ juce::AudioBuffer<float> OfflineRenderer::renderPatch (const VoiceParameters& pa
                                                         float targetFundamentalHz,
                                                         int blockSize)
 {
-    const float duration = juce::jlimit (0.45f, 4.0f, durationSeconds);
+    const float duration = juce::jlimit (0.45f, 12.0f, durationSeconds);
     const int totalSamples = juce::jmax (1, (int) std::ceil (duration * sampleRate));
     juce::AudioBuffer<float> out (2, totalSamples);
     out.clear();

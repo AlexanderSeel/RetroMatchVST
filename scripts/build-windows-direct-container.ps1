@@ -1,6 +1,8 @@
 param(
     [ValidateSet("Debug", "Release")][string]$Config = "Release",
-    [string]$OutputDir = ""
+    [string]$OutputDir = "",
+    [string]$MemoryLimit = "6g",
+    [switch]$KeepContainer
 )
 
 $ErrorActionPreference = "Stop"
@@ -113,7 +115,7 @@ $container = "retromatch-direct-$([guid]::NewGuid().ToString('N').Substring(0, 1
 $sourceStage = $null
 try {
     Write-Host "Creating disposable base container '$container' ..." -ForegroundColor Cyan
-    & docker create --name $container $BaseImage powershell.exe -NoLogo -ExecutionPolicy Bypass -File C:\src\scripts\provision-container-windows.ps1 -Config $Config | Out-Null
+    & docker create --name $container --memory $MemoryLimit $BaseImage powershell.exe -NoLogo -ExecutionPolicy Bypass -File C:\src\scripts\provision-container-windows.ps1 -Config $Config | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not create direct Windows build container from the validated base image." }
 
     Write-Host "Staging RetroMatch source using the same exclusions as .dockerignore..." -ForegroundColor Cyan
@@ -130,7 +132,8 @@ try {
     Export-Artifacts -Container $container -Destination $OutputDir -Configuration $Config
 }
 finally {
-    & docker rm -f $container *> $null
+    if ($KeepContainer) { Write-Host "Retained build container: $container" }
+    else { & docker rm -f $container *> $null }
     if ($null -ne $sourceStage) { Remove-Item -LiteralPath $sourceStage -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
