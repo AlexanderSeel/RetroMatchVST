@@ -50,9 +50,15 @@ public:
         status.setFont (juce::Font (juce::FontOptions (10.5f)));
         status.setJustificationType (juce::Justification::topLeft);
 
-        for (auto* component : { static_cast<juce::Component*> (&title), &hint, &frameSizeLabel, &frameSize,
-                                 &load, &clear, &mixLabel, &mix, &status })
-            addAndMakeVisible (*component);
+        addAndMakeVisible (title);
+        addAndMakeVisible (hint);
+        addAndMakeVisible (frameSizeLabel);
+        addAndMakeVisible (frameSize);
+        addAndMakeVisible (load);
+        addAndMakeVisible (clear);
+        addAndMakeVisible (mixLabel);
+        addAndMakeVisible (mix);
+        addAndMakeVisible (status);
 
         updateStatus();
     }
