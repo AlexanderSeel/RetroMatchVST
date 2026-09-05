@@ -10,8 +10,12 @@
 - Added four append-only modulation-graph routes with MSEG 1, LFO, velocity, key track, random note and amp envelope sources.
 - Added a dedicated MSEG editor tab with envelope visualization, point levels, segment timing/curve controls and graph routing.
 - Preserved the original four MOD source/destination choice ranges and parameter order so existing DAW automation remains stable.
-- Added post-1.0 state migration defaults and bumped `.rmsynth` preset schema metadata to 1.1 without changing the plug-in product version.
-- Extended static and DSP smoke coverage for oversampling determinism, latency reporting, MSEG held-loop/release lifecycle and rendered MSEG routing.
+- Added arbitrary single-cycle and multi-frame user wavetable import with explicit 256/512/1024/2048/4096-sample cycle-size selection for ambiguous files.
+- Added a separate user-wavetable oscillator/mix layer so imported sound-design tables never overwrite the reference-derived matching wavetable.
+- Added a dedicated WAVETABLE editor with import, clear, mix and five-frame waveform preview controls.
+- Embedded imported user wavetable data and metadata in `.rmsynth` presets and DAW session state; preset schema metadata is now 1.2 without changing the plug-in product version.
+- Kept the user-wavetable mix append-only after the existing post-1.0 parameter surface and preserved it across matcher candidate selection/morphing.
+- Extended static and DSP smoke coverage for oversampling determinism, latency reporting, MSEG held-loop/release lifecycle, rendered MSEG routing, user-wavetable import/serialization and user-wavetable rendering.
 
 ## 1.0.0
 
