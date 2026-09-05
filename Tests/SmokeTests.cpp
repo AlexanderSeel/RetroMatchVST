@@ -1,6 +1,7 @@
 #include <JuceHeader.h>
 #include "../Source/Analysis/SampleAnalyzer.h"
 #include "../Source/Engine/MSEG.h"
+#include "../Source/Engine/ReferenceWavetable.h"
 #include "../Source/Matching/OfflineRenderer.h"
 #include "../Source/Matching/SoundMatcher.h"
 #include <cmath>
@@ -153,6 +154,66 @@ int main()
     const auto probeB = OfflineRenderer::renderPatch (deterministicProbe, sampleRate, 0.5f, fundamental, 128);
     if (maxDifference (probeA, probeB) > 1.0e-7f)
         return fail ("offline renderer is not deterministic");
+
+    // User wavetable import converts arbitrary multi-frame source audio into the
+    // immutable internal 5x2048 representation. Use eight deliberately different
+    // 1024-sample frames so both frame interpolation and rendered timbre are tested.
+    constexpr int sourceFrameSize = 1024;
+    constexpr int sourceFrameCount = 8;
+    juce::AudioBuffer<float> sourceTable (2, sourceFrameSize * sourceFrameCount);
+    for (int frame = 0; frame < sourceFrameCount; ++frame)
+    {
+        for (int i = 0; i < sourceFrameSize; ++i)
+        {
+            const float phase = (float) i / (float) sourceFrameSize;
+            const float angle = juce::MathConstants<float>::twoPi * phase;
+            const float harmonic = 1.0f + (float) frame * 0.45f;
+            const float value = 0.62f * std::sin (angle)
+                              + (0.08f + 0.045f * frame) * std::sin (angle * (2.0f + harmonic))
+                              + 0.06f * std::sin (angle * (5.0f + frame));
+            sourceTable.setSample (0, frame * sourceFrameSize + i, value);
+            sourceTable.setSample (1, frame * sourceFrameSize + i, value * (0.92f - 0.03f * frame));
+        }
+    }
+
+    juce::String importedDescription;
+    auto importedTable = ReferenceWavetableExtractor::importSetFromBuffer (
+        sourceTable, 48000.0, sourceFrameSize, &importedDescription);
+    if (importedTable == nullptr || ! importedTable->valid)
+        return fail ("user wavetable buffer import failed");
+    if (! importedDescription.contains ("8 source frames") || ! importedDescription.contains ("1024"))
+        return fail ("user wavetable import metadata is incorrect");
+    if (std::abs (importedTable->sample (0.21, 0.0f) - importedTable->sample (0.21, 1.0f)) <= 1.0e-4f)
+        return fail ("user wavetable import collapsed frame evolution");
+
+    auto restoredUserTable = ReferenceWavetableData::fromBase64 (importedTable->toBase64());
+    if (restoredUserTable == nullptr || ! restoredUserTable->valid
+        || std::abs (restoredUserTable->sample (0.37, 0.73f) - importedTable->sample (0.37, 0.73f)) > 1.0e-4f)
+        return fail ("user wavetable serialization round-trip failed");
+
+    auto userWavetableProbe = target;
+    userWavetableProbe.osc1Mix = 0.12f;
+    userWavetableProbe.osc2Mix = 0.0f;
+    userWavetableProbe.wavetableMix = 0.0f;
+    userWavetableProbe.referenceWavetableMix = 0.0f;
+    userWavetableProbe.supersawMix = 0.0f;
+    userWavetableProbe.fmMix = 0.0f;
+    userWavetableProbe.chorusMix = 0.0f;
+    userWavetableProbe.delayMix = 0.0f;
+    userWavetableProbe.reverbMix = 0.0f;
+    userWavetableProbe.userWavetable = importedTable;
+    userWavetableProbe.userWavetableMix = 0.82f;
+    const auto userWtA = OfflineRenderer::renderPatch (userWavetableProbe, sampleRate, 0.52f, fundamental, 128);
+    const auto userWtB = OfflineRenderer::renderPatch (userWavetableProbe, sampleRate, 0.52f, fundamental, 128);
+    auto userWtDisabled = userWavetableProbe;
+    userWtDisabled.userWavetableMix = 0.0f;
+    const auto userWtDry = OfflineRenderer::renderPatch (userWtDisabled, sampleRate, 0.52f, fundamental, 128);
+    if (! finiteAudio (userWtA) || userWtA.getMagnitude (0, userWtA.getNumSamples()) <= 1.0e-5f)
+        return fail ("user wavetable generated invalid or silent audio");
+    if (maxDifference (userWtA, userWtB) > 1.0e-7f)
+        return fail ("user wavetable render is not deterministic");
+    if (maxDifference (userWtA, userWtDry) <= 1.0e-5f)
+        return fail ("user wavetable mix did not alter rendered audio");
 
     // The append-only graph must reach the actual synthesis engine. Use a strong
     // MSEG->cutoff route, verify deterministic output, and verify the route changes
