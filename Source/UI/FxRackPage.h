@@ -1,6 +1,7 @@
 #pragma once
 #include "../PluginProcessor.h"
 #include "RetroLookAndFeel.h"
+#include "TempoSyncControls.h"
 
 class ModuleVisual final : public juce::Component
 {
@@ -154,13 +155,25 @@ private:
 class FxRackPage final : public juce::Component
 {
 public:
-    FxRackPage (RetroMatchSynthAudioProcessor& p, juce::Component* builtIn) : rack (p)
+    FxRackPage (RetroMatchSynthAudioProcessor& p, juce::Component* builtIn)
+        : tempo (p), chorusSync (p, "chorusSync", "chorusDivision", "CHORUS"), delaySync (p, "delaySync", "delayDivision", "DELAY"), rack (p)
     {
-        addAndMakeVisible (tabs); tabs.addTab ("MODULE RACK", juce::Colour (0xff101719), &rack, false);
+        addAndMakeVisible (tempo); addAndMakeVisible (chorusSync); addAndMakeVisible (delaySync); addAndMakeVisible (tabs);
+        tabs.addTab ("MODULE RACK", juce::Colour (0xff101719), &rack, false);
         tabs.addTab ("BUILT-IN FX", juce::Colour (0xff101719), builtIn, false);
     }
-    void resized() override { tabs.setBounds (getLocalBounds()); }
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        auto clock = r.removeFromTop (38).reduced (8, 3);
+        tempo.setBounds (clock.removeFromLeft (juce::jmax (330, getWidth() / 2)));
+        chorusSync.setBounds (clock.removeFromLeft (170));
+        delaySync.setBounds (clock.removeFromLeft (170));
+        tabs.setBounds (r);
+    }
 private:
+    TempoSyncBar tempo;
+    TempoSyncSelector chorusSync, delaySync;
     ModularFxPage rack;
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
 };
