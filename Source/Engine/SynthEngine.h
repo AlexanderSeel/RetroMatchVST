@@ -98,7 +98,7 @@ struct VoiceParameters
     float outputGainDb = -3.0f;
 
     // Clock metadata is global at render time. Stored layer snapshots retain
-    // their free-running rates; SynthEngine overwrites these metadata fields from
+    // their free-running values; SynthEngine overwrites these metadata fields from
     // the main instance before rendering a layer so every instance follows the
     // same DAW/manual clock without audio-thread allocations.
     float tempoBpm = 120.0f;
@@ -108,6 +108,8 @@ struct VoiceParameters
     int chorusTempoDivision = 3;
     bool delayTempoSync = false;
     int delayTempoDivision = 3;
+    bool msegTempoSync = false;
+    int msegTempoDivision = 3;
 
     void resolveTempo() noexcept
     {
@@ -117,6 +119,15 @@ struct VoiceParameters
             if (lfoTempoSync[(size_t) i + 1]) extraLfoRate[(size_t) i] = TempoSync::frequencyHz (lfoTempoDivision[(size_t) i + 1], bpm);
         if (chorusTempoSync) chorusRate = TempoSync::frequencyHz (chorusTempoDivision, bpm);
         if (delayTempoSync) delayTime = TempoSync::seconds (delayTempoDivision, bpm);
+
+        if (msegTempoSync)
+        {
+            float freeDuration = 0.0f;
+            for (const auto time : mseg.times) freeDuration += juce::jmax (0.001f, time);
+            const float targetDuration = TempoSync::seconds (msegTempoDivision, bpm);
+            const float scale = targetDuration / juce::jmax (0.001f, freeDuration);
+            for (auto& time : mseg.times) time = juce::jmax (0.001f, time * scale);
+        }
     }
 
     void inheritTempoFrom (const VoiceParameters& master) noexcept
@@ -128,6 +139,8 @@ struct VoiceParameters
         chorusTempoDivision = master.chorusTempoDivision;
         delayTempoSync = master.delayTempoSync;
         delayTempoDivision = master.delayTempoDivision;
+        msegTempoSync = master.msegTempoSync;
+        msegTempoDivision = master.msegTempoDivision;
     }
 
     int oversamplingQuality = 0;
