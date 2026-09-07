@@ -38,8 +38,11 @@ class LayersPage final : public juce::Component, private juce::Timer
 public:
     explicit LayersPage (RetroMatchSynthAudioProcessor& p) : proc (p)
     {
-        addAndMakeVisible (hint); hint.setText ("INSTANCE RACK / Select EDIT to work on a synth in the tabs above. Changes follow the selected instance automatically. Signal combines top to bottom: Add, Mix, Subtract, Multiply or protected Divide. AMOUNT blends each operation.", juce::dontSendNotification);
+        addAndMakeVisible (hint); hint.setText ("INSTANCE RACK / Refine and candidate selection own the generated rack: old loaded/edited instances are removed first. Layered resynthesis can combine 1-3 complementary candidates; manual instances can still be added up to 8 total. EDIT jumps the selected instance into the normal synth tabs.", juce::dontSendNotification);
         hint.setJustificationType (juce::Justification::topLeft);
+        addAndMakeVisible (resynthLabel); resynthLabel.setText ("RESYNTH INSTANCES", juce::dontSendNotification); resynthLabel.setJustificationType (juce::Justification::centredRight);
+        addAndMakeVisible (resynthInstances); resynthInstances.addItemList ({ "1 / SINGLE", "2 / LAYERED", "3 / DEEP LAYERED" }, 1);
+        resynthAttachment = std::make_unique<ComboAttachment> (proc.apvts, "resynthInstances", resynthInstances);
         addAndMakeVisible (editMain); editMain.setButtonText ("EDIT INSTANCE 1 / MAIN"); editMain.onClick = [this] { editInstance (-1); };
         addAndMakeVisible (add); add.setButtonText ("+ ADD CURRENT SYNTH INSTANCE");
         add.onClick = [this] { for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) if (! proc.hasLayer (i)) { proc.captureLayer (i); break; } refresh(); };
@@ -57,7 +60,7 @@ public:
             row.attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, prefix + "Enabled", row.enabled);
             row.panel.addAndMakeVisible (row.operation);
             row.operation.addItemList ({ "Add (+)", "Mix", "Subtract (-)", "Multiply (x)", "Divide (protected)" }, 1);
-            row.operationAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, prefix + "Operation", row.operation);
+            row.operationAttachment = std::make_unique<ComboAttachment> (proc.apvts, prefix + "Operation", row.operation);
             row.operation.setTooltip ("Combine this instance with the accumulated signal above it. Amount 0 bypasses the operation; 1 applies it fully. Divide uses a bounded, regularised denominator.");
             const char* suffix[] { "Gain", "Pan", "Tune", "Amount" }; const char* names[] { "LEVEL", "PAN", "TUNE", "AMOUNT" };
             for (int k = 0; k < 4; ++k)
@@ -79,25 +82,28 @@ public:
     void paint (juce::Graphics& g) override { g.fillAll (juce::Colour (0xff101719)); }
     void resized() override
     {
-        auto r = getLocalBounds().reduced (14); hint.setBounds (r.removeFromTop (60));
+        auto r = getLocalBounds().reduced (14); hint.setBounds (r.removeFromTop (58));
+        auto resynth = r.removeFromTop (30); resynthLabel.setBounds (resynth.removeFromLeft (150)); resynthInstances.setBounds (resynth.removeFromLeft (220).reduced (2));
         editMain.setBounds (r.removeFromTop (30).reduced (2));
         auto controls = r.removeFromTop (30); add.setBounds (controls.removeFromLeft (controls.getWidth() * 2 / 3).reduced (2)); mainGain.setBounds (controls.reduced (2));
         mainVisual.setBounds (r.removeFromTop (65)); r.removeFromTop (6); viewport.setBounds (r); layoutRows();
     }
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
+    using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     RetroMatchSynthAudioProcessor& proc;
     struct Row
     {
         juce::Component panel; juce::Label name; SynthInstanceVisual visual;
         juce::ToggleButton enabled; juce::TextButton capture, edit, clear;
         std::array<juce::Slider, 4> controls; std::array<juce::Label, 4> labels;
-        juce::ComboBox operation; std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> operationAttachment;
+        juce::ComboBox operation; std::unique_ptr<ComboAttachment> operationAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
         std::array<std::unique_ptr<SliderAttachment>, 4> attachments;
     };
-    juce::Label hint; juce::TextButton add, editMain; juce::Slider mainGain; SynthInstanceVisual mainVisual;
+    juce::Label hint, resynthLabel; juce::ComboBox resynthInstances; juce::TextButton add, editMain; juce::Slider mainGain; SynthInstanceVisual mainVisual;
     std::unique_ptr<SliderAttachment> mainAttachment;
+    std::unique_ptr<ComboAttachment> resynthAttachment;
     juce::Component content; juce::Viewport viewport;
     std::array<Row, VoiceParameters::extraLayerCount> rows;
     void editInstance (int index)
