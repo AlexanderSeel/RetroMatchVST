@@ -331,7 +331,7 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
                               : params.extraLfoShape[k] == 2 ? (phase < 0.5f ? 1.0f : -1.0f)
                               : params.extraLfoShape[k] == 3 ? phase * 2.0f - 1.0f
                               : std::sin (juce::MathConstants<float>::twoPi * phase);
-            extraLfoPhase[k] += juce::jlimit (0.01f, 30.0f, params.extraLfoRate[k]) / sr;
+            extraLfoPhase[k] += juce::jlimit (0.01f, 40.0f, params.extraLfoRate[k]) / sr;
             extraLfoPhase[k] -= std::floor (extraLfoPhase[k]);
         }
         const float env = ampEnv.getNextSample();
@@ -428,7 +428,7 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
         phase1 += f1 / sr;
         phase2 += f2 / sr;
         subPhase += fSub / sr;
-        lfoPhase += params.lfoRate / sr;
+        lfoPhase += juce::jlimit (0.001f, 40.0f, params.lfoRate) / sr;
         phase1 -= std::floor (phase1);
         phase2 -= std::floor (phase2);
         subPhase -= std::floor (subPhase);
@@ -507,7 +507,8 @@ void SynthEngine::prepare (double sr, int samplesPerBlock, int channels, bool wi
     const auto safeBlockSize = (juce::uint32) juce::jmax (1, samplesPerBlock);
     juce::dsp::ProcessSpec spec { sr, safeBlockSize, safeChannels };
     chorus.prepare (spec);
-    delay.setMaximumDelayInSamples ((int) std::ceil (sr * 2.0));
+    const int musicalDelaySamples = (int) std::ceil (sr * (TempoSync::seconds ((int) TempoSync::divisionNames.size() - 1, 40.0f) + 0.1f));
+    delay.setMaximumDelayInSamples (juce::jmax (1, musicalDelaySamples));
     delay.prepare (spec);
     reverb.setSampleRate (sr);
 
@@ -561,10 +562,11 @@ void SynthEngine::setParameters (const VoiceParameters& p)
 {
     current = p;
     current.oversamplingQuality = qualityIndex (current.oversamplingQuality);
+    current.resolveTempo();
     for (int i = 0; i < synth.getNumVoices(); ++i)
         if (auto* v = dynamic_cast<HybridVoice*> (synth.getVoice (i))) v->setParameters (current);
 
-    chorus.setRate (juce::jlimit (0.02f, 10.0f, current.chorusRate));
+    chorus.setRate (juce::jlimit (0.01f, 100.0f, current.chorusRate));
     chorus.setDepth (juce::jlimit (0.0f, 1.0f, current.chorusDepth));
     chorus.setCentreDelay (7.0f);
     chorus.setFeedback (0.05f);
@@ -586,7 +588,7 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
     const auto channels = audio.getNumChannels();
     const int quality = qualityIndex (current.oversamplingQuality);
 
-    moduleRack.process (audio, current.fxModules, 0);
+    moduleRack.process (audio, current.fxModules, 0, current.tempoBpm);
     const auto processDrive = [&] (auto& block)
     {
         if (current.drive <= 0.0001f) return;
@@ -630,7 +632,8 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
 
     if (current.delayMix > 0.0001f || current.delayFeedback > 0.0001f)
     {
-        const float delaySamples = juce::jlimit (1.0f, (float) (sampleRate * 1.9), current.delayTime * (float) sampleRate);
+        const float maxDelaySeconds = TempoSync::seconds ((int) TempoSync::divisionNames.size() - 1, 40.0f) + 0.05f;
+        const float delaySamples = juce::jlimit (1.0f, (float) (sampleRate * maxDelaySeconds), current.delayTime * (float) sampleRate);
         const float wet = juce::jlimit (0.0f, 1.0f, current.delayMix);
         const float feedback = juce::jlimit (0.0f, 0.92f, current.delayFeedback);
         for (int i = 0; i < n; ++i)
@@ -666,7 +669,7 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
         }
     }
 
-    moduleRack.process (audio, current.fxModules, 1);
+    moduleRack.process (audio, current.fxModules, 1, current.tempoBpm);
     audio.applyGain (juce::Decibels::decibelsToGain (current.outputGainDb));
 }
 
@@ -708,6 +711,7 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
         p.layers.fill (nullptr); p.mainLayerGain = 1.0f;
         p.masterTuneCents += juce::jlimit (-24.0f, 24.0f, current.layerTune[i]) * 100.0f;
         p.oversamplingQuality = current.oversamplingQuality;
+        p.inheritTempoFrom (current);
         layer->setParameters (p);
         layerActive[i] = true;
         layerScratch.setSize (audio.getNumChannels(), audio.getNumSamples(), false, false, true);
@@ -730,7 +734,6 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
                     case 1: combined = b; break; // crossfade
                     case 2: combined = a - b; break;
                     case 3: combined = a * b; break;
-                    // Regularised division is continuous at zero and bounded.
                     case 4: combined = std::tanh (a * b / (b * b + 0.01f)); break;
                     default: break;
                 }
