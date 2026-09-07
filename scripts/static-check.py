@@ -62,19 +62,26 @@ if 'Source/Reference/ReferenceSamplePlayer.cpp' not in cmake:
 mseg_path = ROOT / 'Source/Engine/MSEG.h'
 mseg_page_path = ROOT / 'Source/UI/MsegPage.h'
 user_wavetable_page_path = ROOT / 'Source/UI/UserWavetablePage.h'
+tempo_sync_path = ROOT / 'Source/Engine/TempoSync.h'
+signal_page_path = ROOT / 'Source/UI/SignalLabPage.h'
 if not mseg_path.exists(): errors.append('Source/Engine/MSEG.h is missing')
 if not mseg_page_path.exists(): errors.append('Source/UI/MsegPage.h is missing')
 if not user_wavetable_page_path.exists(): errors.append('Source/UI/UserWavetablePage.h is missing')
+if not tempo_sync_path.exists(): errors.append('Source/Engine/TempoSync.h is missing')
+if not signal_page_path.exists(): errors.append('Source/UI/SignalLabPage.h is missing')
 
 processor = (ROOT / 'Source/PluginProcessor.cpp').read_text(encoding='utf-8')
 processor_h = (ROOT / 'Source/PluginProcessor.h').read_text(encoding='utf-8')
 engine_h = (ROOT / 'Source/Engine/SynthEngine.h').read_text(encoding='utf-8')
 engine_cpp = (ROOT / 'Source/Engine/SynthEngine.cpp').read_text(encoding='utf-8')
+module_rack = (ROOT / 'Source/Engine/ModuleRack.h').read_text(encoding='utf-8')
 reference_wavetable_h = (ROOT / 'Source/Engine/ReferenceWavetable.h').read_text(encoding='utf-8')
 reference_wavetable_cpp = (ROOT / 'Source/Engine/ReferenceWavetable.cpp').read_text(encoding='utf-8')
 mseg = mseg_path.read_text(encoding='utf-8') if mseg_path.exists() else ''
 mseg_page = mseg_page_path.read_text(encoding='utf-8') if mseg_page_path.exists() else ''
 user_wavetable_page = user_wavetable_page_path.read_text(encoding='utf-8') if user_wavetable_page_path.exists() else ''
+tempo_sync = tempo_sync_path.read_text(encoding='utf-8') if tempo_sync_path.exists() else ''
+signal_page = signal_page_path.read_text(encoding='utf-8') if signal_page_path.exists() else ''
 matcher = (ROOT / 'Source/Matching/SoundMatcher.cpp').read_text(encoding='utf-8')
 analyzer = (ROOT / 'Source/Analysis/SampleAnalyzer.cpp').read_text(encoding='utf-8')
 analyzer_h = (ROOT / 'Source/Analysis/SampleAnalyzer.h').read_text(encoding='utf-8')
@@ -94,10 +101,10 @@ required_tokens = {
     'MSEG engine': ['MsegParameters', 'MultiSegmentEnvelope', 'loopStartPoint', 'loopEndPoint', 'noteOn()', 'noteOff()', 'shapeProgress'],
     'MSEG voice routing': ['mseg.setSampleRate', 'mseg.setParameters', 'mseg.noteOn', 'mseg.noteOff', 'params.modGraphSlots', 'ModSource::mseg1'],
     'MSEG processor state': ['"msegEnabled"', '"msegLoopEnabled"', '"msegLevel"', '"msegTime"', '"msegCurve"', '"modGraph"'],
-    'MSEG editor': ['ENABLE MSEG 1', 'LOOP WHILE NOTE HELD', 'POST-1.0 MODULATION GRAPH', 'MSEG 1', 'modGraph'],
+    'MSEG editor': ['ENABLE MSEG 1', 'LOOP WHILE NOTE HELD', 'POST-1.0 MODULATION GRAPH', 'MSEG 1', 'modGraph', 'msegSync', 'msegDivision'],
     'user wavetable importer': ['importSet', 'importSetFromBuffer', 'chooseSourceFrameSize', 'cyclicFrameSample', 'source frame', '5 x 2048'],
     'user wavetable engine': ['userWavetableMix', 'userWavetable', 'params.userWavetable->sample'],
-    'user wavetable processor': ['"userWavetableMix"', 'loadUserWavetable', 'clearUserWavetable', '"userWavetable"', 'userWavetableDescription', 'presetVersion", "1.3"'],
+    'user wavetable processor': ['"userWavetableMix"', 'loadUserWavetable', 'clearUserWavetable', '"userWavetable"', 'userWavetableDescription', 'presetVersion", "1.4"'],
     'user wavetable editor': ['LOAD WAVETABLE', 'SOURCE CYCLE', 'USER WT MIX', 'AUTO (prefer 2048)', 'getUserWavetable'],
     'matcher search dimensions': ['p.wavetableMix', 'p.supersawMix', 'p.wavefold', 'p.fmOpFixedMode', 'p.fmOpAttack'],
     'operator UI': ['rebindFmOperatorEditor', 'SELECTED OPERATOR DETAIL'],
@@ -113,6 +120,12 @@ required_tokens = {
     'AI local scoring': ['buildPrompt', 'postJson', 'SoundMatcher::evaluateFit', 'generateVariants'],
     'v1 reference wavetable': ['referenceWavetableMix', 'ReferenceWavetableExtractor', 'referenceWavetable'],
     'v1 candidate bank': ['buildCandidateBank', 'morphCandidates', 'selectCandidate'],
+    'layered resynthesis lifecycle': ['"resynthInstances"', 'applyGeneratedRack', 'clearLayer (i)', 'captureLayer (layer)', 'RESYNTH'],
+    'tempo clock processor': ['"tempoSource"', '"manualBpm"', 'getPlayHead()', 'getBpm()', 'effectiveBpm', '"lfo1Sync"', '"delaySync"'],
+    'tempo clock engine': ['resolveTempo', 'inheritTempoFrom', 'TempoSync::frequencyHz', 'TempoSync::seconds', 'msegTempoSync'],
+    'tempo divisions': ['1/32', '1/16', '1/8', '1/4', '1/2', '1/1', '2/1', '4/1'],
+    'tempo modular FX': ['tempoSync', 'tempoDivision', 'fxModuleCanTempoSync', 'TempoSync::frequencyHz', 'TempoSync::seconds'],
+    'interactive signal map': ['mouseWheelMove', 'mouseDrag', 'mouseDoubleClick', 'zoom', 'pan', 'SYNTH 1'],
 }
 texts = {
     'processor wavetable parameters': processor,
@@ -142,6 +155,12 @@ texts = {
     'AI local scoring': ai,
     'v1 reference wavetable': processor + engine_cpp,
     'v1 candidate bank': processor + editor_all,
+    'layered resynthesis lifecycle': processor + processor_h,
+    'tempo clock processor': processor + processor_h,
+    'tempo clock engine': engine_h + engine_cpp,
+    'tempo divisions': tempo_sync,
+    'tempo modular FX': module_rack + processor,
+    'interactive signal map': signal_page,
 }
 for name, tokens in required_tokens.items():
     for token in tokens:
@@ -154,24 +173,25 @@ if 'noteOnFromUi' not in engine_h or 'noteOnFromEditor' not in processor_h:
 if 'sessionApiKey' not in ai_settings or 'setValue ("ai.' not in ai_settings:
     errors.append('AI settings persistence/session-secret separation is missing')
 
-# Host automation compatibility is append-only. The v1.0 outputGain endpoint must
-# remain before post-1.0 quality/MSEG additions, and userWavetableMix must be the
-# newest parameter after the existing graph surface.
+# Host automation compatibility is append-only. The v1.0 surface and every
+# previously released post-1.0 parameter must keep their order. New clock and
+# layered-resynthesis controls are appended after the existing layer-operation surface.
 output_gain_position = processor.find('"outputGain", "Output Gain"')
 oversampling_position = processor.find('"oversamplingQuality", "Nonlinear Oversampling"')
 mseg_position = processor.find('"msegEnabled", "MSEG 1 Enabled"')
 graph_amount_position = processor.rfind('"modGraph" + index + "Amount"')
 user_wavetable_position = processor.find('"userWavetableMix", "User Wavetable Mix"')
+resynth_position = processor.find('"resynthInstances", "Resynthesis Instances"')
+layer_operation_position = processor.rfind('prefix + "Operation"')
 if output_gain_position < 0 or oversampling_position <= output_gain_position:
     errors.append('oversamplingQuality must be appended after the complete v1.0 parameter surface')
 if mseg_position <= oversampling_position:
     errors.append('MSEG parameters must remain appended after oversamplingQuality')
 if graph_amount_position < 0 or user_wavetable_position <= graph_amount_position:
     errors.append('userWavetableMix must remain appended after the complete MSEG/graph parameter surface')
+if layer_operation_position < 0 or resynth_position <= layer_operation_position:
+    errors.append('clock/resynthesis controls must remain appended after the released layer-operation surface')
 
-# Never append MSEG to the original mod slot source choices: adding an item would
-# change the normalized automation values of existing choice parameters. MSEG is
-# available only in the new modGraph choices.
 legacy_sources_literal = 'const juce::StringArray modSources { "Off", "LFO 1", "Velocity", "Key Track", "Random Note", "Amp Env" };'
 if legacy_sources_literal not in processor:
     errors.append('legacy modSources choice list changed; v1.0 normalized automation compatibility would be at risk')
@@ -179,15 +199,13 @@ graph_sources_literal = 'const juce::StringArray graphSources { "Off", "LFO 1", 
 if graph_sources_literal not in processor:
     errors.append('new modulation graph must expose MSEG 1 without changing legacy modSources')
 
-if 'tabbed->addTab ("MSEG"' not in processor or 'new MsegPage (proc.apvts)' not in processor:
-    errors.append('dedicated MSEG editor tab is not attached to the processor editor')
+if 'tabbed->addTab ("MSEG"' not in processor or 'new MsegPage (proc)' not in processor:
+    errors.append('dedicated clock-aware MSEG editor tab is not attached to the processor editor')
 if 'tabbed->addTab ("WAVETABLE"' not in processor or 'new UserWavetablePage (proc)' not in processor:
     errors.append('dedicated user wavetable editor tab is not attached to the processor editor')
 if 'stateWithPost10Defaults' not in processor:
     errors.append('post-1.0 preset/session migration helper is missing')
 
-# OpenAI Responses models in the GPT-5.x family may reject temperature. Keep
-# the OpenAI request conservative instead of sending an unsupported knob.
 openai_start = ai.find('juce::String makeOpenAIRequest')
 gemini_start = ai.find('juce::String makeGeminiRequest')
 if openai_start < 0 or gemini_start <= openai_start:
@@ -207,11 +225,12 @@ print(' - C/C++ JUCE project configuration present')
 print(' - source delimiter balance passed')
 print(' - wavetable, supersaw/unison, wavefold and FM-detail plumbing present')
 print(' - nonlinear 1x/2x/4x oversampling and fixed-latency plumbing present')
-print(' - oversamplingQuality remains appended after the v1.0 parameter surface')
-print(' - six-point MSEG engine and append-only modulation graph present')
-print(' - legacy MOD choice ranges remain unchanged; MSEG routing is isolated to new graph slots')
+print(' - append-only host automation order remains protected')
+print(' - six-point MSEG engine, modulation graph and beat sync present')
 print(' - arbitrary user wavetable import, embedded state and separate oscillator layer present')
-print(' - userWavetableMix remains appended after the existing post-1.0 graph surface')
+print(' - layered resynthesis replaces stale racks and supports up to three generated instances')
+print(' - manual/DAW clock and 1/32..4/1 divisions are wired through synth and modular FX')
+print(' - whole-synth interactive signal map is present')
 print(' - dedicated MSEG and WAVETABLE editor tabs present')
 print(' - reference-to-variant workspace and editing tabs present')
 print(' - Quick/Refine/AI three-variant workflow present')
