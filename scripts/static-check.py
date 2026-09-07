@@ -121,11 +121,11 @@ required_tokens = {
     'v1 reference wavetable': ['referenceWavetableMix', 'ReferenceWavetableExtractor', 'referenceWavetable'],
     'v1 candidate bank': ['buildCandidateBank', 'morphCandidates', 'selectCandidate'],
     'layered resynthesis lifecycle': ['"resynthInstances"', 'applyGeneratedRack', 'clearLayer (i)', 'captureLayer (layer)', 'RESYNTH'],
-    'tempo clock processor': ['"tempoSource"', '"manualBpm"', 'getPlayHead()', 'getBpm()', 'effectiveBpm', '"lfo1Sync"', '"delaySync"'],
+    'tempo clock processor': ['"tempoSource"', '"manualBpm"', 'getPlayHead()', 'getBpm()', 'effectiveBpm', 'prefix + "Sync"', '"delaySync"'],
     'tempo clock engine': ['resolveTempo', 'inheritTempoFrom', 'TempoSync::frequencyHz', 'TempoSync::seconds', 'msegTempoSync'],
     'tempo divisions': ['1/32', '1/16', '1/8', '1/4', '1/2', '1/1', '2/1', '4/1'],
     'tempo modular FX': ['tempoSync', 'tempoDivision', 'fxModuleCanTempoSync', 'TempoSync::frequencyHz', 'TempoSync::seconds'],
-    'interactive signal map': ['mouseWheelMove', 'mouseDrag', 'mouseDoubleClick', 'zoom', 'pan', 'SYNTH 1'],
+    'interactive signal map': ['mouseWheelMove', 'mouseDrag', 'mouseDoubleClick', 'graphZoom', 'graphPan', 'INSTANCE 1 / MAIN'],
 }
 texts = {
     'processor wavetable parameters': processor,
