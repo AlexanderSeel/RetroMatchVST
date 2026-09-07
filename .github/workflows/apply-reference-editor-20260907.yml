@@ -21,6 +21,16 @@ jobs:
       - name: Apply reference editor migration
         shell: pwsh
         run: python scripts/apply-reference-editor-20260907.py
+      - name: Update selection-aware static contract
+        shell: pwsh
+        run: |
+          $path = 'scripts/static-check.py'
+          $text = Get-Content $path -Raw
+          $old = "'reference pitch correction': ['expectedFundamentalHz', 'estimateConfidenceAtFundamental', 'analyzeFile (loadedReferenceFile, expectedHz)'],"
+          $new = "'reference pitch correction': ['expectedFundamentalHz', 'estimateConfidenceAtFundamental', 'analyzeFile (loadedReferenceFile, expectedHz, start, end)'],"
+          if (-not $text.Contains($old)) { throw 'Reference pitch static contract marker not found.' }
+          $text = $text.Replace($old, $new)
+          Set-Content -Path $path -Value $text -NoNewline
       - name: Static source integrity
         shell: pwsh
         run: python scripts/static-check.py
