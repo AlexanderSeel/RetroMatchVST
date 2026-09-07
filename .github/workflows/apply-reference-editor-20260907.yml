@@ -21,6 +21,16 @@ jobs:
       - name: Apply reference editor migration
         shell: pwsh
         run: python scripts/apply-reference-editor-20260907.py
+      - name: Fix generated MSVC coordinate types
+        shell: pwsh
+        run: |
+          $path = 'Source/UI/ReferenceRegion.h'
+          $text = Get-Content $path -Raw
+          $old = 'return juce::jlimit (0.0, 1.0, (x - r.getX()) / juce::jmax (1.0f, r.getWidth())) * thumbnail.getTotalLength();'
+          $new = 'return juce::jlimit (0.0, 1.0, (double) (x - r.getX()) / (double) juce::jmax (1.0f, r.getWidth())) * thumbnail.getTotalLength();'
+          if (-not $text.Contains($old)) { throw 'ReferenceRegion coordinate marker not found.' }
+          $text = $text.Replace($old, $new)
+          Set-Content -Path $path -Value $text -NoNewline
       - name: Update selection-aware static contract
         shell: pwsh
         run: |
