@@ -121,8 +121,6 @@ public:
     void setReferenceAuditionLevel (float level) noexcept { referenceAuditionLevel.store (juce::jlimit (0.0f, 1.0f, level)); }
     float getReferenceAuditionLevel() const noexcept { return referenceAuditionLevel.load(); }
 
-    // Smoothed post-mix peaks for editor meters. The audio thread only performs
-    // relaxed atomic stores; the UI thread reads these values without locks.
     float getOutputPeakLeft() const noexcept { return outputPeakLeft.load (std::memory_order_relaxed); }
     float getOutputPeakRight() const noexcept { return outputPeakRight.load (std::memory_order_relaxed); }
 
@@ -135,7 +133,17 @@ public:
     VoiceParameters getCurrentVoiceParameters() const { return readParams(); }
     VoiceParameters getMainVoiceParameters() const
     {
-        auto p = readParams ({}, false); p.layers.fill (nullptr); p.mainLayerGain = 1.0f; return p;
+        VoiceParameters p;
+        if (auto main = editingMain.load()) p = *main;
+        else p = readParams ({}, false);
+
+        // Tempo/sync settings are global even while a secondary instance is open
+        // in the editor. Pull the live clock metadata from APVTS before matching.
+        const auto live = readParams ({}, false);
+        p.inheritTempoFrom (live);
+        p.layers.fill (nullptr);
+        p.mainLayerGain = 1.0f;
+        return p;
     }
 
     bool savePreset (const juce::File&);
@@ -145,8 +153,6 @@ public:
     bool loadPreset (const juce::File&);
     bool exportPreviewWav (const juce::File&, float seconds = 2.5f) const;
 
-    // Optional UI audition keyboard. It can audition the synth, the loaded
-    // reference sample transposed from its base note, or both together.
     void noteOnFromEditor (int midiNote, float velocity);
     void noteOffFromEditor (int midiNote, float velocity = 0.0f);
     void allEditorNotesOff();
@@ -189,6 +195,7 @@ private:
     VoiceParameters readParams (const juce::ValueTree& snapshot = {}, bool routed = true) const;
     void restoreLayers();
     void applyPresetParameters (const VoiceParameters&, const juce::String& name);
+    void applyGeneratedRack (const MatchResult& mainResult, int selectedBankIndex);
     void updateCandidatePreview (const MatchResult&);
     void invalidateMatchesAfterReferencePitchChange();
     void delayReferenceForLatency (juce::AudioBuffer<float>&);
