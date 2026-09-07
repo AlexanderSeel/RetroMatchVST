@@ -1,6 +1,7 @@
 #pragma once
 #include "../PluginProcessor.h"
 #include "RetroLookAndFeel.h"
+#include "TempoSyncControls.h"
 
 class ModularModPage final : public juce::Component, private juce::Timer
 {
@@ -16,6 +17,8 @@ public:
             shape.addItemList ({ "Sine", "Triangle", "Square", "Ramp" }, 1);
             rateAttachments[(size_t) i] = std::make_unique<SliderAttachment> (proc.apvts, prefix + "Rate", rate);
             shapeAttachments[(size_t) i] = std::make_unique<ComboAttachment> (proc.apvts, prefix + "Shape", shape);
+            syncs[(size_t) i] = std::make_unique<TempoSyncSelector> (proc, "lfo" + juce::String (i + 2) + "Sync", "lfo" + juce::String (i + 2) + "Division");
+            addAndMakeVisible (*syncs[(size_t) i]);
         }
         for (int i = 0; i < 4; ++i)
         {
@@ -33,13 +36,15 @@ public:
     }
     void resized() override
     {
-        auto r = getLocalBounds().reduced (16); r.removeFromTop (40); auto lfos = r.removeFromTop (210); const int w = lfos.getWidth() / 3;
+        auto r = getLocalBounds().reduced (16); r.removeFromTop (40); auto lfos = r.removeFromTop (250); const int w = lfos.getWidth() / 3;
         for (int i = 0; i < 3; ++i)
         {
-            auto column = lfos.removeFromLeft (w).reduced (5); plots[(size_t) i] = column.removeFromTop (130);
-            shapes[(size_t) i].setBounds (column.removeFromTop (28).reduced (2)); rates[(size_t) i].setBounds (column.reduced (2));
+            auto column = lfos.removeFromLeft (w).reduced (5); plots[(size_t) i] = column.removeFromTop (125);
+            shapes[(size_t) i].setBounds (column.removeFromTop (27).reduced (2));
+            rates[(size_t) i].setBounds (column.removeFromTop (48).reduced (2));
+            syncs[(size_t) i]->setBounds (column.removeFromTop (30).reduced (2));
         }
-        r.removeFromTop (40);
+        r.removeFromTop (26);
         for (int i = 0; i < 4; ++i)
         {
             auto row = r.removeFromTop (42); sources[(size_t) i].setBounds (row.removeFromLeft (r.getWidth() / 3).reduced (3));
@@ -65,9 +70,8 @@ public:
             g.setColour (led.withAlpha (0.14f)); g.strokePath (wave, juce::PathStrokeType (6)); g.setColour (led); g.strokePath (wave, juce::PathStrokeType (1.5f));
             const float phase = (float) std::fmod (juce::Time::getMillisecondCounterHiRes() * 0.001 * rates[(size_t) k].getValue(), 1.0);
             g.setColour (juce::Colours::white.withAlpha (0.5f)); g.drawVerticalLine ((int) (plot.getX() + phase * plot.getWidth()), plot.getY(), plot.getBottom());
-            g.setColour (led.withAlpha (0.4f)); g.drawLine (plots[(size_t) k].getCentreX(), plots[(size_t) k].getBottom() + 78.0f, getWidth() * 0.5f, 280.0f);
         }
-        g.setColour (led); g.setFont (12); g.drawText ("SOURCE                                DESTINATION                                  DEPTH", 20, 278, getWidth() - 40, 26, juce::Justification::centredLeft);
+        g.setColour (led); g.setFont (12); g.drawText ("SOURCE                                DESTINATION                                  DEPTH", 20, 306, getWidth() - 40, 26, juce::Justification::centredLeft);
     }
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -75,6 +79,7 @@ private:
     RetroMatchSynthAudioProcessor& proc;
     std::array<juce::Rectangle<int>, 3> plots;
     std::array<juce::Slider, 3> rates; std::array<juce::ComboBox, 3> shapes;
+    std::array<std::unique_ptr<TempoSyncSelector>, 3> syncs;
     std::array<juce::ComboBox, 4> sources, destinations; std::array<juce::Slider, 4> amounts;
     std::array<std::unique_ptr<SliderAttachment>, 3> rateAttachments;
     std::array<std::unique_ptr<ComboAttachment>, 3> shapeAttachments;
@@ -86,12 +91,24 @@ private:
 class ModulatorsPage final : public juce::Component
 {
 public:
-    ModulatorsPage (RetroMatchSynthAudioProcessor& p, juce::Component* builtIn) : modules (p)
+    ModulatorsPage (RetroMatchSynthAudioProcessor& p, juce::Component* builtIn)
+        : tempo (p), lfo1Sync (p, "lfo1Sync", "lfo1Division", "LFO 1 SYNC"), modules (p)
     {
-        addAndMakeVisible (tabs); tabs.addTab ("LFO MODULES + ROUTING", juce::Colour (0xff101719), &modules, false);
+        addAndMakeVisible (tempo); addAndMakeVisible (lfo1Sync); addAndMakeVisible (tabs);
+        tabs.addTab ("LFO MODULES + ROUTING", juce::Colour (0xff101719), &modules, false);
         tabs.addTab ("BUILT-IN MOD", juce::Colour (0xff101719), builtIn, false);
     }
-    void resized() override { tabs.setBounds (getLocalBounds()); }
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        auto clock = r.removeFromTop (38).reduced (8, 3);
+        tempo.setBounds (clock.removeFromLeft (juce::jmax (330, getWidth() / 2)));
+        lfo1Sync.setBounds (clock.removeFromLeft (200));
+        tabs.setBounds (r);
+    }
 private:
-    ModularModPage modules; juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
+    TempoSyncBar tempo;
+    TempoSyncSelector lfo1Sync;
+    ModularModPage modules;
+    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
 };
