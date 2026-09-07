@@ -38,31 +38,39 @@ class LayersPage final : public juce::Component, private juce::Timer
 public:
     explicit LayersPage (RetroMatchSynthAudioProcessor& p) : proc (p)
     {
-        addAndMakeVisible (hint); hint.setText ("SOURCE INSTANCES / up to 8 synths. Each copy keeps its oscillators, FM, wavetable, modulation and FX rack. Load a copy to edit in the main tabs, then save it back with COPY CURRENT.", juce::dontSendNotification);
+        addAndMakeVisible (hint); hint.setText ("INSTANCE RACK / Select EDIT to work on a synth in the tabs above. Changes follow the selected instance automatically. Signal combines top to bottom: Add, Mix, Subtract, Multiply or protected Divide. AMOUNT blends each operation.", juce::dontSendNotification);
         hint.setJustificationType (juce::Justification::topLeft);
+        addAndMakeVisible (editMain); editMain.setButtonText ("EDIT INSTANCE 1 / MAIN"); editMain.onClick = [this] { editInstance (-1); };
         addAndMakeVisible (add); add.setButtonText ("+ ADD CURRENT SYNTH INSTANCE");
         add.onClick = [this] { for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) if (! proc.hasLayer (i)) { proc.captureLayer (i); break; } refresh(); };
         addAndMakeVisible (mainGain); mainGain.setSliderStyle (juce::Slider::LinearHorizontal); mainGain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 24);
-        mainGain.setTooltip ("Current synth level"); mainAttachment = std::make_unique<SliderAttachment> (proc.apvts, "mainLayerGain", mainGain);
-        addAndMakeVisible (mainVisual); mainVisual.parameters = [this] { return proc.getMainVoiceParameters(); };
+        mainGain.setNumDecimalPlacesToDisplay (2); mainGain.setTooltip ("Instance 1 / Main level"); mainAttachment = std::make_unique<SliderAttachment> (proc.apvts, "mainLayerGain", mainGain);
+        mainGain.textFromValueFunction = [] (double value) { return juce::String (value, 2); }; mainGain.updateText();
+        addAndMakeVisible (mainVisual); mainVisual.parameters = [this] { return proc.getCurrentVoiceParameters(); };
         addAndMakeVisible (viewport); viewport.setViewedComponent (&content, false);
         for (size_t i = 0; i < rows.size(); ++i)
         {
             auto& row = rows[i]; content.addAndMakeVisible (row.panel);
             for (auto* c : std::array<juce::Component*, 6> { &row.name, &row.enabled, &row.capture, &row.edit, &row.clear, &row.visual }) row.panel.addAndMakeVisible (*c);
-            row.enabled.setButtonText ("ON"); row.capture.setButtonText ("COPY CURRENT"); row.edit.setButtonText ("LOAD TO EDIT"); row.clear.setButtonText ("REMOVE");
+            row.enabled.setButtonText ("ON"); row.capture.setButtonText ("REPLACE WITH EDITED"); row.edit.setButtonText ("EDIT INSTANCE"); row.clear.setButtonText ("REMOVE");
             const auto prefix = "layer" + juce::String ((int) i + 1);
             row.attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, prefix + "Enabled", row.enabled);
-            const char* suffix[] { "Gain", "Pan", "Tune" }; const char* names[] { "LEVEL", "PAN", "TUNE" };
-            for (int k = 0; k < 3; ++k)
+            row.panel.addAndMakeVisible (row.operation);
+            row.operation.addItemList ({ "Add (+)", "Mix", "Subtract (-)", "Multiply (x)", "Divide (protected)" }, 1);
+            row.operationAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, prefix + "Operation", row.operation);
+            row.operation.setTooltip ("Combine this instance with the accumulated signal above it. Amount 0 bypasses the operation; 1 applies it fully. Divide uses a bounded, regularised denominator.");
+            const char* suffix[] { "Gain", "Pan", "Tune", "Amount" }; const char* names[] { "LEVEL", "PAN", "TUNE", "AMOUNT" };
+            for (int k = 0; k < 4; ++k)
             {
                 auto& slider = row.controls[(size_t) k]; row.panel.addAndMakeVisible (slider); row.panel.addAndMakeVisible (row.labels[(size_t) k]); row.labels[(size_t) k].setText (names[k], juce::dontSendNotification);
-                slider.setSliderStyle (juce::Slider::LinearHorizontal); slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 18);
+                slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); slider.setNumDecimalPlacesToDisplay (2); slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 18);
                 if (k == 2) slider.setTextValueSuffix (" st");
                 row.attachments[(size_t) k] = std::make_unique<SliderAttachment> (proc.apvts, prefix + suffix[k], slider);
+                slider.textFromValueFunction = [k] (double value) { return juce::String (value, 2) + (k == 2 ? " st" : ""); };
+                slider.updateText();
             }
             row.capture.onClick = [this, i] { proc.captureLayer ((int) i); refresh(); };
-            row.edit.onClick = [this, i] { proc.loadLayerToMain ((int) i); };
+            row.edit.onClick = [this, i] { editInstance ((int) i); };
             row.clear.onClick = [this, i] { proc.clearLayer ((int) i); refresh(); };
             row.visual.parameters = [this, i] { auto p = proc.getLayerParameters ((int) i); return p ? *p : VoiceParameters {}; };
         }
@@ -72,8 +80,9 @@ public:
     void resized() override
     {
         auto r = getLocalBounds().reduced (14); hint.setBounds (r.removeFromTop (60));
+        editMain.setBounds (r.removeFromTop (30).reduced (2));
         auto controls = r.removeFromTop (30); add.setBounds (controls.removeFromLeft (controls.getWidth() * 2 / 3).reduced (2)); mainGain.setBounds (controls.reduced (2));
-        mainVisual.setBounds (r.removeFromTop (110)); r.removeFromTop (6); viewport.setBounds (r); layoutRows();
+        mainVisual.setBounds (r.removeFromTop (65)); r.removeFromTop (6); viewport.setBounds (r); layoutRows();
     }
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -82,14 +91,22 @@ private:
     {
         juce::Component panel; juce::Label name; SynthInstanceVisual visual;
         juce::ToggleButton enabled; juce::TextButton capture, edit, clear;
-        std::array<juce::Slider, 3> controls; std::array<juce::Label, 3> labels;
+        std::array<juce::Slider, 4> controls; std::array<juce::Label, 4> labels;
+        juce::ComboBox operation; std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> operationAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
-        std::array<std::unique_ptr<SliderAttachment>, 3> attachments;
+        std::array<std::unique_ptr<SliderAttachment>, 4> attachments;
     };
-    juce::Label hint; juce::TextButton add; juce::Slider mainGain; SynthInstanceVisual mainVisual;
+    juce::Label hint; juce::TextButton add, editMain; juce::Slider mainGain; SynthInstanceVisual mainVisual;
     std::unique_ptr<SliderAttachment> mainAttachment;
     juce::Component content; juce::Viewport viewport;
     std::array<Row, VoiceParameters::extraLayerCount> rows;
+    void editInstance (int index)
+    {
+        proc.selectEditingLayer (index);
+        for (auto* c = getParentComponent(); c != nullptr; c = c->getParentComponent())
+            if (auto* tabs = dynamic_cast<juce::TabbedComponent*> (c)) { tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("SYNTH")); break; }
+        refresh();
+    }
     void timerCallback() override { refresh(); }
     void refresh()
     {
@@ -97,6 +114,8 @@ private:
         for (size_t i = 0; i < rows.size(); ++i)
         {
             const bool present = proc.hasLayer ((int) i); auto& row = rows[i]; row.panel.setVisible (present); available |= ! present;
+            const juce::uint32 colours[] { 0xffffbd65, 0xffc9a0ff, 0xff78f1c4, 0xffff91b8, 0xffa6cf75, 0xff94aaff, 0xffff9673 };
+            row.name.setColour (juce::Label::textColourId, juce::Colour (colours[i])); row.edit.setToggleState (proc.getEditingLayer() == (int) i, juce::dontSendNotification);
             row.name.setText ("SYNTH " + juce::String ((int) i + 2) + " / " + proc.getLayerName ((int) i), juce::dontSendNotification); row.visual.repaint();
         }
         add.setEnabled (available); mainVisual.repaint(); layoutRows();
@@ -106,12 +125,12 @@ private:
         int y = 0; const int width = juce::jmax (360, viewport.getWidth() - 16);
         for (auto& row : rows) if (row.panel.isVisible())
         {
-            row.panel.setBounds (0, y, width, 220); y += 230;
+            row.panel.setBounds (0, y, width, 248); y += 260;
             auto r = row.panel.getLocalBounds(); row.name.setBounds (r.removeFromTop (23));
             auto buttons = r.removeFromTop (30); row.enabled.setBounds (buttons.removeFromLeft (60)); const int w = buttons.getWidth() / 3;
             row.capture.setBounds (buttons.removeFromLeft (w).reduced (2)); row.edit.setBounds (buttons.removeFromLeft (w).reduced (2)); row.clear.setBounds (buttons.reduced (2));
-            row.visual.setBounds (r.removeFromTop (110)); const int cw = r.getWidth() / 3;
-            for (int k = 0; k < 3; ++k) { auto c = r.removeFromLeft (cw).reduced (2); row.labels[(size_t) k].setBounds (c.removeFromTop (18)); row.controls[(size_t) k].setBounds (c); }
+            row.operation.setBounds (r.removeFromTop (30).reduced (2)); row.visual.setBounds (r.removeFromTop (58)); const int cw = r.getWidth() / 4;
+            for (int k = 0; k < 4; ++k) { auto c = r.removeFromLeft (cw).reduced (2); row.labels[(size_t) k].setBounds (c.removeFromTop (18)); row.controls[(size_t) k].setBounds (c); }
         }
         content.setSize (width, juce::jmax (y, viewport.getHeight()));
     }

@@ -23,11 +23,20 @@ public:
         setColour (juce::PopupMenu::highlightedBackgroundColourId, findColour (primaryLed).withAlpha (0.18f));
     }
     int getTabButtonBestWidth (juce::TabBarButton& button, int) override
-    { return std::max (72, button.getButtonText().length() * 9 + 26); }
+    { return std::max (46, button.getButtonText().length() * 7 + 18); }
+    void drawTabButton (juce::TabBarButton& button, juce::Graphics& g, bool over, bool down) override
+    {
+        auto r = button.getLocalBounds().toFloat().reduced (1, 2);
+        const auto accent = button.getTabBackgroundColour().brighter (0.82f);
+        g.setColour (button.getToggleState() ? button.getTabBackgroundColour() : juce::Colour (0xff142028));
+        g.fillRoundedRectangle (r, 4);
+        if (button.getToggleState() || over) { g.setColour (accent); g.fillRect (r.getX() + 4, r.getBottom() - 3, r.getWidth() - 8, 2.0f); }
+        drawTabButtonText (button, g, over, down);
+    }
     void drawTabButtonText (juce::TabBarButton& button, juce::Graphics& g, bool, bool) override
     {
-        g.setColour (button.getToggleState() ? findColour (primaryLed) : juce::Colour (0xffb9c8c8));
-        g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        g.setColour (button.getToggleState() ? button.getTabBackgroundColour().brighter (0.82f) : juce::Colour (0xffb9c8c8));
+        g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
         g.drawFittedText (button.getButtonText(), button.getActiveArea().reduced (3, 0), juce::Justification::centred, 1);
     }
     RetroLookAndFeel()
@@ -187,37 +196,12 @@ public:
         if (highlighted) c = c.brighter (0.10f);
         if (down) c = c.darker (0.20f);
 
-        // Raised hardware switch body.
-        g.setColour (juce::Colour (0xa0000000));
-        g.fillRoundedRectangle (bounds.translated (0.0f, 2.3f), 5.0f);
-        g.setGradientFill (juce::ColourGradient (c.brighter (0.08f), bounds.getTopLeft(),
-                                                 c.darker (0.18f), bounds.getBottomRight(), false));
-        g.fillRoundedRectangle (bounds, 5.0f);
-        g.setColour (juce::Colour (0xffffffff).withAlpha (0.08f));
-        g.drawLine (bounds.getX() + 5.0f, bounds.getY() + 1.5f, bounds.getRight() - 5.0f, bounds.getY() + 1.5f, 1.0f);
-
         const bool active = button.getToggleState() || down;
-        const auto ledColour = active ? findColour (primaryLed)
-                                      : (highlighted ? findColour (secondaryLed) : juce::Colour (0xff44514f));
-        auto led = juce::Rectangle<float> (bounds.getX() + 10.0f, bounds.getCentreY() - 3.0f, 6.0f, 6.0f);
-        if (active || highlighted)
-        {
-            g.setColour (ledColour.withAlpha (active ? 0.28f : 0.16f));
-            g.fillEllipse (led.expanded (5.0f));
-            g.setColour (ledColour.withAlpha (active ? 0.18f : 0.10f));
-            g.fillEllipse (led.expanded (8.0f));
-        }
-        g.setColour (juce::Colour (0xff07100e));
-        g.fillEllipse (led.expanded (1.5f));
-        g.setColour (ledColour);
-        g.fillEllipse (led);
-        g.setColour (juce::Colour (0xffffffff).withAlpha (0.45f));
-        g.fillEllipse (led.withSizeKeepingCentre (2.0f, 2.0f).translated (-1.0f, -1.0f));
-
-        g.setColour (active ? findColour (primaryLed).withAlpha (0.7f) : (highlighted ? findColour (secondaryLed).withAlpha (0.7f) : juce::Colour (0xff4a585c)));
-        g.drawRoundedRectangle (bounds, 5.0f, active ? 1.5f : 1.0f);
+        g.setColour (active ? findColour (primaryLed).withAlpha (0.14f) : c);
+        g.fillRoundedRectangle (bounds, 5.0f);
+        g.setColour (active ? findColour (primaryLed) : highlighted ? juce::Colour (0xff688698) : juce::Colour (0xff354955));
+        g.drawRoundedRectangle (bounds, 5.0f, 1.0f);
     }
-
     void drawButtonText (juce::Graphics& g, juce::TextButton& button,
                          bool highlighted, bool down) override
     {
@@ -232,7 +216,7 @@ public:
         else if (highlighted || down) textColour = textColour.brighter (0.10f);
         g.setColour (textColour);
 
-        const int leftInset = button.getWidth() >= 76 ? 22 : 5;
+        const int leftInset = 4;
         g.drawFittedText (button.getButtonText(), button.getLocalBounds().withTrimmedLeft (leftInset).reduced (4, 2),
                           juce::Justification::centred, 1);
     }

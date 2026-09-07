@@ -87,7 +87,7 @@ std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::extract (co
     if (endSec <= startSec) return {};
     const int64 startSample = (int64) std::llround (startSec * sr);
     const int64 endSample = juce::jmin (reader->lengthInSamples, (int64) std::llround (endSec * sr));
-    const int readSamples = (int) juce::jmin<int64> (endSample - startSample, (int64) sr * 6);
+    const int readSamples = (int) std::min<int64> (endSample - startSample, (int64) sr * 6);
     if (readSamples < period * 2 + 2) return {};
     juce::AudioBuffer<float> audio ((int) juce::jmax ((unsigned int) 1, reader->numChannels), readSamples);
     if (! reader->read (&audio, 0, readSamples, startSample, true, true)) return {};
@@ -177,7 +177,7 @@ std::shared_ptr<ReferenceWavetableData> ReferenceWavetableExtractor::importSet (
     // 512 source frames at the largest supported cycle size is already far beyond
     // what the five-frame internal representation needs while keeping imports bounded.
     constexpr int maxImportedSamples = 4096 * 512;
-    const int readSamples = (int) juce::jmin<int64> (reader->lengthInSamples, maxImportedSamples);
+    const int readSamples = (int) std::min<int64> (reader->lengthInSamples, maxImportedSamples);
     juce::AudioBuffer<float> audio ((int) juce::jmax ((unsigned int) 1, reader->numChannels), readSamples);
     if (! reader->read (&audio, 0, readSamples, 0, true, true)) return {};
     return importSetFromBuffer (audio, reader->sampleRate, sourceFrameSize, description);

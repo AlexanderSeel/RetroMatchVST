@@ -115,6 +115,8 @@ struct VoiceParameters
     static constexpr int extraLayerCount = 7;
     std::array<std::shared_ptr<const VoiceParameters>, extraLayerCount> layers {};
     std::array<float, extraLayerCount> layerGain {{ 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f }}, layerPan {}, layerTune {};
+    std::array<int, extraLayerCount> layerOperation {};
+    std::array<float, extraLayerCount> layerAmount {{ 1, 1, 1, 1, 1, 1, 1 }};
     float mainLayerGain = 1.0f;
 };
 

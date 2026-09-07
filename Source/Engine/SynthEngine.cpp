@@ -717,8 +717,25 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
         for (int ch = 0; ch < audio.getNumChannels(); ++ch)
         {
             const float balance = ch == 0 ? juce::jmin (1.0f, 1.0f - pan) : juce::jmin (1.0f, 1.0f + pan);
-            audio.addFrom (ch, 0, layerScratch, ch, 0, audio.getNumSamples(),
-                           juce::jlimit (0.0f, 1.0f, current.layerGain[i]) * balance);
+            const float gain = juce::jlimit (0.0f, 1.0f, current.layerGain[i]) * balance;
+            const float amount = juce::jlimit (0.0f, 1.0f, current.layerAmount[i]);
+            auto* output = audio.getWritePointer (ch);
+            const auto* input = layerScratch.getReadPointer (ch);
+            for (int n = 0; n < audio.getNumSamples(); ++n)
+            {
+                const float a = output[n], b = input[n] * gain;
+                float combined = a + b;
+                switch (current.layerOperation[i])
+                {
+                    case 1: combined = b; break; // crossfade
+                    case 2: combined = a - b; break;
+                    case 3: combined = a * b; break;
+                    // Regularised division is continuous at zero and bounded.
+                    case 4: combined = std::tanh (a * b / (b * b + 0.01f)); break;
+                    default: break;
+                }
+                output[n] = a + amount * (combined - a);
+            }
         }
     }
 }

@@ -92,6 +92,27 @@ int main (int argc, char** argv)
             envelopes |= variation.mseg.enabled;
         }
         if (! routes || ! modules || ! envelopes) return fail ("matcher failed to explore routes, FX and MSEG topology");
+        if (factoryPresetCatalog.size() != 110) return fail ("factory catalog must contain 110 presets");
+        auto combined = makeFactoryPreset (0);
+        combined.layers[0] = std::make_shared<VoiceParameters> (makeFactoryPreset (2));
+        const auto additive = OfflineRenderer::renderPatch (combined, 22050, 0.5f, 220);
+        auto bypass = combined; bypass.layers.fill (nullptr);
+        const auto original = OfflineRenderer::renderPatch (bypass, 22050, 0.5f, 220);
+        for (int operation = 0; operation < 5; ++operation)
+        {
+            combined.layerOperation[0] = operation; combined.layerAmount[0] = 0;
+            if (maxDifference (original, OfflineRenderer::renderPatch (combined, 22050, 0.5f, 220)) > 1.0e-6f)
+                return fail ("zero combination amount must bypass every operation");
+            combined.layerAmount[0] = 1;
+            const auto processed = OfflineRenderer::renderPatch (combined, 22050, 0.5f, 220);
+            if (! finiteAudio (processed)) return fail ("combination generated non-finite audio");
+            if (operation > 0 && maxDifference (additive, processed) < 0.001f)
+                return fail ("combination mode has no audible effect");
+        }
+        combined.layerOperation[0] = 4; combined.layerGain[0] = 0;
+        const auto dividedBySilence = OfflineRenderer::renderPatch (combined, 22050, 0.5f, 220);
+        if (! finiteAudio (dividedBySilence) || dividedBySilence.getMagnitude (0, dividedBySilence.getNumSamples()) > 1)
+            return fail ("division by silence must remain bounded");
         for (int i = 0; i < (int) factoryPresetCatalog.size(); ++i)
         {
             const auto audio = OfflineRenderer::renderPatch (makeFactoryPreset (i), 22050, 0.65f, 220);

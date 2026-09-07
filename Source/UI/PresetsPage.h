@@ -22,12 +22,19 @@ public:
             proc.noteOnFromEditor (60, 0.75f); auditionUntil = juce::Time::getMillisecondCounterHiRes() + 1200;
         };
         save.onClick = [this] { choose (true); }; open.onClick = [this] { choose (false); };
+        addAndMakeVisible (search); search.setTextToShowWhenEmpty ("Search presets...", juce::Colours::grey);
+        addAndMakeVisible (category); category.addItem ("All types", 1);
+        juce::StringArray types;
+        for (const auto& preset : factoryPresetCatalog) types.addIfNotAlreadyThere (preset.category);
+        types.sort (true); category.addItemList (types, 2); category.addItem ("User", types.size() + 2);
+        category.setSelectedId (1); category.onChange = [this] { filter(); }; search.onTextChange = [this] { filter(); };
         rescan(); list.selectRow (0); refreshCurrent(); startTimerHz (10);
     }
     ~PresetsPage() override { if (auditionUntil > 0) proc.noteOffFromEditor (60); }
     void resized() override
     {
         auto r = getLocalBounds().reduced (16); current.setBounds (r.removeFromTop (30)); r.removeFromTop (8);
+        auto filters = r.removeFromTop (34); category.setBounds (filters.removeFromRight (180).reduced (2)); search.setBounds (filters.reduced (2)); r.removeFromTop (8);
         auto actions = r.removeFromTop (34); const int w = actions.getWidth() / 3;
         load.setBounds (actions.removeFromLeft (w).reduced (2)); save.setBounds (actions.removeFromLeft (w).reduced (2)); open.setBounds (actions.reduced (2));
         r.removeFromTop (8); auto bottom = r.removeFromBottom (36);
@@ -38,17 +45,42 @@ public:
     void paint (juce::Graphics& g) override { g.fillAll (juce::Colour (0xff101719)); }
 private:
     RetroMatchSynthAudioProcessor& proc; juce::ListBox list;
+    juce::TextEditor search; juce::ComboBox category; std::vector<int> visibleRows;
     juce::Label description, current; SynthInstanceVisual visual;
     juce::TextButton load, save, open, randomize, audition;
     juce::Array<juce::File> userFiles; std::unique_ptr<juce::FileChooser> chooser;
     double auditionUntil = 0;
     juce::File directory() const { return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("RetroMatch/Presets"); }
-    void rescan() { userFiles = directory().findChildFiles (juce::File::findFiles, false, "*.xml"); list.updateContent(); }
-    int getNumRows() override { return (int) factoryPresetCatalog.size() + userFiles.size(); }
+    void rescan() { userFiles = directory().findChildFiles (juce::File::findFiles, false, "*.xml"); filter(); }
+    void filter()
+    {
+        visibleRows.clear();
+        for (int i = 0; i < (int) factoryPresetCatalog.size() + userFiles.size(); ++i)
+        {
+            const bool factory = i < (int) factoryPresetCatalog.size();
+            const auto name = factory ? factoryPresetCatalog[(size_t) i].name : userFiles[i - (int) factoryPresetCatalog.size()].getFileNameWithoutExtension();
+            const auto type = factory ? factoryPresetCatalog[(size_t) i].category : juce::String ("User");
+            if ((category.getSelectedId() == 1 || type == category.getText()) && (name + " " + type).containsIgnoreCase (search.getText())) visibleRows.push_back (i);
+        }
+        std::stable_sort (visibleRows.begin(), visibleRows.end(), [] (int a, int b)
+        {
+            const auto count = (int) factoryPresetCatalog.size();
+            if (a >= count || b >= count) return a < b;
+            const auto& left = factoryPresetCatalog[(size_t) a]; const auto& right = factoryPresetCatalog[(size_t) b];
+            const int categoryOrder = left.category.compareIgnoreCase (right.category);
+            return categoryOrder == 0 ? left.name.compareIgnoreCase (right.name) < 0 : categoryOrder < 0;
+        });
+        list.deselectAllRows(); list.updateContent();
+        if (! visibleRows.empty()) list.selectRow (0);
+        else description.setText ("No presets match this filter.", juce::dontSendNotification);
+        load.setEnabled (! visibleRows.empty());
+    }
+    int getNumRows() override { return (int) visibleRows.size(); }
     void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
     {
         if (row < 0 || row >= getNumRows()) return;
         if (selected) { g.setColour (findColour (RetroLookAndFeel::primaryLed).withAlpha (0.15f)); g.fillRect (0, 0, width, height); }
+        row = visibleRows[(size_t) row];
         const bool factory = row < (int) factoryPresetCatalog.size();
         g.setColour (findColour (RetroLookAndFeel::primaryLed)); g.setFont (14);
         g.drawText (factory ? factoryPresetCatalog[(size_t) row].name : userFiles[row - (int) factoryPresetCatalog.size()].getFileNameWithoutExtension(), 8, 3, width - 16, 22, juce::Justification::centredLeft);
@@ -57,13 +89,15 @@ private:
     }
     void selectedRowsChanged (int row) override
     {
-        if (row >= 0 && row < (int) factoryPresetCatalog.size()) description.setText (factoryPresetCatalog[(size_t) row].description, juce::dontSendNotification);
+        if (row < 0 || row >= getNumRows()) return;
+        row = visibleRows[(size_t) row];
+        if (row < (int) factoryPresetCatalog.size()) description.setText (factoryPresetCatalog[(size_t) row].description, juce::dontSendNotification);
         else description.setText ("Your saved synth instances, wavetables, modulation and FX chain.", juce::dontSendNotification);
     }
     void listBoxItemDoubleClicked (int, const juce::MouseEvent&) override { loadSelected(); }
     void loadSelected()
     {
-        const int row = list.getSelectedRow(); if (row < 0 || row >= getNumRows()) return;
+        int row = list.getSelectedRow(); if (row < 0 || row >= getNumRows()) return; row = visibleRows[(size_t) row];
         if (row < (int) factoryPresetCatalog.size()) proc.loadFactoryPreset (row);
         else if (! proc.loadPreset (userFiles[row - (int) factoryPresetCatalog.size()])) description.setText ("Could not load this preset.", juce::dontSendNotification);
         refreshCurrent();

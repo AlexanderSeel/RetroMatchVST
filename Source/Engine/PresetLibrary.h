@@ -1,8 +1,9 @@
 #pragma once
 #include "SynthEngine.h"
 
-struct FactoryPresetInfo { const char* name; const char* category; const char* description; };
-inline constexpr std::array<FactoryPresetInfo, 10> factoryPresetCatalog {{
+struct FactoryPresetInfo { juce::String name, category, description; };
+inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
+    std::vector<FactoryPresetInfo> catalog {
     { "Pure Sub", "Bass", "A clean sine foundation with a short, controlled release." },
     { "Copper Bass", "Bass", "Resonant square bass with envelope movement and pre-filter saturation." },
     { "Glass Keys", "Keys", "Six-operator FM with a bright attack and a small echo." },
@@ -13,10 +14,53 @@ inline constexpr std::array<FactoryPresetInfo, 10> factoryPresetCatalog {{
     { "Dust Circuit", "Texture", "Noise, ring modulation and a bit-crushed post chain." },
     { "Liquid Lead", "Lead", "Expressive filter modulation with flanging and soft saturation." },
     { "Room Piano", "Keys", "Soft FM keys with compression and a short room." }
-}};
+    };
+    const juce::StringArray families { "Bass", "Keys", "Pluck", "Pad", "Sequence", "Texture", "Lead", "Bell", "Drone", "Layered pad" };
+    const juce::StringArray names { "Obsidian", "Aurora", "Velvet", "Prism", "Ember", "Satellite", "Tidal", "Neon", "Polar", "Solstice" };
+    for (int family = 0; family < 10; ++family)
+        for (int variation = 0; variation < 10; ++variation)
+            catalog.push_back ({ names[variation] + " " + families[family], families[family],
+                families[family] + " / " + juce::String (variation >= 5 ? 2 + variation % 3 : 1) + " instances. "
+                + "Voiced with tuned oscillators, envelope movement and complementary spatial effects."
+                + (variation >= 5 ? " Layer controls shape the ordered combination; edit each instance independently." : "") });
+    return catalog;
+}();
 
 inline VoiceParameters makeFactoryPreset (int index)
 {
+    if (index >= 10)
+    {
+        const int family = juce::jlimit (0, 9, (index - 10) / 10), variation = (index - 10) % 10;
+        const int seeds[] { 1, 9, 3, 4, 6, 7, 8, 2, 4, 5 };
+        auto p = makeFactoryPreset (seeds[family]);
+        p.layers.fill (nullptr);
+        const float t = variation / 9.0f;
+        p.osc1Wave = variation % 4; p.osc2Wave = (variation + 1) % 4;
+        p.osc2Mix = 0.08f + t * 0.22f; p.osc2Detune = 2 + variation;
+        p.cutoff = (family == 0 ? 450.0f : 1800.0f) * (1.0f + t * 2.5f);
+        p.resonance = 0.08f + t * 0.26f;
+        p.outputGainDb = variation >= 5 ? -15.0f : -11.0f;
+        p.extraLfoRate[0] = 0.08f + t * (family == 4 ? 7.0f : 1.2f);
+        p.moduleModSlots[1] = { (int) ModSource::lfo2, (int) ModDestination::cutoff, 0.08f + t * 0.2f };
+        if (family == 7) { p.fmOpRatio[1] = 2.1f + t * 3.3f; p.decay = 1.4f + t; p.release = 0.9f; }
+        if (family == 8) { p.attack = 1.0f + t * 2; p.release = 2.5f; p.noiseMix = 0.02f + t * 0.04f; }
+        p.fxModules[2] = { 9, 1, false, 0.25f + t * 0.35f, 0.5f, 0.45f, family == 0 ? 0.04f : 0.12f + t * 0.16f };
+        if (variation >= 5)
+            for (int layer = 0; layer < 1 + variation % 3; ++layer)
+            {
+                auto companion = std::make_shared<VoiceParameters> (makeFactoryPreset ((seeds[family] + layer + 2) % 10));
+                companion->layers.fill (nullptr); companion->outputGainDb = -12;
+                companion->attack = p.attack * (1.0f + 0.4f * layer);
+                companion->cutoff = p.cutoff * (0.7f + layer * 0.35f);
+                p.layers[(size_t) layer] = companion;
+                p.layerGain[(size_t) layer] = 0.3f + t * 0.15f;
+                p.layerPan[(size_t) layer] = layer % 2 == 0 ? -0.35f : 0.35f;
+                p.layerTune[(size_t) layer] = layer == 0 ? -12.0f : layer == 1 ? 12.0f : 7.0f;
+                p.layerOperation[(size_t) layer] = family == 5 ? 3 : family == 8 ? 2 : 0;
+                p.layerAmount[(size_t) layer] = family == 5 ? 0.35f : 0.75f;
+            }
+        return p;
+    }
     VoiceParameters p; p.osc2Mix = 0; p.outputGainDb = -9; p.release = 0.2f;
     auto fx = [&p] (int slot, int type, float amount, float rate, float feedback, float mix, int stage = 0)
     { p.fxModules[(size_t) slot] = { type, stage, false, amount, rate, feedback, mix }; };

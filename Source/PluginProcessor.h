@@ -94,6 +94,9 @@ public:
     void captureLayer (int index);
     void clearLayer (int index);
     bool loadLayerToMain (int index);
+    void selectEditingLayer (int index);
+    void refreshEditingLayer();
+    int getEditingLayer() const { return editingLayer.load(); }
     bool hasLayer (int index) const;
     juce::String getLayerName (int index) const;
     std::shared_ptr<const VoiceParameters> getLayerParameters (int index) const
@@ -131,7 +134,7 @@ public:
     VoiceParameters getCurrentVoiceParameters() const { return readParams(); }
     VoiceParameters getMainVoiceParameters() const
     {
-        auto p = readParams(); p.layers.fill (nullptr); p.mainLayerGain = 1.0f; return p;
+        auto p = readParams ({}, false); p.layers.fill (nullptr); p.mainLayerGain = 1.0f; return p;
     }
 
     bool savePreset (const juce::File&);
@@ -175,7 +178,13 @@ private:
     float detectedReferenceHz = 0.0f;
     float detectedReferencePitchConfidence = 0.0f;
 
-    VoiceParameters readParams (const juce::ValueTree& snapshot = {}) const;
+    std::atomic<int> editingLayer { -1 };
+    std::atomic<std::shared_ptr<const VoiceParameters>> editingMain;
+    juce::ValueTree editingMainSnapshot;
+    juce::ValueTree snapshotCurrent() const;
+    juce::ValueTree canonicalState();
+    void applyEditingSnapshot (const juce::ValueTree&);
+    VoiceParameters readParams (const juce::ValueTree& snapshot = {}, bool routed = true) const;
     void restoreLayers();
     void applyPresetParameters (const VoiceParameters&, const juce::String& name);
     void updateCandidatePreview (const MatchResult&);

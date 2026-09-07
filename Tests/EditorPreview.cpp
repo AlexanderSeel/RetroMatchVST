@@ -1,5 +1,6 @@
 #include "../Source/PluginProcessor.h"
 #include "../Source/Engine/PresetLibrary.h"
+#include "../Source/UI/ReferenceRegion.h"
 #include <iostream>
 
 int main (int argc, char** argv)
@@ -62,6 +63,19 @@ int main (int argc, char** argv)
         || ! restored->hasUserWavetable() || restored->getCurrentVoiceParameters().distortionMode != 1) return 19;
     if (restored->getCurrentVoiceParameters().fxModules[1].type != 8
         || restored->getCurrentVoiceParameters().moduleModSlots[0].source != 7) return 29;
+    const float originalCutoff = restored->getMainVoiceParameters().cutoff;
+    restored->selectEditingLayer (0);
+    auto* cutoff = restored->apvts.getParameter ("cutoff");
+    cutoff->setValueNotifyingHost (cutoff->convertTo0to1 (1234.0f));
+    restored->refreshEditingLayer();
+    if (std::abs (restored->getCurrentVoiceParameters().cutoff - originalCutoff) > 0.1f
+        || std::abs (restored->getLayerParameters (0)->cutoff - 1234.0f) > 0.1f) return 40;
+    juce::MemoryBlock editingState; restored->getStateInformation (editingState);
+    restored->setStateInformation (editingState.getData(), (int) editingState.getSize());
+    if (restored->getEditingLayer() != -1 || std::abs (restored->getMainVoiceParameters().cutoff - originalCutoff) > 0.1f
+        || std::abs (restored->getLayerParameters (0)->cutoff - 1234.0f) > 0.1f) return 41;
+    restored->selectEditingLayer (0); restored->selectEditingLayer (-1);
+    if (std::abs (restored->getMainVoiceParameters().cutoff - originalCutoff) > 0.1f) return 42;
     const auto preset = directory.getChildFile ("layers-test.xml");
     if (! processor->savePreset (preset)) return 20;
     restored->clearLayer (0); restored->clearLayer (1);
@@ -111,7 +125,24 @@ int main (int argc, char** argv)
         return juce::PNGImageFormat().writeImageToStream (image, *output);
     };
     if (! capture ("01-synth-mint")) return 6;
-    tabs->setCurrentTabIndex (7);
+    ReferenceRegion* handles = nullptr;
+    for (auto* child : editor->getChildren()) if (auto* region = dynamic_cast<ReferenceRegion*> (child)) handles = region;
+    if (! handles) return 43;
+    const auto mouseAt = [&] (double seconds)
+    {
+        const juce::Point<float> position (8.0f + (float) (seconds / 2.4) * (handles->getWidth() - 16.0f), 36.0f);
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), position, juce::ModifierKeys::leftButtonModifier,
+            1, 0, 0, 0, 0, handles, handles, juce::Time::getCurrentTime(), position, juce::Time::getCurrentTime(), 1, true);
+    };
+    handles->mouseDown (mouseAt (0.15)); handles->mouseDrag (mouseAt (0.25)); handles->mouseUp (mouseAt (0.25));
+    if (std::abs (processor->getAnalysisStartSeconds() - 0.25f) > 0.008f) return 44;
+    handles->mouseDown (mouseAt (0.4)); handles->mouseDrag (mouseAt (0.8)); handles->mouseUp (mouseAt (0.8));
+    if (std::abs (processor->getAnalysisEndSeconds() - 0.8f) > 0.008f) return 45;
+    processor->selectEditingLayer (0);
+    tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("SYNTH"));
+    if (! capture ("10-selected-instance")) return 46;
+    processor->selectEditingLayer (-1);
+    tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("SIGNAL"));
     for (int block = 0; block < 40; ++block)
     {
         juce::AudioBuffer<float> audio (2, 256); juce::MidiBuffer midi;
@@ -120,7 +151,7 @@ int main (int argc, char** argv)
         juce::MessageManager::getInstance()->runDispatchLoopUntil (4);
     }
     if (! capture ("02-signal-mint")) return 7;
-    tabs->setCurrentTabIndex (8);
+    tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("MELODY"));
     bool foundLightSwitch = false;
     for (int i = 0; i < editor->getNumChildComponents(); ++i)
         if (auto* button = dynamic_cast<juce::TextButton*> (editor->getChildComponent (i)))
@@ -128,7 +159,7 @@ int main (int argc, char** argv)
     if (! foundLightSwitch) return 12;
     if (! capture ("03-melody-amber")) return 8;
     if (processor->lightPalette.load() != 1) return 13;
-    auto* melodyPage = tabs->getTabContentComponent (8);
+    auto* melodyPage = tabs->getTabContentComponent (tabs->getTabNames().indexOf ("MELODY"));
     juce::TextButton* melodyPlay = nullptr;
     for (auto* child : melodyPage->getChildren())
         if (auto* button = dynamic_cast<juce::TextButton*> (child))
@@ -156,12 +187,27 @@ int main (int argc, char** argv)
     tabs = nullptr;
     for (auto* child : editor->getChildren()) if (auto* found = dynamic_cast<juce::TabbedComponent*> (child)) tabs = found;
     if (! tabs) return 24;
-    tabs->setCurrentTabIndex (4); if (! capture ("05-distortion-minimum")) return 25;
+    tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("FX")); if (! capture ("05-distortion-minimum")) return 25;
     tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("LAYERS")); if (! capture ("06-layers-minimum")) return 26;
-    tabs->setCurrentTabIndex (3); if (! capture ("07-modulators-minimum")) return 30;
+    tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("MOD")); if (! capture ("07-modulators-minimum")) return 30;
     tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("WAVETABLE")); if (! capture ("08-wavetable-minimum")) return 31;
     tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("PRESETS")); if (! capture ("09-presets-minimum")) return 32;
     auto* presetPage = tabs->getCurrentContentComponent();
+    juce::TextEditor* search = nullptr; juce::ComboBox* type = nullptr; juce::ListBox* presetList = nullptr;
+    for (auto* child : presetPage->getChildren())
+    {
+        if (auto* text = dynamic_cast<juce::TextEditor*> (child)) search = text;
+        if (auto* choice = dynamic_cast<juce::ComboBox*> (child)) type = choice;
+        if (auto* list = dynamic_cast<juce::ListBox*> (child)) presetList = list;
+    }
+    if (! search || ! type || ! presetList) return 47;
+    search->setText ("Aurora"); search->onTextChange();
+    for (int i = 0; i < type->getNumItems(); ++i) if (type->getItemText (i) == "Bass") type->setSelectedItemIndex (i, juce::sendNotificationSync);
+    if (presetList->getModel()->getNumRows() != 1) return 48;
+    if (! capture ("11-filtered-presets")) return 49;
+    search->setText ("no-preset-matches-this"); search->onTextChange();
+    if (presetList->getModel()->getNumRows() != 0) return 50;
+    search->clear(); search->onTextChange(); type->setSelectedId (1, juce::sendNotificationSync);
     juce::TextButton* randomize = nullptr;
     for (auto* child : presetPage->getChildren())
         if (auto* button = dynamic_cast<juce::TextButton*> (child)) if (button->getButtonText() == "RANDOMIZE NEW PATCH") randomize = button;

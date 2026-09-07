@@ -123,6 +123,7 @@ void RetroMatchSynthAudioProcessorEditor::CandidateButton::paintButton (juce::Gr
     g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
     g.drawText (hasResult ? scoreText (result.similarity.total) : "--", getWidth() - 82, 5, 70, 24, juce::Justification::centredRight);
 
+    if (getHeight() < 72) return;
     if (! hasResult)
     {
         g.setColour (juce::Colour (0xff657672));
@@ -649,10 +650,32 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
 
     updateAIControlsFromSettings();
 
+    addAndMakeVisible (referenceRegion);
+    referenceRegion.onRegion = [this] (double first, double last, bool commit)
+    {
+        regionStart.setValue (first, juce::dontSendNotification); regionEnd.setValue (last, juce::dontSendNotification);
+        if (commit && applyReferenceRegion.isEnabled()) applyReferenceRegion.onClick();
+    };
+    addAndMakeVisible (instanceContext); addAndMakeVisible (instanceChoice);
+    instanceChoice.onChange = [this] { proc.selectEditingLayer (instanceChoice.getSelectedId() - 2); };
+    addAndMakeVisible (keyboardOctave);
+    for (int octave = 0; octave <= 7; ++octave) keyboardOctave.addItem ("Typing octave " + juce::String (octave) + " (C" + juce::String (octave) + ")", octave + 1);
+    keyboardOctave.setSelectedId (juce::jlimit (1, 8, (int) proc.apvts.state.getProperty ("typingOctave", 4)));
+    typingBaseNote = keyboardOctave.getSelectedId() * 12;
+    keyboardOctave.onChange = [this]
+    {
+        keyboardState.allNotesOff (0); heldTypingKeys.fill (false);
+        typingBaseNote = 12 * keyboardOctave.getSelectedId();
+        proc.apvts.state.setProperty ("typingOctave", keyboardOctave.getSelectedId(), nullptr);
+        keyboard.setLowestVisibleKey (typingBaseNote);
+    };
+    keyboardOctave.setTooltip ("A W S E D F T G Y H U J K O L P ; play chromatically from the selected C. Text fields keep normal typing.");
+    keyboard.clearKeyMappings();
+    setWantsKeyboardFocus (true);
     keyboardState.addListener (this);
-    keyboard.setAvailableRange (36, 96);
+    keyboard.setAvailableRange (0, 127); keyboard.setLowestVisibleKey (typingBaseNote);
     keyboard.setKeyWidth (22.0f);
-    keyboard.setScrollButtonsVisible (false);
+    keyboard.setScrollButtonsVisible (true); keyboard.setOctaveForMiddleC (4);
     keyboard.setColour (juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour (0xffd8d7cf));
     keyboard.setColour (juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour (0xff202528));
     keyboard.setColour (juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colour (0xff596266));
@@ -673,7 +696,7 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
 
 RetroMatchSynthAudioProcessorEditor::~RetroMatchSynthAudioProcessorEditor()
 {
-    stopTimer();
+    stopTimer(); proc.selectEditingLayer (-1);
     if (worker != nullptr)
     {
         worker->signalThreadShouldExit();
@@ -827,6 +850,7 @@ void RetroMatchSynthAudioProcessorEditor::addKnob (const juce::String& id, const
 
     attachments.push_back (std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, id, *knob));
     knob->textFromValueFunction = [decimals, suffix] (double value) { return juce::String (value, decimals) + suffix; };
+    knob->updateText();
     knobIds.push_back (id);
     knobs.push_back (std::move (knob));
     labels.push_back (std::move (label));
@@ -1102,24 +1126,25 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     if (keyboardVisible)
     {
         auto keyboardArea = outer.removeFromBottom (112);
+        keyboardOctave.setBounds (keyboardArea.removeFromLeft (175).reduced (4, 36));
         keyboard.setBounds (keyboardArea.reduced (2, 5));
-        keyboard.setKeyWidth (keyboard.getWidth() / 36.0f);
+        keyboard.setKeyWidth (keyboard.getWidth() / 28.0f); keyboard.setLowestVisibleKey (typingBaseNote);
         outer.removeFromBottom (5);
     }
-    else keyboard.setBounds (0, 0, 0, 0);
+    else { keyboard.setBounds (0, 0, 0, 0); keyboardOctave.setBounds (0, 0, 0, 0); }
 
-    const int workspaceWidth = juce::jlimit (410, 530, (int) std::round (outer.getWidth() * 0.35));
+    const int workspaceWidth = juce::jlimit (360, 440, (int) std::round (outer.getWidth() * 0.28));
     workspaceBounds = outer.removeFromLeft (workspaceWidth).reduced (0, 0);
     outer.removeFromLeft (10);
+    auto contextRow = outer.removeFromTop (34); instanceChoice.setBounds (contextRow.removeFromRight (220).reduced (2)); instanceContext.setBounds (contextRow.reduced (6, 0)); outer.removeFromTop (6);
     tabs.setBounds (outer);
 
     auto w = workspaceBounds.reduced (12);
     load.setBounds (w.removeFromTop (34));
     w.removeFromTop (5);
 
-    auto pitchRow = w.removeFromTop (30);
-    const int pitchInfoW = juce::jlimit (150, 230, pitchRow.getWidth() / 2);
-    referencePitchInfo.setBounds (pitchRow.removeFromLeft (pitchInfoW));
+    referencePitchInfo.setBounds (w.removeFromTop (18));
+    auto pitchRow = w.removeFromTop (28);
     referenceBaseNoteLabel.setBounds (pitchRow.removeFromLeft (62));
     referenceBaseNoteChoice.setBounds (pitchRow.removeFromLeft (92).reduced (2, 1));
     resetReferencePitch.setBounds (pitchRow.reduced (2, 1));
@@ -1144,9 +1169,14 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     auto tableActions = w.removeFromTop (27);
     createReferenceTable.setBounds (tableActions.removeFromLeft (tableActions.getWidth() / 2).reduced (2));
     chopReferenceTable.setBounds (tableActions.reduced (2)); w.removeFromTop (3);
-    const int analyzerHeight = juce::jlimit (90, 220, (int) std::round (w.getHeight() * 0.22));
-    analyzerBounds = w.removeFromTop (analyzerHeight); w.removeFromTop (5);
-    pipelineBounds = w.removeFromTop (32); w.removeFromTop (5);
+    referenceRegion.setBounds (w.removeFromTop (88)); w.removeFromTop (4);
+    if (workspaceBounds.getHeight() >= 660)
+    {
+        const int analyzerHeight = juce::jlimit (70, 170, (int) std::round (w.getHeight() * 0.18));
+        analyzerBounds = w.removeFromTop (analyzerHeight); w.removeFromTop (5);
+        pipelineBounds = w.removeFromTop (26); w.removeFromTop (5);
+    }
+    else { analyzerBounds = {}; pipelineBounds = {}; }
 
     auto actionRow = w.removeFromTop (32);
     const int buttonW = actionRow.getWidth() / 3;
@@ -1345,7 +1375,7 @@ void RetroMatchSynthAudioProcessorEditor::startVariantSearch (WorkMode mode)
             const auto hint = aiSettings.configurationHint();
             status.setText (hint, juce::dontSendNotification);
             setAILog ("AI CONFIGURATION ERROR\n" + hint);
-            tabs.setCurrentTabIndex (6);
+            tabs.setCurrentTabIndex (tabs.getTabNames().indexOf ("AI LOG"));
             return;
         }
 
@@ -1477,7 +1507,7 @@ void RetroMatchSynthAudioProcessorEditor::finishVariantSearch (std::array<MatchR
     if (error.isNotEmpty())
     {
         status.setText ("AI match failed. Open AI LOG for the complete error and provider response.", juce::dontSendNotification);
-        tabs.setCurrentTabIndex (6);
+        tabs.setCurrentTabIndex (tabs.getTabNames().indexOf ("AI LOG"));
         updateAIStatus();
         return;
     }
@@ -1651,6 +1681,22 @@ void RetroMatchSynthAudioProcessorEditor::rebindFmOperatorEditor()
 void RetroMatchSynthAudioProcessorEditor::timerCallback()
 {
     updateLightPalette();
+    updateTypingKeyboard(); proc.refreshEditingLayer();
+    const int selected = proc.getEditingLayer();
+    const juce::uint32 colours[] { 0xff73d8ff, 0xffffbd65, 0xffc9a0ff, 0xff78f1c4, 0xffff91b8, 0xffa6cf75, 0xff94aaff, 0xffff9673 };
+    const auto accent = juce::Colour (colours[juce::jlimit (0, 7, selected + 1)]);
+    instanceContext.setText ("EDITING  /  INSTANCE " + juce::String (selected + 2) + (selected < 0 ? "  •  MAIN" : "  •  Changes saved automatically"), juce::dontSendNotification);
+    instanceContext.setColour (juce::Label::textColourId, accent);
+    int mask = 0;
+    for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) if (proc.hasLayer (i)) mask |= 1 << i;
+    if (mask != displayedLayerMask)
+    {
+        displayedLayerMask = mask;
+        instanceChoice.clear (juce::dontSendNotification); instanceChoice.addItem ("Instance 1 / Main", 1);
+        for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) if (proc.hasLayer (i)) instanceChoice.addItem ("Instance " + juce::String (i + 2), i + 2);
+    }
+    instanceChoice.setSelectedId (selected + 2, juce::dontSendNotification);
+    for (int i = 0; i < tabs.getNumTabs(); ++i) tabs.setTabBackgroundColour (i, accent.darker (0.82f));
     const float start = proc.getAnalysisStartSeconds();
     const float end = proc.getAnalysisEndSeconds() > 0 ? proc.getAnalysisEndSeconds() : proc.getReferenceAnalysisDuration();
     if (start != shownRegionStart || end != shownRegionEnd)
@@ -1661,6 +1707,7 @@ void RetroMatchSynthAudioProcessorEditor::timerCallback()
         shownRegionStart = start; shownRegionEnd = end;
     }
     const bool canSelect = proc.hasReferenceSample() && ! (worker && worker->isThreadRunning());
+    referenceRegion.setEnabled (canSelect); referenceRegion.update (proc.getReferenceFile(), regionStart.getValue(), regionEnd.getValue());
     regionStart.setEnabled (canSelect); regionEnd.setEnabled (canSelect);
     applyReferenceRegion.setEnabled (canSelect); createReferenceTable.setEnabled (canSelect); chopReferenceTable.setEnabled (canSelect);
     progressDisplay = matchProgress.load();
@@ -1708,4 +1755,25 @@ void RetroMatchSynthAudioProcessorEditor::handleNoteOn (juce::MidiKeyboardState*
 void RetroMatchSynthAudioProcessorEditor::handleNoteOff (juce::MidiKeyboardState*, int, int midiNoteNumber, float velocity)
 {
     proc.noteOffFromEditor (midiNoteNumber, velocity);
+}
+
+void RetroMatchSynthAudioProcessorEditor::updateTypingKeyboard()
+{
+    auto* focus = juce::Component::getCurrentlyFocusedComponent();
+    bool textInput = false;
+    for (auto* c = focus; c != nullptr; c = c->getParentComponent())
+        if (dynamic_cast<juce::TextEditor*> (c) != nullptr) textInput = true;
+    const bool active = juce::Process::isForegroundProcess() && (hasKeyboardFocus (true) || isMouseOver (true)) && ! textInput;
+    const int keys[] { 'A', 'W', 'S', 'E', 'D', 'F', 'T', 'G', 'Y', 'H', 'U', 'J', 'K', 'O', 'L', 'P', ';' };
+    const bool shortcut = juce::ModifierKeys::getCurrentModifiersRealtime().isAnyModifierKeyDown();
+    for (size_t i = 0; i < heldTypingKeys.size(); ++i)
+    {
+        const bool down = active && ! shortcut && juce::KeyPress::isKeyCurrentlyDown (keys[i]);
+        if (down != heldTypingKeys[i])
+        {
+            if (down) keyboardState.noteOn (1, typingBaseNote + (int) i, 0.8f);
+            else keyboardState.noteOff (1, typingBaseNote + (int) i, 0.0f);
+            heldTypingKeys[i] = down;
+        }
+    }
 }

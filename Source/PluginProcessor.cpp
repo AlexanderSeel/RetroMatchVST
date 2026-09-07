@@ -45,14 +45,15 @@ public:
             tabbed->addTab ("MSEG", juce::Colour (0xff10201d), new MsegPage (proc.apvts), true);
             tabbed->addTab ("WAVETABLE", juce::Colour (0xff101b20), new UserWavetablePage (proc), true);
             tabbed->addTab ("MIDI MAP", juce::Colour (0xff171b20), new MidiMappingPage (proc), true);
-            tabbed->addTab ("LAYERS", juce::Colour (0xff101719), new LayersPage (proc), true);
-            tabbed->addTab ("PRESETS", juce::Colour (0xff101719), new PresetsPage (proc), true);
             auto* builtInFx = tabbed->getTabContentComponent (4);
             tabbed->removeTab (4);
             tabbed->addTab ("FX", juce::Colour (0xff101719), new FxRackPage (proc, builtInFx), true, 4);
             auto* builtInMod = tabbed->getTabContentComponent (3);
             tabbed->removeTab (3);
             tabbed->addTab ("MOD", juce::Colour (0xff101719), new ModulatorsPage (proc, builtInMod), true, 3);
+            tabbed->addTab ("LAYERS", juce::Colour (0xff101719), new LayersPage (proc), true, 0);
+            tabbed->addTab ("PRESETS", juce::Colour (0xff101719), new PresetsPage (proc), true, 1);
+            tabbed->setCurrentTabIndex (0);
         }
         resized();
     }
@@ -112,6 +113,7 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
         const auto prefix = "layer" + juce::String (i);
         setDefault (prefix + "Enabled", false); setDefault (prefix + "Gain", 0.5f);
         setDefault (prefix + "Pan", 0.0f); setDefault (prefix + "Tune", 0.0f);
+        setDefault (prefix + "Operation", 0); setDefault (prefix + "Amount", 1.0f);
     }
 
     const std::array<float, MsegParameters::pointCount> levels {{ 0.0f, 1.0f, 0.78f, 0.58f, 0.28f, 0.0f }};
@@ -178,7 +180,7 @@ bool RetroMatchSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
     return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
-VoiceParameters RetroMatchSynthAudioProcessor::readParams (const juce::ValueTree& snapshot) const
+VoiceParameters RetroMatchSynthAudioProcessor::readParams (const juce::ValueTree& snapshot, bool routed) const
 {
     VoiceParameters p;
     auto v = [this, &snapshot] (const juce::String& id)
@@ -318,8 +320,19 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams (const juce::ValueTree
             p.layerGain[(size_t) i] = v (prefix + "Gain");
             p.layerPan[(size_t) i] = v (prefix + "Pan");
             p.layerTune[(size_t) i] = v (prefix + "Tune");
+            p.layerOperation[(size_t) i] = (int) v (prefix + "Operation");
+            p.layerAmount[(size_t) i] = v (prefix + "Amount");
         }
     }
+    if (routed && ! snapshot.isValid())
+        if (auto main = editingMain.load())
+        {
+            auto mixed = *main;
+            mixed.layers = p.layers; mixed.mainLayerGain = p.mainLayerGain; mixed.oversamplingQuality = p.oversamplingQuality;
+            mixed.layerGain = p.layerGain; mixed.layerPan = p.layerPan; mixed.layerTune = p.layerTune;
+            mixed.layerOperation = p.layerOperation; mixed.layerAmount = p.layerAmount;
+            return mixed;
+        }
     return p;
 }
 
@@ -522,17 +535,74 @@ juce::String RetroMatchSynthAudioProcessor::getLayerName (int index) const
     return apvts.state.getChildWithName ("SYNTH_LAYERS").getChildWithProperty ("index", index)["name"].toString();
 }
 
-void RetroMatchSynthAudioProcessor::captureLayer (int index)
+juce::ValueTree RetroMatchSynthAudioProcessor::snapshotCurrent() const
 {
-    if (! juce::isPositiveAndBelow (index, VoiceParameters::extraLayerCount)) return;
     juce::ValueTree snapshot ("LAYER");
     for (auto* parameter : getParameters())
         if (auto* identified = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
             snapshot.setProperty (identified->paramID, apvts.getRawParameterValue (identified->paramID)->load(), nullptr);
-    snapshot.setProperty ("index", index, nullptr);
-    snapshot.setProperty ("name", loadedSampleName.isEmpty() ? "Current patch" : loadedSampleName + " / " + juce::String (getAnalysisStartSeconds(), 2) + " s", nullptr);
     if (referenceWavetable) snapshot.setProperty ("referenceTable", referenceWavetable->toBase64(), nullptr);
     if (userWavetable) snapshot.setProperty ("userTable", userWavetable->toBase64(), nullptr);
+    snapshot.setProperty ("userTableName", userWavetableName, nullptr);
+    snapshot.setProperty ("userTableDescription", userWavetableDescription, nullptr);
+    return snapshot;
+}
+
+void RetroMatchSynthAudioProcessor::refreshEditingLayer()
+{
+    const int index = editingLayer.load();
+    if (index >= 0)
+        savedLayers[(size_t) index].store (std::make_shared<VoiceParameters> (getMainVoiceParameters()));
+}
+
+void RetroMatchSynthAudioProcessor::selectEditingLayer (int index)
+{
+    if (index == editingLayer.load() || (index >= 0 && ! hasLayer (index))) return;
+    if (editingLayer.load() >= 0)
+    {
+        const int previous = editingLayer.exchange (-1);
+        const auto id = "layer" + juce::String (previous + 1) + "Enabled";
+        const float enabled = apvts.getRawParameterValue (id)->load();
+        captureLayer (previous);
+        apvts.getParameter (id)->setValueNotifyingHost (enabled);
+        applyEditingSnapshot (editingMainSnapshot);
+        editingMain.store (nullptr);
+    }
+    if (index >= 0)
+    {
+        editingMainSnapshot = snapshotCurrent();
+        editingMain.store (std::make_shared<VoiceParameters> (getMainVoiceParameters()));
+        loadLayerToMain (index);
+        editingLayer.store (index);
+    }
+}
+
+juce::ValueTree RetroMatchSynthAudioProcessor::canonicalState()
+{
+    auto state = apvts.copyState();
+    const int index = editingLayer.load();
+    if (index < 0) return state;
+    auto bank = state.getOrCreateChildWithName ("SYNTH_LAYERS", nullptr);
+    auto previous = bank.getChildWithProperty ("index", index);
+    auto snapshot = snapshotCurrent();
+    snapshot.setProperty ("index", index, nullptr);
+    snapshot.setProperty ("name", previous["name"], nullptr);
+    bank.removeChild (previous, nullptr); bank.appendChild (snapshot, nullptr);
+    for (auto child : state)
+    {
+        const auto id = child["id"].toString();
+        if (! id.startsWith ("layer") && id != "mainLayerGain" && id != "oversamplingQuality" && editingMainSnapshot.hasProperty (id))
+            child.setProperty ("value", editingMainSnapshot[id], nullptr);
+    }
+    return state;
+}
+
+void RetroMatchSynthAudioProcessor::captureLayer (int index)
+{
+    if (! juce::isPositiveAndBelow (index, VoiceParameters::extraLayerCount)) return;
+    auto snapshot = snapshotCurrent();
+    snapshot.setProperty ("index", index, nullptr);
+    snapshot.setProperty ("name", loadedSampleName.isEmpty() ? "Current patch" : loadedSampleName + " / " + juce::String (getAnalysisStartSeconds(), 2) + " s", nullptr);
     auto bank = apvts.state.getOrCreateChildWithName ("SYNTH_LAYERS", nullptr);
     auto previous = bank.getChildWithProperty ("index", index);
     if (previous.isValid()) bank.removeChild (previous, nullptr);
@@ -544,6 +614,7 @@ void RetroMatchSynthAudioProcessor::captureLayer (int index)
 
 void RetroMatchSynthAudioProcessor::clearLayer (int index)
 {
+    if (editingLayer.load() == index) selectEditingLayer (-1);
     if (! juce::isPositiveAndBelow (index, VoiceParameters::extraLayerCount)) return;
     auto bank = apvts.state.getChildWithName ("SYNTH_LAYERS");
     auto previous = bank.getChildWithProperty ("index", index);
@@ -556,22 +627,28 @@ bool RetroMatchSynthAudioProcessor::loadLayerToMain (int index)
 {
     if (! hasLayer (index)) return false;
     auto snapshot = apvts.state.getChildWithName ("SYNTH_LAYERS").getChildWithProperty ("index", index);
+    applyEditingSnapshot (snapshot);
+    return true;
+}
+
+void RetroMatchSynthAudioProcessor::applyEditingSnapshot (const juce::ValueTree& snapshot)
+{
     for (auto* parameter : getParameters())
         if (auto* identified = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
-            if (! identified->paramID.startsWith ("layer") && identified->paramID != "mainLayerGain" && snapshot.hasProperty (identified->paramID))
+            if (! identified->paramID.startsWith ("layer") && identified->paramID != "mainLayerGain" && identified->paramID != "oversamplingQuality" && snapshot.hasProperty (identified->paramID))
             {
                 auto* ranged = apvts.getParameter (identified->paramID);
                 ranged->setValueNotifyingHost (ranged->convertTo0to1 ((float) snapshot[identified->paramID]));
             }
     referenceWavetable = ReferenceWavetableData::fromBase64 (snapshot["referenceTable"].toString());
     userWavetable = ReferenceWavetableData::fromBase64 (snapshot["userTable"].toString());
-    userWavetableName = userWavetable ? getLayerName (index) : juce::String {};
-    userWavetableDescription = userWavetable ? "Stored layer wavetable" : juce::String {};
-    return true;
+    userWavetableName = userWavetable ? snapshot.getProperty ("userTableName", snapshot["name"]).toString() : juce::String {};
+    userWavetableDescription = userWavetable ? snapshot.getProperty ("userTableDescription", "Stored layer wavetable").toString() : juce::String {};
 }
 
 void RetroMatchSynthAudioProcessor::restoreLayers()
 {
+    editingLayer.store (-1); editingMain.store (nullptr); editingMainSnapshot = {};
     const auto bank = apvts.state.getChildWithName ("SYNTH_LAYERS");
     for (int i = 0; i < VoiceParameters::extraLayerCount; ++i)
     {
@@ -946,11 +1023,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
         l.add (std::make_unique<C> (prefix + "Dest", prefix + " Destination", actualModDestinations, 0));
         l.add (std::make_unique<P> (prefix + "Amount", prefix + " Amount", juce::NormalisableRange<float> (-1, 1), 0.0f));
     }
+    // Append new controls to preserve all existing host parameter indices.
+    for (int i = 1; i <= VoiceParameters::extraLayerCount; ++i)
+    {
+        const auto prefix = "layer" + juce::String (i);
+        l.add (std::make_unique<C> (prefix + "Operation", prefix + " Combine", juce::StringArray { "Add", "Mix", "Subtract", "Multiply", "Divide" }, 0));
+        l.add (std::make_unique<P> (prefix + "Amount", prefix + " Combine Amount", juce::NormalisableRange<float> (0, 1), 1.0f));
+    }
     return l;
 }
 
 void RetroMatchSynthAudioProcessor::applyPresetParameters (const VoiceParameters& parameters, const juce::String& name)
 {
+    selectEditingLayer (-1);
     melodyTransport.stop(); setReferenceAuditionMode (ReferenceAuditionMode::synthOnly);
     for (auto* parameter : getParameters())
         if (auto* identified = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
@@ -962,7 +1047,7 @@ void RetroMatchSynthAudioProcessor::applyPresetParameters (const VoiceParameters
             MatchResult layer; layer.params = *parameters.layers[(size_t) i]; applyMatchResult (layer); captureLayer (i);
             const auto prefix = "layer" + juce::String (i + 1);
             auto set = [this, &prefix] (const char* suffix, float value) { auto* p = apvts.getParameter (prefix + suffix); p->setValueNotifyingHost (p->convertTo0to1 (value)); };
-            set ("Gain", parameters.layerGain[(size_t) i]); set ("Pan", parameters.layerPan[(size_t) i]); set ("Tune", parameters.layerTune[(size_t) i]);
+            set ("Gain", parameters.layerGain[(size_t) i]); set ("Pan", parameters.layerPan[(size_t) i]); set ("Tune", parameters.layerTune[(size_t) i]); set ("Operation", (float) parameters.layerOperation[(size_t) i]); set ("Amount", parameters.layerAmount[(size_t) i]);
         }
     MatchResult main; main.params = parameters; applyMatchResult (main);
     apvts.getParameter ("distortionMode")->setValueNotifyingHost (apvts.getParameter ("distortionMode")->convertTo0to1 ((float) parameters.distortionMode));
@@ -988,15 +1073,19 @@ void RetroMatchSynthAudioProcessor::randomizePreset()
 
 bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
 {
-    auto xml = apvts.copyState().createXml();
+    const auto main = editingMain.load();
+    const auto storedReference = main ? main->referenceWavetable : referenceWavetable;
+    const auto storedUser = main ? main->userWavetable : userWavetable;
+
+    auto xml = canonicalState().createXml();
     if (! xml) return false;
     xml->setAttribute ("presetVersion", "1.3");
-    if (referenceWavetable && referenceWavetable->valid) xml->setAttribute ("referenceWavetable", referenceWavetable->toBase64());
-    if (userWavetable && userWavetable->valid)
+    if (storedReference && storedReference->valid) xml->setAttribute ("referenceWavetable", storedReference->toBase64());
+    if (storedUser && storedUser->valid)
     {
-        xml->setAttribute ("userWavetable", userWavetable->toBase64());
-        xml->setAttribute ("userWavetableName", userWavetableName);
-        xml->setAttribute ("userWavetableDescription", userWavetableDescription);
+        xml->setAttribute ("userWavetable", storedUser->toBase64());
+        xml->setAttribute ("userWavetableName", main ? editingMainSnapshot["userTableName"].toString() : userWavetableName);
+        xml->setAttribute ("userWavetableDescription", main ? editingMainSnapshot["userTableDescription"].toString() : userWavetableDescription);
     }
     xml->setAttribute ("product", "RetroMatchSynth");
     xml->setAttribute ("analysisStartSeconds", (double) analysisStartSeconds.load());
@@ -1047,16 +1136,20 @@ bool RetroMatchSynthAudioProcessor::exportPreviewWav (const juce::File& file, fl
 
 void RetroMatchSynthAudioProcessor::getStateInformation (juce::MemoryBlock& d)
 {
-    if (auto xml = apvts.copyState().createXml())
+    const auto main = editingMain.load();
+    const auto storedReference = main ? main->referenceWavetable : referenceWavetable;
+    const auto storedUser = main ? main->userWavetable : userWavetable;
+
+    if (auto xml = canonicalState().createXml())
     {
         xml->setAttribute ("lightPalette", lightPalette.load());
-        if (referenceWavetable && referenceWavetable->valid)
-            xml->setAttribute ("referenceWavetable", referenceWavetable->toBase64());
-        if (userWavetable && userWavetable->valid)
+        if (storedReference && storedReference->valid)
+            xml->setAttribute ("referenceWavetable", storedReference->toBase64());
+        if (storedUser && storedUser->valid)
         {
-            xml->setAttribute ("userWavetable", userWavetable->toBase64());
-            xml->setAttribute ("userWavetableName", userWavetableName);
-            xml->setAttribute ("userWavetableDescription", userWavetableDescription);
+            xml->setAttribute ("userWavetable", storedUser->toBase64());
+            xml->setAttribute ("userWavetableName", main ? editingMainSnapshot["userTableName"].toString() : userWavetableName);
+            xml->setAttribute ("userWavetableDescription", main ? editingMainSnapshot["userTableDescription"].toString() : userWavetableDescription);
         }
         xml->setAttribute ("referenceAuditionMode", referenceAuditionMode.load());
         xml->setAttribute ("referenceAuditionLevel", (double) referenceAuditionLevel.load());
