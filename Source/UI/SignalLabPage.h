@@ -272,7 +272,9 @@ private:
                 const juce::Rectangle<float> world (xs[(size_t) stage], y, nodeW, nodeH);
                 if (stage > 0)
                 {
-                    juce::Path wire; wire.startNewSubPath (toScreen ({ xs[(size_t) stage - 1] + nodeW, y + nodeH * 0.5f })); wire.lineTo (toScreen ({ xs[(size_t) stage], y + nodeH * 0.5f }));
+                    juce::Path wire;
+                    wire.startNewSubPath (toScreen (juce::Point<float> { xs[(size_t) stage - 1] + nodeW, y + nodeH * 0.5f }));
+                    wire.lineTo (toScreen (juce::Point<float> { xs[(size_t) stage], y + nodeH * 0.5f }));
                     glow (g, wire, colour.withAlpha (0.6f), juce::jmax (0.8f, graphZoom));
                 }
                 addNode (world, stage == 0 ? (layer < 0 ? "INSTANCE 1 / MAIN" : "INSTANCE " + juce::String (layer + 2)) : stages[stage], details[stage], tabs[stage], layer, colour);
@@ -282,10 +284,20 @@ private:
         const float busX = 860.0f;
         const float firstY = nodeH * 0.5f;
         const float lastY = (instances.size() - 1) * rowGap + nodeH * 0.5f;
-        juce::Path bus; bus.startNewSubPath (toScreen ({ xs.back() + nodeW, firstY })); bus.lineTo (toScreen ({ busX, firstY })); bus.lineTo (toScreen ({ busX, lastY }));
-        for (size_t row = 1; row < instances.size(); ++row) { const float y = row * rowGap + nodeH * 0.5f; bus.startNewSubPath (toScreen ({ xs.back() + nodeW, y })); bus.lineTo (toScreen ({ busX, y })); }
+        juce::Path bus;
+        bus.startNewSubPath (toScreen (juce::Point<float> { xs.back() + nodeW, firstY }));
+        bus.lineTo (toScreen (juce::Point<float> { busX, firstY }));
+        bus.lineTo (toScreen (juce::Point<float> { busX, lastY }));
+        for (size_t row = 1; row < instances.size(); ++row)
+        {
+            const float y = row * rowGap + nodeH * 0.5f;
+            bus.startNewSubPath (toScreen (juce::Point<float> { xs.back() + nodeW, y }));
+            bus.lineTo (toScreen (juce::Point<float> { busX, y }));
+        }
         const float masterY = (firstY + lastY) * 0.5f;
-        bus.startNewSubPath (toScreen ({ busX, masterY })); bus.lineTo (toScreen ({ 888.0f, masterY })); glow (g, bus, led, juce::jmax (1.0f, graphZoom));
+        bus.startNewSubPath (toScreen (juce::Point<float> { busX, masterY }));
+        bus.lineTo (toScreen (juce::Point<float> { 888.0f, masterY }));
+        glow (g, bus, led, juce::jmax (1.0f, graphZoom));
         addNode ({ 888.0f, masterY - nodeH * 0.5f, 118.0f, nodeH }, "MASTER OUT", juce::String (parameter ("outputGain", -3.0f), 1) + " dB", "FX", -2, led);
         addNode ({ 888.0f, masterY + 56.0f, 118.0f, nodeH }, "TEMPO CLOCK", juce::String (proc.getEffectiveBpm(), 1) + " BPM", "MOD", -2, accent);
 
