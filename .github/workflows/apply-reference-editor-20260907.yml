@@ -1,4 +1,4 @@
-name: Apply large reference editor
+name: Apply reference editor and sound designer upgrade
 
 on:
   push:
@@ -15,12 +15,17 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Validate migration script
+
+      - name: Validate migration scripts
         shell: pwsh
-        run: python -m py_compile scripts/apply-reference-editor-20260907.py
-      - name: Apply reference editor migration
+        run: |
+          python -m py_compile scripts/apply-reference-editor-20260907.py
+          python -m py_compile scripts/apply-sound-designer-20260907.py
+
+      - name: Apply large reference editor migration
         shell: pwsh
         run: python scripts/apply-reference-editor-20260907.py
+
       - name: Fix generated MSVC coordinate types
         shell: pwsh
         run: |
@@ -31,6 +36,11 @@ jobs:
           if (-not $text.Contains($old)) { throw 'ReferenceRegion coordinate marker not found.' }
           $text = $text.Replace($old, $new)
           Set-Content -Path $path -Value $text -NoNewline
+
+      - name: Apply professional sound designer migration
+        shell: pwsh
+        run: python scripts/apply-sound-designer-20260907.py
+
       - name: Update selection-aware static contract
         shell: pwsh
         run: |
@@ -41,27 +51,32 @@ jobs:
           if (-not $text.Contains($old)) { throw 'Reference pitch static contract marker not found.' }
           $text = $text.Replace($old, $new)
           Set-Content -Path $path -Value $text -NoNewline
+
       - name: Static source integrity
         shell: pwsh
         run: python scripts/static-check.py
+
       - name: Configure
         shell: pwsh
         run: cmake -S . -B build-reference-editor -A x64 -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON
+
       - name: Build VST3 and Standalone
         shell: pwsh
         run: cmake --build build-reference-editor --config Release --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
+
       - name: Build and run DSP tests
         shell: pwsh
         run: |
           cmake --build build-reference-editor --config Release --target RetroMatchTests --parallel
           ctest --test-dir build-reference-editor -C Release --output-on-failure
-      - name: Commit validated migration and remove one-shot files
+
+      - name: Commit validated migrations and remove one-shot files
         shell: bash
         run: |
           git config user.name "Alexander Seel"
           git config user.email "mr.alexander.seel@gmail.com"
-          git rm .github/workflows/apply-reference-editor-20260907.yml scripts/apply-reference-editor-20260907.py
+          git rm .github/workflows/apply-reference-editor-20260907.yml scripts/apply-reference-editor-20260907.py scripts/apply-sound-designer-20260907.py
           git add -A
           git diff --cached --check
-          git commit -m "Add large reference editor and full-track MIDI analysis"
+          git commit -m "Add reference editor, master mix and professional resynthesis modes"
           git push origin HEAD:main
