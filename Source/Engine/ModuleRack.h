@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include <array>
+#include "TempoSync.h"
 
 // Slot IDs stay fixed for automation. Types may repeat; order is the slot order
 // within each stage. Adding a processor requires a descriptor and a DSP case.
@@ -10,6 +11,10 @@ struct FxModuleParameters
     int type = 0, stage = 0;
     bool bypass = false;
     float amount = 0.5f, rate = 0.25f, feedback = 0.25f, mix = 0.5f;
+
+    // Post-1.0 clock metadata. Free values stay untouched while sync is off.
+    bool tempoSync = false;
+    int tempoDivision = 3; // 1/4
 };
 
 struct FxModuleDescriptor { const char* name; const char* amount; const char* rate; const char* feedback; };
@@ -30,6 +35,22 @@ inline constexpr std::array<FxModuleDescriptor, 14> fxModuleCatalog {{
     { "Compressor", "Threshold", "Attack", "Ratio" }
 }};
 
+inline bool fxModuleCanTempoSync (int type) noexcept
+{
+    switch (type)
+    {
+        case 1: case 2: // filter LFO
+        case 6: case 7: // chorus / flanger
+        case 8:         // delay
+        case 10:        // sample hold
+        case 11:        // tremolo
+        case 12:        // ring modulation frequency
+            return true;
+        default:
+            return false;
+    }
+}
+
 class ModuleRack
 {
 public:
@@ -37,17 +58,22 @@ public:
     {
         sampleRate = sr;
         const juce::dsp::ProcessSpec spec { sr, (juce::uint32) juce::jmax (1, blockSize), (juce::uint32) juce::jmax (1, channels) };
+        const int musicalDelaySamples = (int) std::ceil (sr * (TempoSync::seconds ((int) TempoSync::divisionNames.size() - 1, 40.0f) + 0.1f));
         for (auto& m : modules)
         {
             m.filter.prepare (spec); m.chorus.prepare (spec); m.compressor.prepare (spec);
-            m.delay.setMaximumDelayInSamples ((int) (sr * 2.1)); m.delay.prepare (spec);
+            m.delay.setMaximumDelayInSamples (juce::jmax (1, musicalDelaySamples)); m.delay.prepare (spec);
             m.reverb.setSampleRate (sr); m.dry.setSize (channels, blockSize);
             m.reset();
         }
     }
     void reset() { for (auto& m : modules) m.reset(); }
-    void process (juce::AudioBuffer<float>& audio, const std::array<FxModuleParameters, FxModuleParameters::slotCount>& parameters, int stage)
+    void process (juce::AudioBuffer<float>& audio,
+                  const std::array<FxModuleParameters, FxModuleParameters::slotCount>& parameters,
+                  int stage,
+                  float tempoBpm)
     {
+        const float bpm = TempoSync::clampBpm (tempoBpm);
         for (size_t index = 0; index < modules.size(); ++index)
         {
             const auto& p = parameters[index]; auto& m = modules[index];
@@ -57,13 +83,16 @@ public:
             if (type == 0 || p.bypass || p.stage != stage) continue;
             const float a = juce::jlimit (0.0f, 1.0f, p.amount), r = juce::jlimit (0.0f, 1.0f, p.rate);
             const float f = juce::jlimit (0.0f, 1.0f, p.feedback), mix = juce::jlimit (0.0f, 1.0f, p.mix);
+            const bool synced = p.tempoSync && fxModuleCanTempoSync (type);
+            const float syncedHz = TempoSync::frequencyHz (p.tempoDivision, bpm);
+            const float syncedSeconds = TempoSync::seconds (p.tempoDivision, bpm);
             m.dry.makeCopyOf (audio, true);
             juce::dsp::AudioBlock<float> block (audio); juce::dsp::ProcessContextReplacing<float> context (block);
             if (type == 1 || type == 2)
             {
                 m.filter.setType (type == 1 ? juce::dsp::StateVariableTPTFilterType::lowpass : juce::dsp::StateVariableTPTFilterType::highpass);
                 m.filter.setResonance (0.55f + f * 9.0f);
-                const double hz = 0.05 * std::pow (400.0, r);
+                const double hz = synced ? syncedHz : 0.05 * std::pow (400.0, r);
                 for (int i = 0; i < audio.getNumSamples(); ++i)
                 {
                     const float cutoff = 30.0f * std::pow (600.0f, a) * std::pow (2.0f, 0.5f * (float) std::sin (m.phase));
@@ -74,7 +103,9 @@ public:
             }
             else if (type == 6 || type == 7)
             {
-                m.chorus.setDepth (a); m.chorus.setRate (0.03f + r * 8.0f); m.chorus.setCentreDelay (type == 6 ? 12.0f : 1.5f);
+                m.chorus.setDepth (a);
+                m.chorus.setRate (juce::jlimit (0.01f, 100.0f, synced ? syncedHz : 0.03f + r * 8.0f));
+                m.chorus.setCentreDelay (type == 6 ? 12.0f : 1.5f);
                 m.chorus.setFeedback (f * 0.85f); m.chorus.setMix (1); m.chorus.process (context);
             }
             else if (type == 9)
@@ -93,9 +124,13 @@ public:
             else
             {
                 const float tone = 0.01f + r * 0.98f;
-                const int holdSamples = 1 + (int) (r * 63);
+                const int holdSamples = synced && type == 10
+                                      ? juce::jmax (1, (int) std::lround (syncedSeconds * sampleRate))
+                                      : 1 + (int) (r * 63);
                 const float steps = std::pow (2.0f, 2.0f + a * 14.0f);
-                const double hz = type == 12 ? 10.0 * std::pow (200.0, r) : 0.05 * std::pow (400.0, r);
+                const double freeHz = type == 12 ? 10.0 * std::pow (200.0, r) : 0.05 * std::pow (400.0, r);
+                const double hz = synced && (type == 11 || type == 12) ? syncedHz : freeHz;
+                const float moduleDelaySamples = juce::jmax (1.0f, (float) sampleRate * (synced && type == 8 ? syncedSeconds : (0.01f + a * 1.99f)));
                 for (int i = 0; i < audio.getNumSamples(); ++i)
                 {
                     for (int ch = 0; ch < audio.getNumChannels(); ++ch)
@@ -110,7 +145,7 @@ public:
                         }
                         if (type == 8)
                         {
-                            wet = m.delay.popSample (ch, (float) sampleRate * (0.01f + a * 1.99f));
+                            wet = m.delay.popSample (ch, moduleDelaySamples);
                             m.tone[c] += tone * (wet - m.tone[c]); wet = m.tone[c];
                             m.delay.pushSample (ch, dry + wet * f * 0.90f);
                         }
