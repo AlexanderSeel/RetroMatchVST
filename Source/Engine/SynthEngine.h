@@ -221,7 +221,10 @@ private:
     double sampleRate = 44100.0;
 
     juce::dsp::Chorus<float> chorus;
-    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delay { 192000 };
+    // 5M samples covers the requested 4/1 sync division down to 40 BPM even
+    // at high-rate sessions (about 26 s at 192 kHz). Free-time automation keeps
+    // its historical 20 ms..1.8 s range; only tempo sync can address the extension.
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delay { 5000000 };
     juce::Reverb reverb;
     std::unique_ptr<juce::dsp::Oversampling<float>> driveOversampling2x, driveOversampling4x;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> latencyCompensation { 512 };
