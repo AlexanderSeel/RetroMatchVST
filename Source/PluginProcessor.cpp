@@ -8,10 +8,24 @@
 #include "UI/ModulatorsPage.h"
 #include "Engine/PresetLibrary.h"
 #include "UI/PresetsPage.h"
+#include <algorithm>
 #include <cmath>
 
 namespace
 {
+bool isGlobalRackOrClockParameter (const juce::String& id)
+{
+    if (id.startsWith ("layer") || id == "mainLayerGain" || id == "oversamplingQuality" || id == "resynthInstances")
+        return true;
+    if (id == "tempoSource" || id == "manualBpm" || id == "chorusSync" || id == "chorusDivision"
+        || id == "delaySync" || id == "delayDivision" || id == "msegSync" || id == "msegDivision")
+        return true;
+    for (int i = 1; i <= 4; ++i)
+        if (id == "lfo" + juce::String (i) + "Sync" || id == "lfo" + juce::String (i) + "Division")
+            return true;
+    return false;
+}
+
 class OversamplingQualityEditor final : public RetroMatchSynthAudioProcessorEditor
 {
 public:
@@ -40,9 +54,7 @@ public:
                 }
             }
 
-            // Keep the legacy MOD tab unchanged for automation/UI compatibility and
-            // add post-1.0 editors as dedicated full-size pages.
-            tabbed->addTab ("MSEG", juce::Colour (0xff10201d), new MsegPage (proc.apvts), true);
+            tabbed->addTab ("MSEG", juce::Colour (0xff10201d), new MsegPage (proc), true);
             tabbed->addTab ("WAVETABLE", juce::Colour (0xff101b20), new UserWavetablePage (proc), true);
             tabbed->addTab ("MIDI MAP", juce::Colour (0xff171b20), new MidiMappingPage (proc), true);
             auto* builtInFx = tabbed->getTabContentComponent (4);
@@ -138,6 +150,7 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
         const auto prefix = "fxModule" + juce::String (i);
         setDefault (prefix + "Type", 0); setDefault (prefix + "Stage", 0); setDefault (prefix + "Bypass", false);
         setDefault (prefix + "Amount", 0.5f); setDefault (prefix + "Rate", 0.25f); setDefault (prefix + "Feedback", 0.25f); setDefault (prefix + "Mix", 0.5f);
+        setDefault (prefix + "TempoSync", false); setDefault (prefix + "Division", 3);
     }
     for (int i = 2; i <= 4; ++i)
     {
@@ -147,6 +160,18 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
     {
         const auto prefix = "moduleMod" + juce::String (i); setDefault (prefix + "Source", 0); setDefault (prefix + "Dest", 0); setDefault (prefix + "Amount", 0.0f);
     }
+
+    setDefault ("resynthInstances", 1);
+    setDefault ("tempoSource", 1);
+    setDefault ("manualBpm", 120.0f);
+    for (int i = 1; i <= 4; ++i)
+    {
+        setDefault ("lfo" + juce::String (i) + "Sync", false);
+        setDefault ("lfo" + juce::String (i) + "Division", 3);
+    }
+    setDefault ("chorusSync", false); setDefault ("chorusDivision", 3);
+    setDefault ("delaySync", false); setDefault ("delayDivision", 3);
+    setDefault ("msegSync", false); setDefault ("msegDivision", 3);
     return state;
 }
 }
@@ -279,6 +304,7 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams (const juce::ValueTree
         const auto prefix = "fxModule" + juce::String (i + 1); auto& module = p.fxModules[(size_t) i];
         module.type = (int) v (prefix + "Type"); module.stage = (int) v (prefix + "Stage"); module.bypass = v (prefix + "Bypass") >= 0.5f;
         module.amount = v (prefix + "Amount"); module.rate = v (prefix + "Rate"); module.feedback = v (prefix + "Feedback"); module.mix = v (prefix + "Mix");
+        module.tempoSync = v (prefix + "TempoSync") >= 0.5f; module.tempoDivision = (int) v (prefix + "Division");
     }
     for (int i = 0; i < 3; ++i)
     {
@@ -304,6 +330,18 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams (const juce::ValueTree
     p.reverbDamping = v ("reverbDamping");
     p.stereoWidth = v ("stereoWidth");
     p.outputGainDb = v ("outputGain");
+
+    p.tempoBpm = effectiveBpm.load (std::memory_order_relaxed);
+    for (int i = 0; i < 4; ++i)
+    {
+        const auto prefix = "lfo" + juce::String (i + 1);
+        p.lfoTempoSync[(size_t) i] = v (prefix + "Sync") >= 0.5f;
+        p.lfoTempoDivision[(size_t) i] = (int) v (prefix + "Division");
+    }
+    p.chorusTempoSync = v ("chorusSync") >= 0.5f; p.chorusTempoDivision = (int) v ("chorusDivision");
+    p.delayTempoSync = v ("delaySync") >= 0.5f; p.delayTempoDivision = (int) v ("delayDivision");
+    p.msegTempoSync = v ("msegSync") >= 0.5f; p.msegTempoDivision = (int) v ("msegDivision");
+
     p.oversamplingQuality = juce::jlimit (0, 2, (int) v ("oversamplingQuality"));
     if (snapshot.isValid())
     {
@@ -331,6 +369,7 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams (const juce::ValueTree
             mixed.layers = p.layers; mixed.mainLayerGain = p.mainLayerGain; mixed.oversamplingQuality = p.oversamplingQuality;
             mixed.layerGain = p.layerGain; mixed.layerPan = p.layerPan; mixed.layerTune = p.layerTune;
             mixed.layerOperation = p.layerOperation; mixed.layerAmount = p.layerAmount;
+            mixed.inheritTempoFrom (p);
             return mixed;
         }
     return p;
@@ -381,6 +420,14 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
         if (lock.isLocked()) { renderMidi.addEvents (editorMidi, 0, -1, 0); editorMidi.clear(); }
     }
     melodyTransport.process (renderMidi, b.getNumSamples(), getSampleRate());
+
+    float bpm = apvts.getRawParameterValue ("manualBpm")->load();
+    if (apvts.getRawParameterValue ("tempoSource")->load() >= 0.5f)
+        if (auto* playHead = getPlayHead())
+            if (auto position = playHead->getPosition())
+                if (auto hostBpm = position->getBpm())
+                    bpm = (float) *hostBpm;
+    effectiveBpm.store (TempoSync::clampBpm (bpm), std::memory_order_relaxed);
 
     const auto mode = getReferenceAuditionMode();
     engine.setParameters (readParams());
@@ -552,7 +599,11 @@ void RetroMatchSynthAudioProcessor::refreshEditingLayer()
 {
     const int index = editingLayer.load();
     if (index >= 0)
-        savedLayers[(size_t) index].store (std::make_shared<VoiceParameters> (getMainVoiceParameters()));
+    {
+        auto edited = readParams ({}, false);
+        edited.layers.fill (nullptr); edited.mainLayerGain = 1.0f;
+        savedLayers[(size_t) index].store (std::make_shared<VoiceParameters> (edited));
+    }
 }
 
 void RetroMatchSynthAudioProcessor::selectEditingLayer (int index)
@@ -591,7 +642,7 @@ juce::ValueTree RetroMatchSynthAudioProcessor::canonicalState()
     for (auto child : state)
     {
         const auto id = child["id"].toString();
-        if (! id.startsWith ("layer") && id != "mainLayerGain" && id != "oversamplingQuality" && editingMainSnapshot.hasProperty (id))
+        if (! isGlobalRackOrClockParameter (id) && editingMainSnapshot.hasProperty (id))
             child.setProperty ("value", editingMainSnapshot[id], nullptr);
     }
     return state;
@@ -635,7 +686,7 @@ void RetroMatchSynthAudioProcessor::applyEditingSnapshot (const juce::ValueTree&
 {
     for (auto* parameter : getParameters())
         if (auto* identified = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
-            if (! identified->paramID.startsWith ("layer") && identified->paramID != "mainLayerGain" && identified->paramID != "oversamplingQuality" && snapshot.hasProperty (identified->paramID))
+            if (! isGlobalRackOrClockParameter (identified->paramID) && snapshot.hasProperty (identified->paramID))
             {
                 auto* ranged = apvts.getParameter (identified->paramID);
                 ranged->setValueNotifyingHost (ranged->convertTo0to1 ((float) snapshot[identified->paramID]));
@@ -790,6 +841,7 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
         const auto prefix = "fxModule" + juce::String (i + 1); const auto& module = q.fxModules[(size_t) i];
         set (prefix + "Type", (float) module.type); set (prefix + "Stage", (float) module.stage); set (prefix + "Bypass", module.bypass ? 1.0f : 0.0f);
         set (prefix + "Amount", module.amount); set (prefix + "Rate", module.rate); set (prefix + "Feedback", module.feedback); set (prefix + "Mix", module.mix);
+        set (prefix + "TempoSync", module.tempoSync ? 1.0f : 0.0f); set (prefix + "Division", (float) module.tempoDivision);
     }
     for (int i = 0; i < 3; ++i)
     {
@@ -817,10 +869,61 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
     set ("reverbMix", q.reverbMix); set ("reverbSize", q.reverbSize); set ("reverbDamping", q.reverbDamping);
     set ("stereoWidth", q.stereoWidth); set ("outputGain", q.outputGainDb);
 
-    // Render quality and stored synth instances remain user-authored.
-    // The matcher now applies modulation and module routing from its winning patch.
+    // The winning voice owns voice/module settings. The generated rack lifecycle
+    // is handled separately so selecting/refining a candidate cannot accidentally
+    // inherit unrelated previously loaded synth instances.
     lastMatch = result;
     updateCandidatePreview (result);
+}
+
+void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainResult, int selectedBankIndex)
+{
+    selectEditingLayer (-1);
+    allEditorNotesOff();
+    for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) clearLayer (i);
+
+    applyMatchResult (mainResult);
+    const int totalInstances = juce::jlimit (1, 3, 1 + (int) apvts.getRawParameterValue ("resynthInstances")->load());
+    if (totalInstances > 1 && juce::isPositiveAndBelow (selectedBankIndex, 3))
+    {
+        std::array<int, 2> complement {{ -1, -1 }};
+        int count = 0;
+        for (int candidate = 0; candidate < 3; ++candidate)
+            if (candidate != selectedBankIndex && candidateBank[(size_t) candidate].confidence > 0.0f)
+                complement[(size_t) count++] = candidate;
+
+        if (count == 2 && candidateBank[(size_t) complement[1]].similarity.total > candidateBank[(size_t) complement[0]].similarity.total)
+            std::swap (complement[0], complement[1]);
+
+        const float gains[] { 0.34f, 0.26f };
+        const float amounts[] { 0.70f, 0.55f };
+        const float pans[] { -0.06f, 0.06f };
+        const int wanted = juce::jmin (totalInstances - 1, count);
+        for (int layer = 0; layer < wanted; ++layer)
+        {
+            const int bankIndex = complement[(size_t) layer];
+            applyMatchResult (candidateBank[(size_t) bankIndex]);
+            captureLayer (layer);
+
+            auto bank = apvts.state.getChildWithName ("SYNTH_LAYERS");
+            auto stored = bank.getChildWithProperty ("index", layer);
+            if (stored.isValid())
+                stored.setProperty ("name", "RESYNTH " + juce::String::charToString ((juce_wchar) ('A' + bankIndex)), nullptr);
+
+            const auto prefix = "layer" + juce::String (layer + 1);
+            auto setLayer = [this, &prefix] (const char* suffix, float value)
+            {
+                if (auto* p = apvts.getParameter (prefix + suffix))
+                    p->setValueNotifyingHost (p->convertTo0to1 (value));
+            };
+            setLayer ("Gain", gains[layer]); setLayer ("Pan", pans[layer]); setLayer ("Tune", 0.0f);
+            setLayer ("Operation", 0.0f); setLayer ("Amount", amounts[layer]);
+        }
+    }
+
+    // Capturing the complementary candidates temporarily loaded them into the
+    // main editor. Always restore instance 1 last and make it the reported match.
+    applyMatchResult (mainResult);
 }
 
 void RetroMatchSynthAudioProcessor::updateCandidatePreview (const MatchResult& result)
@@ -832,7 +935,7 @@ MatchResult RetroMatchSynthAudioProcessor::fitReference()
 {
     if (! currentFeatures) return {};
     auto seed = SoundMatcher::initialFit (*currentFeatures);
-    const auto authored = readParams();
+    const auto authored = getMainVoiceParameters();
     seed.params.referenceWavetable = referenceWavetable;
     seed.params.referenceWavetableMix = referenceWavetable && seed.params.osc1Wave != 0 ? 0.32f : 0.0f;
     seed.params.userWavetable = userWavetable;
@@ -840,7 +943,7 @@ MatchResult RetroMatchSynthAudioProcessor::fitReference()
     seed.params.distortionMode = authored.distortionMode; seed.params.distortionMix = authored.distortionMix;
     auto evaluated = SoundMatcher::evaluateFit (*currentFeatures, seed.params);
     evaluated.explanation = seed.explanation + " Initial rendered similarity: " + juce::String (evaluated.similarity.total * 100.0f, 1) + "%";
-    applyMatchResult (evaluated);
+    applyGeneratedRack (evaluated, -1);
     return evaluated;
 }
 
@@ -849,7 +952,7 @@ MatchResult RetroMatchSynthAudioProcessor::refineReference (SoundMatcher::Progre
     if (! currentFeatures) return {};
     const auto settings = matchSettings;
     const auto reference = *currentFeatures;
-    const auto authored = readParams();
+    const auto authored = getMainVoiceParameters();
     auto seed = lastMatch.confidence > 0.0f ? lastMatch.params : SoundMatcher::initialFit (reference).params;
     seed.referenceWavetable = referenceWavetable;
     seed.userWavetable = userWavetable;
@@ -951,7 +1054,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
     l.add (std::make_unique<P> ("stereoWidth", "Stereo Width", juce::NormalisableRange<float> (0, 2), 1.0f));
     l.add (std::make_unique<P> ("outputGain", "Output Gain", juce::NormalisableRange<float> (-18, 6, 0.1f), -3.0f));
 
-    // Existing post-1.0 quality parameter remains first after the frozen v1.0 surface.
     l.add (std::make_unique<C> ("oversamplingQuality", "Nonlinear Oversampling", juce::StringArray { "1x", "2x", "4x" }, 0));
 
     l.add (std::make_unique<B> ("msegEnabled", "MSEG 1 Enabled", false));
@@ -985,7 +1087,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
         l.add (std::make_unique<P> ("modGraph" + index + "Amount", "Graph " + index + " Amount", juce::NormalisableRange<float> (-1, 1), 0));
     }
 
-    // User wavetable is appended after every previously released parameter.
     l.add (std::make_unique<P> ("userWavetableMix", "User Wavetable Mix", juce::NormalisableRange<float> (0, 1), 0.0f));
     l.add (std::make_unique<juce::AudioParameterChoice> ("distortionMode", "Distortion Mode", juce::StringArray { "Soft saturation", "Hard clip", "Sine fold" }, 0));
     l.add (std::make_unique<P> ("distortionMix", "Distortion Mix", juce::NormalisableRange<float> (0, 1), 1.0f));
@@ -1023,12 +1124,35 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
         l.add (std::make_unique<C> (prefix + "Dest", prefix + " Destination", actualModDestinations, 0));
         l.add (std::make_unique<P> (prefix + "Amount", prefix + " Amount", juce::NormalisableRange<float> (-1, 1), 0.0f));
     }
-    // Append new controls to preserve all existing host parameter indices.
     for (int i = 1; i <= VoiceParameters::extraLayerCount; ++i)
     {
         const auto prefix = "layer" + juce::String (i);
         l.add (std::make_unique<C> (prefix + "Operation", prefix + " Combine", juce::StringArray { "Add", "Mix", "Subtract", "Multiply", "Divide" }, 0));
         l.add (std::make_unique<P> (prefix + "Amount", prefix + " Combine Amount", juce::NormalisableRange<float> (0, 1), 1.0f));
+    }
+
+    // Automation-safe append-only clock/resynthesis surface.
+    l.add (std::make_unique<C> ("resynthInstances", "Resynthesis Instances", juce::StringArray { "1 / Single", "2 / Layered", "3 / Deep Layered" }, 1));
+    l.add (std::make_unique<C> ("tempoSource", "Tempo Source", juce::StringArray { "Manual BPM", "DAW Tempo" }, 1));
+    l.add (std::make_unique<P> ("manualBpm", "Manual BPM", juce::NormalisableRange<float> (40.0f, 300.0f, 0.1f), 120.0f));
+    const auto divisions = TempoSync::divisionLabels();
+    for (int i = 1; i <= 4; ++i)
+    {
+        const auto prefix = "lfo" + juce::String (i);
+        l.add (std::make_unique<B> (prefix + "Sync", "LFO " + juce::String (i) + " Tempo Sync", false));
+        l.add (std::make_unique<C> (prefix + "Division", "LFO " + juce::String (i) + " Division", divisions, 3));
+    }
+    l.add (std::make_unique<B> ("chorusSync", "Chorus Tempo Sync", false));
+    l.add (std::make_unique<C> ("chorusDivision", "Chorus Division", divisions, 3));
+    l.add (std::make_unique<B> ("delaySync", "Delay Tempo Sync", false));
+    l.add (std::make_unique<C> ("delayDivision", "Delay Division", divisions, 3));
+    l.add (std::make_unique<B> ("msegSync", "MSEG Tempo Sync", false));
+    l.add (std::make_unique<C> ("msegDivision", "MSEG Division", divisions, 3));
+    for (int i = 1; i <= FxModuleParameters::slotCount; ++i)
+    {
+        const auto prefix = "fxModule" + juce::String (i);
+        l.add (std::make_unique<B> (prefix + "TempoSync", prefix + " Tempo Sync", false));
+        l.add (std::make_unique<C> (prefix + "Division", prefix + " Division", divisions, 3));
     }
     return l;
 }
@@ -1079,7 +1203,7 @@ bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
 
     auto xml = canonicalState().createXml();
     if (! xml) return false;
-    xml->setAttribute ("presetVersion", "1.3");
+    xml->setAttribute ("presetVersion", "1.4");
     if (storedReference && storedReference->valid) xml->setAttribute ("referenceWavetable", storedReference->toBase64());
     if (storedUser && storedUser->valid)
     {
@@ -1189,7 +1313,7 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
 std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildCandidateBank()
 {
     if (! currentFeatures) return {};
-    const auto authored = readParams();
+    const auto authored = getMainVoiceParameters();
     auto base = lastMatch.confidence > 0.0f ? lastMatch.params : authored;
     base.referenceWavetable = referenceWavetable;
     base.userWavetable = userWavetable;
@@ -1201,14 +1325,16 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildCandidateBank()
     seeds[2].supersawMix = juce::jmax (0.16f, base.supersawMix); seeds[2].wavetableMix = juce::jmax (0.20f, base.wavetableMix); seeds[2].referenceWavetableMix *= 0.70f;
     auto settings = matchSettings; settings.iterations = juce::jmax (36, settings.iterations / 2); settings.topologyTrials = juce::jmax (8, settings.topologyTrials / 2);
     for (int i = 0; i < 3; ++i) candidateBank[(size_t) i] = SoundMatcher::refineFit (*currentFeatures, seeds[(size_t) i], settings);
-    selectedCandidate = 0; applyMatchResult (candidateBank[0]);
+    selectedCandidate = 0; applyGeneratedRack (candidateBank[0], 0);
     return candidateBank;
 }
 
 bool RetroMatchSynthAudioProcessor::selectCandidate (int index)
 {
     if (! juce::isPositiveAndBelow (index, 3) || candidateBank[(size_t) index].confidence <= 0.0f) return false;
-    selectedCandidate = index; applyMatchResult (candidateBank[(size_t) index]); return true;
+    selectedCandidate = index;
+    applyGeneratedRack (candidateBank[(size_t) index], index);
+    return true;
 }
 
 void RetroMatchSynthAudioProcessor::morphCandidates (int a, int b, float amount)
@@ -1225,7 +1351,7 @@ void RetroMatchSynthAudioProcessor::morphCandidates (int a, int b, float amount)
     q.attack=mix(x.attack,y.attack); q.decay=mix(x.decay,y.decay); q.sustain=mix(x.sustain,y.sustain); q.release=mix(x.release,y.release);
     q.drive=mix(x.drive,y.drive); q.chorusMix=mix(x.chorusMix,y.chorusMix); q.delayMix=mix(x.delayMix,y.delayMix); q.reverbMix=mix(x.reverbMix,y.reverbMix); q.stereoWidth=mix(x.stereoWidth,y.stereoWidth);
     q.osc1Wave = amount < 0.5f ? x.osc1Wave : y.osc1Wave; q.osc2Wave = amount < 0.5f ? x.osc2Wave : y.osc2Wave; q.fmAlgorithm = amount < 0.5f ? x.fmAlgorithm : y.fmAlgorithm; q.filterType = amount < 0.5f ? x.filterType : y.filterType;
-    const auto authored = readParams();
+    const auto authored = getMainVoiceParameters();
     q.referenceWavetable = referenceWavetable;
     q.userWavetable = userWavetable;
     q.userWavetableMix = authored.userWavetableMix;
