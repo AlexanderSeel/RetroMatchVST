@@ -1,0 +1,49 @@
+name: Validate RM-01 hardware skin
+
+on:
+  push:
+    paths:
+      - '.github/workflows/validate-rm01-hardware-20260907.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  source-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: python3 scripts/static-check.py
+
+  windows:
+    needs: source-check
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -A x64 -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON
+      - name: Build VST3 and Standalone
+        shell: pwsh
+        run: cmake --build build --config Release --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
+      - name: Build and run DSP smoke tests
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target RetroMatchTests --parallel
+          ctest --test-dir build -C Release --output-on-failure
+
+  cleanup:
+    needs: windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Remove one-shot validation workflow
+        shell: bash
+        run: |
+          git config user.name "Alexander Seel"
+          git config user.email "mr.alexander.seel@gmail.com"
+          git rm .github/workflows/validate-rm01-hardware-20260907.yml
+          git commit -m "Remove RM-01 validation workflow"
+          git push origin HEAD:main
