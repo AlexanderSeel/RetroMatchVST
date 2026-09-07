@@ -1,207 +1,101 @@
 #pragma once
 #include <JuceHeader.h>
+#include "Hardware3DKit.h"
 
 class RetroLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
     enum { primaryLed = 0x2400001, secondaryLed, tertiaryLed };
+
     static juce::String paletteName (int index)
-    { return juce::StringArray { "MINT", "AMBER", "ICE", "VIOLET" }[juce::jlimit (0, 3, index)]; }
+    {
+        return juce::StringArray { "MINT", "AMBER", "ICE", "VIOLET" }[juce::jlimit (0, 3, index)];
+    }
+
+    RetroLookAndFeel()
+    {
+        setColour (juce::ResizableWindow::backgroundColourId, juce::Colour (0xff080b0d));
+        setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe0e7e3));
+        setColour (juce::Slider::textBoxBackgroundColourId, juce::Colour (0xff080d0f));
+        setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff35464a));
+        setColour (juce::Slider::trackColourId, juce::Colour (0xff27383d));
+        setColour (juce::Slider::thumbColourId, juce::Colour (0xff76ffe0));
+        setColour (juce::TextButton::buttonColourId, juce::Colour (0xff1d2629));
+        setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff203632));
+        setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe0c97e));
+        setColour (juce::TextButton::textColourOnId, juce::Colour (0xffeafff7));
+        setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff0a1012));
+        setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff43565b));
+        setColour (juce::ComboBox::textColourId, juce::Colour (0xffdce5df));
+        setColour (juce::ComboBox::arrowColourId, juce::Colour (0xff76ffe0));
+        setColour (juce::PopupMenu::backgroundColourId, juce::Colour (0xff0a1012));
+        setColour (juce::PopupMenu::textColourId, juce::Colour (0xffdde5de));
+        setColour (juce::ToggleButton::textColourId, juce::Colour (0xffc8d3cf));
+        setPalette (0);
+    }
+
     void setPalette (int index)
     {
         const juce::uint32 primary[] { 0xff76ffe0, 0xffffbd65, 0xff73d8ff, 0xffc9a0ff };
         const juce::uint32 secondary[] { 0xfff3c077, 0xffa6e08b, 0xffff8da9, 0xff78f1e2 };
         const juce::uint32 tertiary[] { 0xff75cfff, 0xffffe5aa, 0xff96afff, 0xffff91b8 };
-        index = juce::jlimit (0, 3, index);
-        setColour (primaryLed, juce::Colour (primary[index]));
-        setColour (secondaryLed, juce::Colour (secondary[index]));
-        setColour (tertiaryLed, juce::Colour (tertiary[index]));
+
+        paletteIndex = juce::jlimit (0, 3, index);
+        setColour (primaryLed, juce::Colour (primary[paletteIndex]));
+        setColour (secondaryLed, juce::Colour (secondary[paletteIndex]));
+        setColour (tertiaryLed, juce::Colour (tertiary[paletteIndex]));
         setColour (juce::Slider::thumbColourId, findColour (primaryLed));
         setColour (juce::TextButton::textColourOnId, findColour (primaryLed));
         setColour (juce::TextButton::textColourOffId, findColour (secondaryLed));
         setColour (juce::ComboBox::arrowColourId, findColour (primaryLed));
         setColour (juce::PopupMenu::highlightedBackgroundColourId, findColour (primaryLed).withAlpha (0.18f));
     }
+
     int getTabButtonBestWidth (juce::TabBarButton& button, int) override
-    { return std::max (46, button.getButtonText().length() * 7 + 18); }
+    {
+        return std::max (52, button.getButtonText().length() * 7 + 24);
+    }
+
     void drawTabButton (juce::TabBarButton& button, juce::Graphics& g, bool over, bool down) override
     {
-        auto r = button.getLocalBounds().toFloat().reduced (1, 2);
-        const auto accent = button.getTabBackgroundColour().brighter (0.82f);
-        g.setColour (button.getToggleState() ? button.getTabBackgroundColour() : juce::Colour (0xff142028));
-        g.fillRoundedRectangle (r, 4);
-        if (button.getToggleState() || over) { g.setColour (accent); g.fillRect (r.getX() + 4, r.getBottom() - 3, r.getWidth() - 8, 2.0f); }
+        auto r = button.getLocalBounds().toFloat().reduced (1.0f, 2.0f);
+        RetroHardware3D::drawRaisedButton (g, r, palette(), button.getToggleState(), over, down, button.isEnabled());
+
+        if (button.getToggleState())
+        {
+            g.setColour (findColour (primaryLed));
+            g.fillRoundedRectangle (r.withTop (r.getBottom() - 3.0f).reduced (7.0f, 0.0f), 1.5f);
+        }
+
         drawTabButtonText (button, g, over, down);
     }
-    void drawTabButtonText (juce::TabBarButton& button, juce::Graphics& g, bool, bool) override
+
+    void drawTabButtonText (juce::TabBarButton& button, juce::Graphics& g, bool over, bool down) override
     {
-        g.setColour (button.getToggleState() ? button.getTabBackgroundColour().brighter (0.82f) : juce::Colour (0xffb9c8c8));
-        g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
-        g.drawFittedText (button.getButtonText(), button.getActiveArea().reduced (3, 0), juce::Justification::centred, 1);
-    }
-    RetroLookAndFeel()
-    {
-        setColour (juce::ResizableWindow::backgroundColourId, juce::Colour (0xff080b0d));
-        setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe0e7e3));
-        setColour (juce::Slider::textBoxBackgroundColourId, juce::Colour (0xff0a0f11));
-        setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff354246));
-        setColour (juce::Slider::trackColourId, juce::Colour (0xff27383d));
-        setColour (juce::Slider::thumbColourId, juce::Colour (0xff5bc1d9));
-        setColour (juce::TextButton::buttonColourId, juce::Colour (0xff1d2629));
-        setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff4f4329));
-        setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe0c97e));
-        setColour (juce::TextButton::textColourOnId, juce::Colour (0xffffe8a3));
-        setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff101719));
-        setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff37464a));
-        setColour (juce::ComboBox::textColourId, juce::Colour (0xffdce5df));
-        setColour (juce::ComboBox::arrowColourId, juce::Colour (0xffb9c8c2));
-        setColour (juce::PopupMenu::backgroundColourId, juce::Colour (0xff101719));
-        setColour (juce::PopupMenu::textColourId, juce::Colour (0xffdde5de));
-        setPalette (0);
+        auto colour = button.getToggleState() ? findColour (primaryLed) : juce::Colour (0xffc3d0cd);
+        if (over || down) colour = colour.brighter (0.08f);
+        g.setColour (colour);
+        g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+        g.drawFittedText (button.getButtonText(), button.getActiveArea().reduced (5, 1),
+                          juce::Justification::centred, 1);
     }
 
     void drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
                            float start, float end, juce::Slider& slider) override
     {
-        auto available = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (4.0f);
-        const float diameter = juce::jmax (30.0f, juce::jmin (available.getWidth(), available.getHeight()));
-        auto outer = juce::Rectangle<float> (diameter, diameter).withCentre (available.getCentre());
-        const auto centre = outer.getCentre();
-        const float angle = start + pos * (end - start);
-        const bool active = slider.isMouseOverOrDragging();
-        const auto amber = findColour (primaryLed);
-        const auto cyan = findColour (secondaryLed);
-        const auto ledAccent = active ? cyan : amber;
-
-        // Recessed socket shadow: several soft layers give the control physical depth
-        // without relying on platform-specific shadow effects.
-        for (int i = 5; i >= 1; --i)
-        {
-            const float spread = (float) i * 1.25f;
-            g.setColour (juce::Colours::black.withAlpha (0.07f + 0.025f * (float) i));
-            g.fillEllipse (outer.expanded (spread).translated (0.0f, 2.0f + spread * 0.24f));
-        }
-
-        // Machined bezel.
-        auto bezel = outer.reduced (1.5f);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff788185),
-                                                 bezel.getX(), bezel.getY(),
-                                                 juce::Colour (0xff1d2427),
-                                                 bezel.getRight(), bezel.getBottom(), false));
-        g.fillEllipse (bezel);
-        g.setColour (juce::Colour (0xff090c0d));
-        g.drawEllipse (bezel, 1.4f);
-        g.setColour (juce::Colour (0xff9aa2a4).withAlpha (0.34f));
-        g.drawEllipse (bezel.reduced (1.2f), 0.8f);
-
-        // Dark LED trench between bezel and knob body.
-        auto trench = bezel.reduced (4.0f);
-        g.setColour (juce::Colour (0xff080d0f));
-        g.fillEllipse (trench);
-        g.setColour (juce::Colour (0xff29373a));
-        g.drawEllipse (trench, 1.0f);
-
-        // Segmented LED ring. Unlit segments remain visible like real hardware.
-        constexpr int segments = 28;
-        const float ledRadius = trench.getWidth() * 0.5f - 2.4f;
-        const int litSegments = juce::jlimit (0, segments, (int) std::round (pos * (float) segments));
-        for (int i = 0; i < segments; ++i)
-        {
-            const float t0 = (float) i / (float) segments;
-            const float t1 = ((float) i + 0.64f) / (float) segments;
-            const float a0 = start + t0 * (end - start);
-            const float a1 = start + t1 * (end - start);
-            juce::Path segment;
-            segment.addCentredArc (centre.x, centre.y, ledRadius, ledRadius, 0.0f, a0, a1, true);
-            const bool lit = i < litSegments;
-            if (lit)
-            {
-                g.setColour (ledAccent.withAlpha (0.20f));
-                g.strokePath (segment, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            }
-            g.setColour (lit ? ledAccent : juce::Colour (0xff263335));
-            g.strokePath (segment, juce::PathStrokeType (2.25f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-
-        // Raised convex knob body.
-        auto body = trench.reduced (8.2f);
-        g.setColour (juce::Colour (0x80000000));
-        g.fillEllipse (body.translated (0.0f, 2.2f));
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff596266),
-                                                 body.getX() + body.getWidth() * 0.28f,
-                                                 body.getY() + body.getHeight() * 0.20f,
-                                                 juce::Colour (0xff121719),
-                                                 body.getRight() - body.getWidth() * 0.16f,
-                                                 body.getBottom() - body.getHeight() * 0.08f,
-                                                 true));
-        g.fillEllipse (body);
-        // Fine radial grip cuts catch light around the raised metal rim.
-        for (int i = 0; i < 44; ++i)
-        {
-            const float a = i * juce::MathConstants<float>::twoPi / 44.0f;
-            const float radius = body.getWidth() * 0.48f;
-            g.setColour (juce::Colours::white.withAlpha (i < 22 ? 0.11f : 0.035f));
-            g.drawLine (centre.x + std::sin (a) * radius, centre.y + std::cos (a) * radius,
-                        centre.x + std::sin (a) * (radius - 2.5f), centre.y + std::cos (a) * (radius - 2.5f), 0.7f);
-        }
-        g.setColour (juce::Colour (0xff747d80));
-        g.drawEllipse (body, 1.15f);
-        g.setColour (juce::Colour (0xff050708).withAlpha (0.72f));
-        g.drawEllipse (body.reduced (2.2f), 1.1f);
-
-        // Specular reflection along the upper-left quadrant.
-        auto highlight = body.reduced (body.getWidth() * 0.14f);
-        juce::Path shine;
-        shine.addCentredArc (highlight.getCentreX(), highlight.getCentreY(),
-                             highlight.getWidth() * 0.5f, highlight.getHeight() * 0.5f,
-                             0.0f, -2.55f, -0.75f, true);
-        g.setColour (juce::Colour (0xffffffff).withAlpha (active ? 0.20f : 0.12f));
-        g.strokePath (shine, juce::PathStrokeType (1.35f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        // Pointer groove and illuminated insert.
-        juce::Path pointerGroove;
-        const float bodyRadius = body.getWidth() * 0.5f;
-        pointerGroove.addRoundedRectangle (-2.5f, -bodyRadius * 0.82f, 5.0f, bodyRadius * 0.40f, 2.0f);
-        const auto transform = juce::AffineTransform::rotation (angle).translated (centre.x, centre.y);
-        g.setColour (juce::Colour (0xff050708));
-        g.fillPath (pointerGroove, transform);
-
-        juce::Path pointerLight;
-        pointerLight.addRoundedRectangle (-1.15f, -bodyRadius * 0.77f, 2.3f, bodyRadius * 0.31f, 1.1f);
-        if (active)
-        {
-            g.setColour (ledAccent.withAlpha (0.20f));
-            g.strokePath (pointerLight, juce::PathStrokeType (4.0f), transform);
-        }
-        g.setColour (juce::Colour (0xffffefd0));
-        g.fillPath (pointerLight, transform);
-
-        // Centre cap makes the face read as a real manufactured part.
-        auto cap = body.reduced (body.getWidth() * 0.35f);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff30383b), cap.getTopLeft(),
-                                                 juce::Colour (0xff0d1214), cap.getBottomRight(), false));
-        g.fillEllipse (cap);
-        g.setColour (juce::Colour (0xff525d60));
-        g.drawEllipse (cap, 0.8f);
-        auto pin = cap.withSizeKeepingCentre (juce::jmax (2.0f, cap.getWidth() * 0.12f), juce::jmax (2.0f, cap.getHeight() * 0.12f));
-        g.setColour (juce::Colour (0xff899396).withAlpha (0.55f));
-        g.fillEllipse (pin);
+        auto available = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (2.0f);
+        RetroHardware3D::drawRotaryKnob (g, available, pos, start, end, palette(),
+                                         slider.isMouseOverOrDragging());
     }
 
-    void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour& background,
+    void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour&,
                                bool highlighted, bool down) override
     {
-        auto bounds = button.getLocalBounds().toFloat().reduced (1.0f);
-        auto c = background;
-        if (highlighted) c = c.brighter (0.10f);
-        if (down) c = c.darker (0.20f);
-
-        const bool active = button.getToggleState() || down;
-        g.setColour (active ? findColour (primaryLed).withAlpha (0.14f) : c);
-        g.fillRoundedRectangle (bounds, 5.0f);
-        g.setColour (active ? findColour (primaryLed) : highlighted ? juce::Colour (0xff688698) : juce::Colour (0xff354955));
-        g.drawRoundedRectangle (bounds, 5.0f, 1.0f);
+        RetroHardware3D::drawRaisedButton (g, button.getLocalBounds().toFloat().reduced (0.5f),
+                                           palette(), button.getToggleState(), highlighted, down,
+                                           button.isEnabled());
     }
+
     void drawButtonText (juce::Graphics& g, juce::TextButton& button,
                          bool highlighted, bool down) override
     {
@@ -212,12 +106,107 @@ public:
 
         auto textColour = button.findColour (button.getToggleState() ? juce::TextButton::textColourOnId
                                                                      : juce::TextButton::textColourOffId);
-        if (! button.isEnabled()) textColour = textColour.withMultipliedAlpha (0.42f);
+        if (! button.isEnabled()) textColour = textColour.withMultipliedAlpha (0.40f);
         else if (highlighted || down) textColour = textColour.brighter (0.10f);
-        g.setColour (textColour);
 
-        const int leftInset = 4;
-        g.drawFittedText (button.getButtonText(), button.getLocalBounds().withTrimmedLeft (leftInset).reduced (4, 2),
+        g.setColour (textColour);
+        g.drawFittedText (button.getButtonText(), button.getLocalBounds().reduced (7, 3),
                           juce::Justification::centred, 1);
     }
+
+    void drawComboBox (juce::Graphics& g, int width, int height, bool isButtonDown,
+                       int buttonX, int buttonY, int buttonW, int buttonH,
+                       juce::ComboBox& box) override
+    {
+        auto r = juce::Rectangle<float> (0.0f, 0.0f, (float) width, (float) height).reduced (0.5f);
+        RetroHardware3D::drawRaisedButton (g, r, palette(), false, box.isMouseOver(), isButtonDown,
+                                           box.isEnabled());
+
+        auto arrow = juce::Rectangle<float> ((float) buttonX, (float) buttonY,
+                                             (float) buttonW, (float) buttonH)
+                         .reduced ((float) buttonW * 0.28f, (float) buttonH * 0.34f);
+        juce::Path path;
+        path.startNewSubPath (arrow.getX(), arrow.getY());
+        path.lineTo (arrow.getCentreX(), arrow.getBottom());
+        path.lineTo (arrow.getRight(), arrow.getY());
+        path.closeSubPath();
+
+        g.setColour (box.findColour (juce::ComboBox::arrowColourId));
+        g.fillPath (path);
+    }
+
+    void drawPopupMenuBackground (juce::Graphics& g, int width, int height) override
+    {
+        auto r = juce::Rectangle<float> (0.0f, 0.0f, (float) width, (float) height).reduced (1.0f);
+        g.fillAll (juce::Colour (0xff070b0d));
+        RetroHardware3D::drawRecessedPanel (g, r, palette(), 7.0f);
+    }
+
+    void drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h,
+                           float sliderPos, float minSliderPos, float maxSliderPos,
+                           const juce::Slider::SliderStyle style, juce::Slider& slider) override
+    {
+        if (style != juce::Slider::LinearHorizontal && style != juce::Slider::LinearBar)
+        {
+            juce::LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, sliderPos,
+                                                    minSliderPos, maxSliderPos, style, slider);
+            return;
+        }
+
+        RetroHardware3D::drawLinearTrack (g,
+                                          juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h),
+                                          sliderPos, palette(), slider.isMouseOverOrDragging());
+    }
+
+    void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button,
+                           bool highlighted, bool down) override
+    {
+        auto bounds = button.getLocalBounds().toFloat();
+        const float rockerWidth = juce::jlimit (36.0f, 64.0f, bounds.getHeight() * 1.9f);
+        auto rocker = bounds.removeFromLeft (rockerWidth).reduced (1.0f, 3.0f);
+
+        RetroHardware3D::drawRocker (g, rocker, palette(), button.getToggleState(), highlighted, down);
+
+        auto textArea = button.getLocalBounds().withTrimmedLeft ((int) rockerWidth + 5).reduced (2, 0);
+        auto colour = button.findColour (juce::ToggleButton::textColourId);
+        if (! button.isEnabled()) colour = colour.withMultipliedAlpha (0.40f);
+        else if (highlighted || down) colour = colour.brighter (0.08f);
+
+        g.setColour (colour);
+        g.setFont (juce::Font (juce::FontOptions (juce::jlimit (9.0f, 12.0f, bounds.getHeight() * 0.34f),
+                                                   juce::Font::bold)));
+        g.drawFittedText (button.getButtonText(), textArea, juce::Justification::centredLeft, 1);
+    }
+
+    void drawProgressBar (juce::Graphics& g, juce::ProgressBar&, int width, int height,
+                          double progress, const juce::String& textToShow) override
+    {
+        auto r = juce::Rectangle<float> (0.0f, 0.0f, (float) width, (float) height).reduced (1.0f);
+        RetroHardware3D::drawRecessedPanel (g, r, palette(), 4.0f);
+
+        if (progress >= 0.0)
+        {
+            auto inner = r.reduced (4.0f);
+            auto fill = inner.withWidth (inner.getWidth() * (float) juce::jlimit (0.0, 1.0, progress));
+            g.setColour (findColour (primaryLed).withAlpha (0.20f));
+            g.fillRoundedRectangle (fill, 2.0f);
+            g.setColour (findColour (primaryLed));
+            g.fillRoundedRectangle (fill.reduced (0.0f, inner.getHeight() * 0.34f), 1.5f);
+        }
+
+        if (textToShow.isNotEmpty())
+        {
+            g.setColour (juce::Colour (0xffd4dfdb));
+            g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
+            g.drawText (textToShow, r, juce::Justification::centred);
+        }
+    }
+
+private:
+    RetroHardware3D::Palette palette() const
+    {
+        return { findColour (primaryLed), findColour (secondaryLed), findColour (tertiaryLed) };
+    }
+
+    int paletteIndex = 0;
 };
