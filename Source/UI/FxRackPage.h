@@ -67,6 +67,8 @@ public:
             row.typeAttachment = std::make_unique<ComboAttachment> (proc.apvts, prefix + "Type", row.type);
             row.stageAttachment = std::make_unique<ComboAttachment> (proc.apvts, prefix + "Stage", row.stage);
             row.bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, prefix + "Bypass", row.bypass);
+            row.sync = std::make_unique<TempoSyncSelector> (proc, prefix + "TempoSync", prefix + "Division", "BEAT");
+            row.panel.addAndMakeVisible (*row.sync);
             for (int k = 0; k < 4; ++k)
             {
                 auto& slider = row.controls[(size_t) k]; row.panel.addAndMakeVisible (slider); row.panel.addAndMakeVisible (row.labels[(size_t) k]);
@@ -106,12 +108,13 @@ private:
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     inline static constexpr std::array<const char*, 4> suffixes {{ "Amount", "Rate", "Feedback", "Mix" }};
-    inline static constexpr std::array<const char*, 7> allKeys {{ "Type", "Stage", "Bypass", "Amount", "Rate", "Feedback", "Mix" }};
+    inline static constexpr std::array<const char*, 9> allKeys {{ "Type", "Stage", "Bypass", "Amount", "Rate", "Feedback", "Mix", "TempoSync", "Division" }};
     RetroMatchSynthAudioProcessor& proc;
     struct Row
     {
         juce::Component panel; juce::ComboBox type, stage; juce::ToggleButton bypass;
         juce::TextButton up, down, copy, remove; ModuleVisual visual;
+        std::unique_ptr<TempoSyncSelector> sync;
         std::array<juce::Slider, 4> controls; std::array<juce::Label, 4> labels;
         std::unique_ptr<ComboAttachment> typeAttachment, stageAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
@@ -131,6 +134,7 @@ private:
             const int type = juce::jlimit (0, 13, (int) value (i, "Type")); auto& row = rows[(size_t) i]; row.panel.setVisible (type != 0); available |= type == 0;
             const auto& d = fxModuleCatalog[(size_t) type]; const char* labels[] { d.amount, d.rate, d.feedback, "Wet / dry" };
             for (int k = 0; k < 4; ++k) row.labels[(size_t) k].setText (labels[k], juce::dontSendNotification);
+            if (row.sync) row.sync->setVisible (fxModuleCanTempoSync (type));
             row.visual.repaint();
         }
         add.setEnabled (available); layoutRows(); repaint();
@@ -140,11 +144,13 @@ private:
         int y = 0; const int width = juce::jmax (360, viewport.getWidth() - 16);
         for (auto& row : rows) if (row.panel.isVisible())
         {
-            row.panel.setBounds (0, y, width, 166); y += 176;
+            row.panel.setBounds (0, y, width, 196); y += 206;
             auto r = row.panel.getLocalBounds(); auto header = r.removeFromTop (30);
             row.type.setBounds (header.removeFromLeft (juce::jmax (100, width - 320)).reduced (2)); row.stage.setBounds (header.removeFromLeft (70).reduced (2));
             row.bypass.setBounds (header.removeFromLeft (78)); row.up.setBounds (header.removeFromLeft (36).reduced (2)); row.down.setBounds (header.removeFromLeft (36).reduced (2));
             row.copy.setBounds (header.removeFromLeft (53).reduced (2)); row.remove.setBounds (header.reduced (2));
+            if (row.sync && row.sync->isVisible()) row.sync->setBounds (r.removeFromTop (30).removeFromRight (220).reduced (2));
+            else r.removeFromTop (30);
             row.visual.setBounds (r.removeFromLeft (width * 2 / 5).reduced (3)); const int w = r.getWidth() / 4;
             for (int k = 0; k < 4; ++k) { auto control = r.removeFromLeft (w).reduced (2); row.labels[(size_t) k].setBounds (control.removeFromTop (24)); row.controls[(size_t) k].setBounds (control); }
         }
