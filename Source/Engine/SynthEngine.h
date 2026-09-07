@@ -6,6 +6,7 @@
 #include "ReferenceWavetable.h"
 #include "MSEG.h"
 #include "ModuleRack.h"
+#include "TempoSync.h"
 
 enum class ModSource : int
 {
@@ -50,24 +51,16 @@ struct VoiceParameters
     float masterTuneCents = 0.0f;
     float osc2Semitones = 0.0f, osc2Detune = 0.0f, pulseWidth = 0.5f;
 
-    // Morphing wavetable bank and dense unison/supersaw layer.
     float wavetableMix = 0.0f, wavetablePosition = 0.25f, wavetableWarp = 0.0f;
     float referenceWavetableMix = 0.0f;
     std::shared_ptr<const ReferenceWavetableData> referenceWavetable;
-
-    // User-imported wavetable sets are intentionally independent from the
-    // reference-derived table so loading a sound-design table never destroys the
-    // matching reference representation.
     float userWavetableMix = 0.0f;
     std::shared_ptr<const ReferenceWavetableData> userWavetable;
 
     float supersawMix = 0.0f, unisonDetune = 18.0f, unisonSpread = 0.72f;
     float wavefold = 0.0f;
-
-    // Legacy two-oscillator phase modulation.
     float fmAmount = 0.0f, fmRatio = 2.0f;
 
-    // Six-operator FM block.
     float fmMix = 0.0f, fmFeedback = 0.0f;
     int fmAlgorithm = 0;
     std::array<float, fmOperatorCount> fmOpRatio {{ 1.0f, 2.0f, 3.0f, 1.0f, 1.0f, 1.0f }};
@@ -86,12 +79,8 @@ struct VoiceParameters
     float cutoff = 12000.0f, resonance = 0.15f;
     int filterType = 0;
     float lfoRate = 1.5f, lfoPitch = 0.0f, lfoCutoff = 0.0f, lfoAmp = 0.0f;
-
-    // The original four-slot matrix is frozen for v1.0 automation compatibility.
     std::array<ModSlotParameters, modSlotCount> modSlots {};
 
-    // Post-1.0 modulation layer. New source/destination choices live here so the
-    // normalized values of the original mod slot choices never change.
     MsegParameters mseg;
     std::array<ModSlotParameters, modGraphSlotCount> modGraphSlots {};
     std::array<ModSlotParameters, 4> moduleModSlots {};
@@ -100,7 +89,7 @@ struct VoiceParameters
     std::array<FxModuleParameters, FxModuleParameters::slotCount> fxModules {};
 
     float drive = 0.0f;
-    int distortionMode = 0; // soft saturation (legacy), hard clip, sine fold
+    int distortionMode = 0;
     float distortionMix = 1.0f;
     float chorusMix = 0.0f, chorusRate = 0.35f, chorusDepth = 0.25f;
     float delayMix = 0.0f, delayTime = 0.28f, delayFeedback = 0.22f;
@@ -108,8 +97,39 @@ struct VoiceParameters
     float stereoWidth = 1.0f;
     float outputGainDb = -3.0f;
 
-    // Global render-quality preference. This is deliberately not a matcher mutation
-    // dimension: 0 = 1x, 1 = 2x, 2 = 4x nonlinear oversampling.
+    // Clock metadata is global at render time. Stored layer snapshots retain
+    // their free-running rates; SynthEngine overwrites these metadata fields from
+    // the main instance before rendering a layer so every instance follows the
+    // same DAW/manual clock without audio-thread allocations.
+    float tempoBpm = 120.0f;
+    std::array<bool, 4> lfoTempoSync {{ false, false, false, false }};
+    std::array<int, 4> lfoTempoDivision {{ 3, 3, 3, 3 }};
+    bool chorusTempoSync = false;
+    int chorusTempoDivision = 3;
+    bool delayTempoSync = false;
+    int delayTempoDivision = 3;
+
+    void resolveTempo() noexcept
+    {
+        const float bpm = TempoSync::clampBpm (tempoBpm);
+        if (lfoTempoSync[0]) lfoRate = TempoSync::frequencyHz (lfoTempoDivision[0], bpm);
+        for (int i = 0; i < 3; ++i)
+            if (lfoTempoSync[(size_t) i + 1]) extraLfoRate[(size_t) i] = TempoSync::frequencyHz (lfoTempoDivision[(size_t) i + 1], bpm);
+        if (chorusTempoSync) chorusRate = TempoSync::frequencyHz (chorusTempoDivision, bpm);
+        if (delayTempoSync) delayTime = TempoSync::seconds (delayTempoDivision, bpm);
+    }
+
+    void inheritTempoFrom (const VoiceParameters& master) noexcept
+    {
+        tempoBpm = master.tempoBpm;
+        lfoTempoSync = master.lfoTempoSync;
+        lfoTempoDivision = master.lfoTempoDivision;
+        chorusTempoSync = master.chorusTempoSync;
+        chorusTempoDivision = master.chorusTempoDivision;
+        delayTempoSync = master.delayTempoSync;
+        delayTempoDivision = master.delayTempoDivision;
+    }
+
     int oversamplingQuality = 0;
 
     static constexpr int extraLayerCount = 7;
@@ -194,8 +214,6 @@ public:
     void reset();
     int getLatencySamples() const noexcept { return fixedLatencySamples; }
 
-    // Manual audition helpers for the editor's optional virtual keyboard.
-    // juce::Synthesiser serialises these calls against rendering internally.
     void noteOnFromUi (int midiNote, float velocity)
     {
         synth.noteOn (1, juce::jlimit (0, 127, midiNote), juce::jlimit (0.0f, 1.0f, velocity));
@@ -206,10 +224,7 @@ public:
         synth.noteOff (1, juce::jlimit (0, 127, midiNote), juce::jlimit (0.0f, 1.0f, velocity), true);
     }
 
-    void allNotesOffFromUi()
-    {
-        synth.allNotesOff (0, true);
-    }
+    void allNotesOffFromUi() { synth.allNotesOff (0, true); }
 
 private:
     juce::Synthesiser synth;
@@ -221,9 +236,6 @@ private:
     double sampleRate = 44100.0;
 
     juce::dsp::Chorus<float> chorus;
-    // 5M samples covers the requested 4/1 sync division down to 40 BPM even
-    // at high-rate sessions (about 26 s at 192 kHz). Free-time automation keeps
-    // its historical 20 ms..1.8 s range; only tempo sync can address the extension.
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delay { 5000000 };
     juce::Reverb reverb;
     std::unique_ptr<juce::dsp::Oversampling<float>> driveOversampling2x, driveOversampling4x;
