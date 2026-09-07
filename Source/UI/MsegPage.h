@@ -1,16 +1,19 @@
 #pragma once
 #include <JuceHeader.h>
 #include "RetroLookAndFeel.h"
+#include "TempoSyncControls.h"
 #include <array>
 #include <memory>
-#include "../Engine/SynthEngine.h"
 
 class MsegPage final : public juce::Component
 {
 public:
-    explicit MsegPage (juce::AudioProcessorValueTreeState& stateIn) : state (stateIn)
+    explicit MsegPage (RetroMatchSynthAudioProcessor& p)
+        : state (p.apvts), tempo (p), sync (p, "msegSync", "msegDivision", "MSEG LOOP")
     {
         setOpaque (true);
+        addAndMakeVisible (tempo);
+        addAndMakeVisible (sync);
 
         enabled.setButtonText ("ENABLE MSEG 1");
         loopEnabled.setButtonText ("LOOP WHILE NOTE HELD");
@@ -163,6 +166,11 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12);
+        auto clock = area.removeFromTop (36);
+        tempo.setBounds (clock.removeFromLeft (juce::jmax (330, getWidth() / 2)).reduced (2));
+        sync.setBounds (clock.removeFromLeft (210).reduced (2));
+        area.removeFromTop (4);
+
         auto header = area.removeFromTop (34);
         enabled.setBounds (header.removeFromLeft (150).reduced (2, 2));
         loopEnabled.setBounds (header.removeFromLeft (190).reduced (2, 2));
@@ -172,11 +180,11 @@ public:
         loopEnd.setBounds (header.removeFromLeft (82).reduced (2, 2));
         area.removeFromTop (5);
 
-        const int graphHeight = juce::jlimit (150, 235, area.getHeight() / 3);
+        const int graphHeight = juce::jlimit (140, 225, area.getHeight() / 3);
         graphBounds = area.removeFromTop (graphHeight);
         area.removeFromTop (7);
 
-        const int pointControlHeight = 115;
+        const int pointControlHeight = 110;
         auto pointsArea = graphBounds.reduced (12).removeFromBottom (pointControlHeight);
         const int pointWidth = juce::jmax (1, pointsArea.getWidth() / MsegParameters::pointCount);
         for (int i = 0; i < MsegParameters::pointCount; ++i)
@@ -186,7 +194,7 @@ public:
             pointLevels[(size_t) i].setBounds (cell);
         }
 
-        const int shapeHeight = juce::jlimit (155, 205, area.getHeight() / 2);
+        const int shapeHeight = juce::jlimit (150, 200, area.getHeight() / 2);
         shapeBounds = area.removeFromTop (shapeHeight);
         area.removeFromTop (7);
         auto shape = shapeBounds.reduced (12).withTrimmedTop (25);
@@ -220,6 +228,8 @@ private:
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
     juce::AudioProcessorValueTreeState& state;
+    TempoSyncBar tempo;
+    TempoSyncSelector sync;
     juce::ToggleButton enabled, loopEnabled;
     juce::Label loopStartLabel, loopEndLabel;
     juce::ComboBox loopStart, loopEnd;
