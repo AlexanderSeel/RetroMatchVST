@@ -234,7 +234,42 @@ if ($Target -eq "Windows") {
     $sourceBuildArgs += $Root
 
     Write-Host "Building reusable Windows toolchain/source image '$sourceImage' ..." -ForegroundColor Cyan
-    Invoke-DockerMonitored -Arguments $sourceBuildArgs -Activity "Windows Docker source/toolchain image build"
+    try {
+        Invoke-DockerMonitored -Arguments $sourceBuildArgs -Activity "Windows Docker source/toolchain image build"
+    }
+    catch {
+        $sourceBuildError = $_.Exception.Message
+        Write-Warning @"
+The reusable Windows source/toolchain image could not be committed. Docker Desktop can hit
+hcsshim::ImportLayer (0x3) while registering the large Build Tools / Windows SDK layers even
+though provisioning itself completed successfully.
+
+RetroMatch will bypass docker build and retry in one disposable LTSC 2022 base container.
+That path never commits an image layer, so it avoids the failing ImportLayer operation.
+"@
+
+        $directScript = Join-Path $PSScriptRoot "build-windows-direct-container.ps1"
+        if (-not (Test-Path $directScript)) {
+            throw "Windows source/toolchain image build failed and the direct fallback script is missing: $directScript. Original failure: $sourceBuildError"
+        }
+
+        try {
+            & $directScript -Config $Config -OutputDir $OutputDir
+        }
+        catch {
+            throw @"
+The Windows source/toolchain image build failed, and the direct base-container fallback also
+failed. The direct fallback does not build or commit Docker images, so the error immediately
+above is the actionable provisioning/build failure.
+
+Original source image failure: $sourceBuildError
+Direct fallback failure: $($_.Exception.Message)
+"@
+        }
+
+        Write-Host "Windows direct-container fallback completed successfully." -ForegroundColor Green
+        exit 0
+    }
 
     # A successful Docker build does not guarantee that its committed Windows
     # layers can boot. Probe before compilation so an HCS startup failure can
