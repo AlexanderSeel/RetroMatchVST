@@ -61,6 +61,7 @@ public:
     float getReferenceAnalysisDuration() const noexcept { return analysisSourceDuration.load(); }
     float getAnalysisStartSeconds() const noexcept { return analysisStartSeconds.load(); }
     float getAnalysisEndSeconds() const noexcept { return analysisEndSeconds.load(); }
+    float getEffectiveBpm() const noexcept { return effectiveBpm.load (std::memory_order_relaxed); }
     bool setReferenceAnalysisRegion (float startSeconds, float endSeconds);
     MelodyClip getMelodyClip() const { return MelodyClip::fromState (apvts.state.getChildWithName ("MELODY")); }
     void setMelodyClip (const MelodyClip& clip)
@@ -168,6 +169,7 @@ private:
     std::atomic<float> analysisStartSeconds { 0.0f };
     std::atomic<float> analysisEndSeconds { -1.0f };
     std::atomic<float> analysisSourceDuration { 0.0f };
+    std::atomic<float> effectiveBpm { 120.0f };
     mutable juce::CriticalSection midiMappingLock;
     std::vector<MidiMapping> midiMappings;
     juce::String midiLearnParameter;
