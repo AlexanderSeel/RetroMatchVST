@@ -397,12 +397,12 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     updateLightPalette();
     title.setText ("RETROMATCH", juce::dontSendNotification);
     title.setColour (juce::Label::textColourId, laf.findColour (RetroLookAndFeel::secondaryLed));
-    title.setFont (juce::Font (juce::FontOptions (24.0f, juce::Font::bold)));
+    title.setFont (juce::Font (juce::FontOptions (29.0f, juce::Font::bold)));
     addAndMakeVisible (title);
 
     subtitle.setText ("RM-01  /  HYBRID SYNTHESIS + MELODY LAB", juce::dontSendNotification);
     subtitle.setColour (juce::Label::textColourId, juce::Colour (0xff8fa49d));
-    subtitle.setFont (juce::Font (juce::FontOptions (10.5f, juce::Font::bold)));
+    subtitle.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
     addAndMakeVisible (subtitle);
 
     savePatch.onClick = [this] { chooseSavePatch(); };
@@ -1110,10 +1110,11 @@ void RetroMatchSynthAudioProcessorEditor::layoutPages()
 
 void RetroMatchSynthAudioProcessorEditor::resized()
 {
-    auto outer = getLocalBounds().reduced (14);
+    const int cheek = juce::jlimit (36, 58, (int) std::lround ((float) getWidth() * 0.037f));
+    auto outer = getLocalBounds().withTrimmedLeft (cheek + 10).withTrimmedRight (cheek + 10).reduced (0, 14);
     auto header = outer.removeFromTop (58);
     logoBounds = header.removeFromLeft (62).reduced (3);
-    title.setBounds (header.removeFromLeft (210));
+    title.setBounds (header.removeFromLeft (230));
     subtitle.setBounds (header.removeFromLeft (juce::jmax (120, header.getWidth() - 490)));
     const int actionW = juce::jmax (78, header.getWidth() / 5);
     lightSwitch.setBounds (header.removeFromRight (actionW).reduced (3, 9));
@@ -1121,25 +1122,37 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     exportPreview.setBounds (header.removeFromRight (actionW).reduced (3, 9));
     savePatch.setBounds (header.removeFromRight (actionW).reduced (3, 9));
     loadPatch.setBounds (header.reduced (3, 9));
-    outer.removeFromTop (8);
+    outer.removeFromTop (10);
 
     if (keyboardVisible)
     {
-        auto keyboardArea = outer.removeFromBottom (112);
-        keyboardOctave.setBounds (keyboardArea.removeFromLeft (175).reduced (4, 36));
-        keyboard.setBounds (keyboardArea.reduced (2, 5));
-        keyboard.setKeyWidth (keyboard.getWidth() / 28.0f); keyboard.setLowestVisibleKey (typingBaseNote);
-        outer.removeFromBottom (5);
+        auto keyboardArea = outer.removeFromBottom (126);
+        auto keyboardInner = keyboardArea.reduced (10, 8);
+        auto octaveArea = keyboardInner.removeFromLeft (170);
+        keyboardOctave.setBounds (octaveArea.reduced (2, 32));
+        keyboard.setBounds (keyboardInner.reduced (6, 2));
+        keyboard.setKeyWidth (keyboard.getWidth() / 28.0f);
+        keyboard.setLowestVisibleKey (typingBaseNote);
+        outer.removeFromBottom (6);
     }
-    else { keyboard.setBounds (0, 0, 0, 0); keyboardOctave.setBounds (0, 0, 0, 0); }
+    else
+    {
+        keyboard.setBounds (0, 0, 0, 0);
+        keyboardOctave.setBounds (0, 0, 0, 0);
+    }
 
-    const int workspaceWidth = juce::jlimit (360, 440, (int) std::round (outer.getWidth() * 0.28));
-    workspaceBounds = outer.removeFromLeft (workspaceWidth).reduced (0, 0);
-    outer.removeFromLeft (10);
-    auto contextRow = outer.removeFromTop (34); instanceChoice.setBounds (contextRow.removeFromRight (220).reduced (2)); instanceContext.setBounds (contextRow.reduced (6, 0)); outer.removeFromTop (6);
-    tabs.setBounds (outer);
+    const int workspaceWidth = juce::jlimit (340, 420, (int) std::round (outer.getWidth() * 0.30));
+    workspaceBounds = outer.removeFromLeft (workspaceWidth);
+    outer.removeFromLeft (14);
+
+    auto contextRow = outer.removeFromTop (34);
+    instanceChoice.setBounds (contextRow.removeFromRight (220).reduced (2));
+    instanceContext.setBounds (contextRow.reduced (8, 0));
+    outer.removeFromTop (4);
+    tabs.setBounds (outer.reduced (6, 0));
 
     auto w = workspaceBounds.reduced (12);
+    w.removeFromTop (10);
     load.setBounds (w.removeFromTop (34));
     w.removeFromTop (5);
 
@@ -1168,15 +1181,24 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     applyReferenceRegion.setBounds (region.reduced (2));
     auto tableActions = w.removeFromTop (27);
     createReferenceTable.setBounds (tableActions.removeFromLeft (tableActions.getWidth() / 2).reduced (2));
-    chopReferenceTable.setBounds (tableActions.reduced (2)); w.removeFromTop (3);
-    referenceRegion.setBounds (w.removeFromTop (88)); w.removeFromTop (4);
+    chopReferenceTable.setBounds (tableActions.reduced (2));
+    w.removeFromTop (3);
+    referenceRegion.setBounds (w.removeFromTop (88));
+    w.removeFromTop (4);
+
     if (workspaceBounds.getHeight() >= 660)
     {
         const int analyzerHeight = juce::jlimit (70, 170, (int) std::round (w.getHeight() * 0.18));
-        analyzerBounds = w.removeFromTop (analyzerHeight); w.removeFromTop (5);
-        pipelineBounds = w.removeFromTop (26); w.removeFromTop (5);
+        analyzerBounds = w.removeFromTop (analyzerHeight);
+        w.removeFromTop (5);
+        pipelineBounds = w.removeFromTop (26);
+        w.removeFromTop (5);
     }
-    else { analyzerBounds = {}; pipelineBounds = {}; }
+    else
+    {
+        analyzerBounds = {};
+        pipelineBounds = {};
+    }
 
     auto actionRow = w.removeFromTop (32);
     const int buttonW = actionRow.getWidth() / 3;
@@ -1186,13 +1208,20 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     w.removeFromTop (5);
 
     auto footer = w.removeFromBottom (76);
-    auto morphRow = footer.removeFromTop (28); candidateMorphLabel.setBounds (morphRow.removeFromLeft (118)); candidateMorph.setBounds (morphRow);
-    footer.removeFromTop (3); progressBar.setBounds (footer.removeFromTop (18)); footer.removeFromTop (3); status.setBounds (footer);
+    auto morphRow = footer.removeFromTop (28);
+    candidateMorphLabel.setBounds (morphRow.removeFromLeft (118));
+    candidateMorph.setBounds (morphRow);
+    footer.removeFromTop (3);
+    progressBar.setBounds (footer.removeFromTop (18));
+    footer.removeFromTop (3);
+    status.setBounds (footer);
 
-    const int candidateGap = 4;
+    const int candidateGap = 5;
     const int cardH = juce::jmax (24, (w.getHeight() - candidateGap * 2) / 3);
-    candidateA.setBounds (w.removeFromTop (cardH)); w.removeFromTop (candidateGap);
-    candidateB.setBounds (w.removeFromTop (cardH)); w.removeFromTop (candidateGap);
+    candidateA.setBounds (w.removeFromTop (cardH));
+    w.removeFromTop (candidateGap);
+    candidateB.setBounds (w.removeFromTop (cardH));
+    w.removeFromTop (candidateGap);
     candidateC.setBounds (w);
 
     layoutPages();
@@ -1202,23 +1231,27 @@ void RetroMatchSynthAudioProcessorEditor::resized()
 void RetroMatchSynthAudioProcessorEditor::drawWorkspaceBackground (juce::Graphics& g)
 {
     auto r = workspaceBounds.toFloat();
-    g.setColour (juce::Colour (0xff111719));
-    g.fillRoundedRectangle (r, 10.0f);
-    g.setColour (juce::Colours::black.withAlpha (0.75f));
-    g.drawRoundedRectangle (r.reduced (2), 9, 3);
-    g.setColour (juce::Colour (0xff334145));
-    g.drawRoundedRectangle (r, 10.0f, 1.0f);
+    const RetroHardware3D::Palette palette { tealColour (*this), goldColour (*this), cyanColour (*this) };
+    RetroHardware3D::drawRecessedPanel (g, r, palette, 10.0f);
+
+    auto titlePlate = r.withHeight (22.0f).reduced (7.0f, 3.0f);
+    RetroHardware3D::drawSectionPlate (g, titlePlate, palette);
     g.setColour (goldColour (*this));
     g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
-    g.drawText ("REFERENCE + RESYNTH WORKSPACE", workspaceBounds.getX() + 12, workspaceBounds.getY() - 1, workspaceBounds.getWidth() - 24, 16, juce::Justification::centredRight);
+    g.drawText ("REFERENCE + RESYNTH WORKSPACE", titlePlate.reduced (10.0f, 0.0f), juce::Justification::centredLeft);
+
+    const float screwSize = 13.0f;
+    RetroHardware3D::drawMachinedScrew (g, { r.getX() + 6.0f, r.getY() + 5.0f, screwSize, screwSize }, -0.72f);
+    RetroHardware3D::drawMachinedScrew (g, { r.getRight() - screwSize - 6.0f, r.getY() + 5.0f, screwSize, screwSize }, 0.62f);
+    RetroHardware3D::drawMachinedScrew (g, { r.getX() + 6.0f, r.getBottom() - screwSize - 6.0f, screwSize, screwSize }, 0.35f);
+    RetroHardware3D::drawMachinedScrew (g, { r.getRight() - screwSize - 6.0f, r.getBottom() - screwSize - 6.0f, screwSize, screwSize }, -0.40f);
 }
 
 void RetroMatchSynthAudioProcessorEditor::drawAnalyzer (juce::Graphics& g, juce::Rectangle<float> area)
 {
-    g.setColour (juce::Colour (0xff04120f));
-    g.fillRoundedRectangle (area, 8.0f);
-    g.setColour (tealColour (*this).withAlpha (0.4f));
-    g.drawRoundedRectangle (area, 8.0f, 1.2f);
+    const RetroHardware3D::Palette palette { tealColour (*this), goldColour (*this), cyanColour (*this) };
+    RetroHardware3D::drawPhosphorDisplay (g, area, palette);
+    area = area.reduced (7.0f);
 
     auto header = area.removeFromTop (27.0f).reduced (10.0f, 0.0f);
     g.setColour (tealColour (*this));
@@ -1323,38 +1356,84 @@ void RetroMatchSynthAudioProcessorEditor::drawPipeline (juce::Graphics& g, juce:
 
 void RetroMatchSynthAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colour (0xff070a0c));
-    auto body = getLocalBounds().toFloat().reduced (7.0f);
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff22292b), body.getTopLeft(), juce::Colour (0xff101416), body.getBottomLeft(), false));
-    g.fillRoundedRectangle (body, 12.0f);
-    g.setColour (juce::Colour (0xff3c474a));
-    g.drawRoundedRectangle (body, 12.0f, 1.0f);
-    g.setColour (juce::Colours::black.withAlpha (0.85f));
-    g.drawRoundedRectangle (body.reduced (3), 10, 3);
-    g.setColour (juce::Colours::white.withAlpha (0.12f));
-    g.drawLine (22, 10, (float) getWidth() - 22, 10, 1);
-    // Walnut rack cheeks, end-grain lines and slotted chassis screws.
-    for (const float x : { 1.0f, (float) getWidth() - 7.0f })
+    g.fillAll (juce::Colour (0xff050708));
+    const RetroHardware3D::Palette palette { tealColour (*this), goldColour (*this), cyanColour (*this) };
+    const int cheek = juce::jlimit (36, 58, (int) std::lround ((float) getWidth() * 0.037f));
+    const auto all = getLocalBounds().toFloat();
+
+    // Central powder-coated / brushed metal chassis.
+    auto chassis = all.withTrimmedLeft ((float) cheek - 2.0f)
+                      .withTrimmedRight ((float) cheek - 2.0f)
+                      .reduced (1.0f, 5.0f);
+    RetroHardware3D::drawSoftRoundedShadow (g, chassis.reduced (2.0f), 15.0f, 8.0f, 7);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff3b4345), chassis.getTopLeft(),
+                                             juce::Colour (0xff0b1012), chassis.getBottomLeft(), false));
+    g.fillRoundedRectangle (chassis, 14.0f);
+    g.setColour (juce::Colour (0xff596164).withAlpha (0.70f));
+    g.drawRoundedRectangle (chassis, 14.0f, 1.2f);
+    g.setColour (juce::Colours::black.withAlpha (0.90f));
+    g.drawRoundedRectangle (chassis.reduced (3.0f), 11.0f, 3.0f);
+
+    // Fine horizontal brushing catches light like the approved product render.
+    for (int y = (int) chassis.getY() + 8; y < (int) chassis.getBottom() - 8; y += 4)
     {
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff654738), x, 0, juce::Colour (0xff281e1a), x + 6, 0, false));
-        g.fillRoundedRectangle (x, 7, 6, (float) getHeight() - 14, 2);
-        g.setColour (juce::Colour (0xff9b7960).withAlpha (0.2f));
-        g.drawVerticalLine ((int) x + 2, 18, (float) getHeight() - 18);
+        const bool bright = ((y / 4) % 3) == 0;
+        g.setColour (bright ? juce::Colours::white.withAlpha (0.018f)
+                            : juce::Colours::black.withAlpha (0.045f));
+        g.drawHorizontalLine (y, chassis.getX() + 10.0f, chassis.getRight() - 10.0f);
     }
-    for (const auto point : { juce::Point<float> (16, 16), juce::Point<float> ((float) getWidth() - 16, 16),
-                             juce::Point<float> (16, (float) getHeight() - 16), juce::Point<float> ((float) getWidth() - 16, (float) getHeight() - 16) })
+
+    // Full walnut end cheeks — these are now layout-bearing hardware, not 6 px decoration.
+    auto leftCheek = juce::Rectangle<float> (2.0f, 6.0f, (float) cheek, (float) getHeight() - 12.0f);
+    auto rightCheek = juce::Rectangle<float> ((float) getWidth() - (float) cheek - 2.0f, 6.0f,
+                                              (float) cheek, (float) getHeight() - 12.0f);
+    RetroHardware3D::drawWalnutCheek (g, leftCheek, false);
+    RetroHardware3D::drawWalnutCheek (g, rightCheek, true);
+
+    const float screw = juce::jlimit (17.0f, 24.0f, (float) cheek * 0.42f);
+    for (const auto& spec : std::array<std::tuple<juce::Rectangle<float>, float>, 4> {{
+             { { leftCheek.getCentreX() - screw * 0.5f, leftCheek.getY() + 12.0f, screw, screw }, -0.72f },
+             { { rightCheek.getCentreX() - screw * 0.5f, rightCheek.getY() + 12.0f, screw, screw }, 0.65f },
+             { { leftCheek.getCentreX() - screw * 0.5f, leftCheek.getBottom() - screw - 12.0f, screw, screw }, 0.30f },
+             { { rightCheek.getCentreX() - screw * 0.5f, rightCheek.getBottom() - screw - 12.0f, screw, screw }, -0.42f }
+         }})
+        RetroHardware3D::drawMachinedScrew (g, std::get<0> (spec), std::get<1> (spec));
+
+    // Raised/recessed top control deck.
+    auto headerFrame = juce::Rectangle<float> ((float) cheek + 9.0f, 8.0f,
+                                               (float) getWidth() - ((float) cheek + 9.0f) * 2.0f, 64.0f);
+    RetroHardware3D::drawRecessedPanel (g, headerFrame, palette, 8.0f);
+    auto headerFace = headerFrame.reduced (5.0f);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2d3638), headerFace.getTopLeft(),
+                                             juce::Colour (0xff121719), headerFace.getBottomLeft(), false));
+    g.fillRoundedRectangle (headerFace, 5.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.10f));
+    g.drawLine (headerFace.getX() + 8.0f, headerFace.getY() + 1.0f,
+                headerFace.getRight() - 8.0f, headerFace.getY() + 1.0f, 1.0f);
+    g.setColour (goldColour (*this).withAlpha (0.70f));
+    g.fillRect (headerFrame.getX() + 12.0f, headerFrame.getBottom() - 3.0f,
+                headerFrame.getWidth() - 24.0f, 1.0f);
+
+    // Main synth module frame. The live tab component sits inside this recess.
+    auto mainFrame = tabs.getBounds().getUnion (instanceContext.getBounds()).getUnion (instanceChoice.getBounds()).toFloat().expanded (10.0f, 7.0f);
+    if (! mainFrame.isEmpty())
+        RetroHardware3D::drawRecessedPanel (g, mainFrame, palette, 10.0f);
+
+    // Keyboard is mounted in its own deep lower bay.
+    if (keyboardVisible && ! keyboard.getBounds().isEmpty())
     {
-        g.setColour (juce::Colour (0xff020506)); g.fillEllipse (point.x - 5, point.y - 5, 10, 10);
-        g.setColour (juce::Colour (0xff7e898b)); g.drawEllipse (point.x - 3, point.y - 3, 6, 6, 1);
-        g.setColour (juce::Colour (0xff394347)); g.drawLine (point.x - 2, point.y + 2, point.x + 2, point.y - 2, 1.5f);
+        auto keyboardFrame = keyboard.getBounds().getUnion (keyboardOctave.getBounds()).toFloat().expanded (10.0f, 8.0f);
+        RetroHardware3D::drawRecessedPanel (g, keyboardFrame, palette, 8.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.06f));
+        g.drawLine (keyboardFrame.getX() + 12.0f, keyboardFrame.getY() + 4.0f,
+                    keyboardFrame.getRight() - 12.0f, keyboardFrame.getY() + 4.0f, 1.0f);
     }
-    if (logo) logo->drawWithin (g, logoBounds.toFloat(), juce::RectanglePlacement::centred, 1.0f);
-    g.setColour (goldColour (*this).withAlpha (0.65f));
-    g.fillRect (14.0f, 70.0f, (float) getWidth() - 28.0f, 1.0f);
 
     drawWorkspaceBackground (g);
     if (! analyzerBounds.isEmpty()) drawAnalyzer (g, analyzerBounds.toFloat());
     if (! pipelineBounds.isEmpty()) drawPipeline (g, pipelineBounds.toFloat());
+
+    if (logo) logo->drawWithin (g, logoBounds.toFloat(), juce::RectanglePlacement::centred, 1.0f);
 }
 
 //==============================================================================

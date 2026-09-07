@@ -46,13 +46,25 @@ private:
     class TabPage final : public juce::Component
     {
     public:
-        TabPage() { setOpaque (true); }
+        TabPage() { setOpaque (true); setBufferedToImage (true); }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff101a22));
+            g.fillAll (juce::Colour (0xff070b0d));
             auto bounds = getLocalBounds().toFloat().reduced (1.0f);
-            g.setColour (juce::Colour (0xff30424f));
-            g.drawRoundedRectangle (bounds, 6.0f, 1.0f);
+            const RetroHardware3D::Palette palette { findColour (RetroLookAndFeel::primaryLed),
+                                                     findColour (RetroLookAndFeel::secondaryLed),
+                                                     findColour (RetroLookAndFeel::tertiaryLed) };
+            RetroHardware3D::drawRecessedPanel (g, bounds, palette, 7.0f);
+            auto face = bounds.reduced (6.0f);
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xff151d20), face.getTopLeft(),
+                                                     juce::Colour (0xff0a0f11), face.getBottomLeft(), false));
+            g.fillRoundedRectangle (face, 4.0f);
+            for (int y = (int) face.getY() + 4; y < (int) face.getBottom() - 4; y += 4)
+            {
+                g.setColour (((y / 4) % 3 == 0) ? juce::Colours::white.withAlpha (0.012f)
+                                                : juce::Colours::black.withAlpha (0.035f));
+                g.drawHorizontalLine (y, face.getX() + 5.0f, face.getRight() - 5.0f);
+            }
         }
     };
 

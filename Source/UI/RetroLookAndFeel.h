@@ -80,6 +80,22 @@ public:
                           juce::Justification::centred, 1);
     }
 
+
+    void drawLabel (juce::Graphics& g, juce::Label& label) override
+    {
+        if (label.findColour (juce::Label::backgroundColourId) == juce::Colour (0xff141c1e))
+        {
+            auto bounds = label.getLocalBounds().toFloat().reduced (0.5f);
+            RetroHardware3D::drawSectionPlate (g, bounds, palette());
+            g.setColour (label.findColour (juce::Label::textColourId));
+            g.setFont (label.getFont());
+            g.drawFittedText (label.getText(), label.getLocalBounds().reduced (10, 1),
+                              label.getJustificationType(), 1);
+            return;
+        }
+        juce::LookAndFeel_V4::drawLabel (g, label);
+    }
+
     void drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
                            float start, float end, juce::Slider& slider) override
     {
