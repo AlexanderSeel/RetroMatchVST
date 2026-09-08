@@ -1,0 +1,51 @@
+name: Retry UI and MSEG fixes
+
+on:
+  push:
+    paths:
+      - '.github/workflows/rerun-ui-mseg-fixes.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Apply migration with updated static contract
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          # The MSEG route panel was renamed from the implementation-era label
+          # to the user-facing term "EXTRA MODULATION ROUTES". Keep the static
+          # integrity test aligned with the actual product UI.
+          static = Path('scripts/static-check.py')
+          checks = static.read_text(encoding='utf-8')
+          checks = checks.replace("'POST-1.0 MODULATION GRAPH'", "'EXTRA MODULATION ROUTES'")
+          static.write_text(checks, encoding='utf-8')
+
+          workflow = Path('.github/workflows/apply-ui-mseg-fixes.yml').read_text(encoding='utf-8')
+          marker = "          python3 - <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index("\n          PY\n", start)
+          script = workflow[start:end]
+          # Remove the YAML indentation from the embedded Python program.
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in script.splitlines()) + '\n'
+          Path('/tmp/apply_ui_mseg.py').write_text(script, encoding='utf-8')
+          subprocess.run(['python3', '/tmp/apply_ui_mseg.py'], check=True)
+          PY
+      - name: Commit implementation and clean helper workflows
+        shell: bash
+        run: |
+          git config user.name "Alexander Seel"
+          git config user.email "mr.alexander.seel@gmail.com"
+          git rm .github/workflows/apply-ui-mseg-fixes.yml .github/workflows/rerun-ui-mseg-fixes.yml
+          git add Source/Engine/SynthEngine.h Source/Engine/SynthEngine.cpp Source/PluginProcessor.cpp Source/UI/MsegPage.h Source/UI/PresetsPage.h scripts/static-check.py
+          git commit -m "Reorder synth workflow and make MSEG directly audible"
+          git push origin HEAD:main
