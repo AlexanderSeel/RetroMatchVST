@@ -1,6 +1,9 @@
 #pragma once
 #include "../PluginProcessor.h"
 #include "RetroLookAndFeel.h"
+#include <cmath>
+#include <map>
+#include <string>
 #include <vector>
 
 class SignalLabPage final : public juce::Component, private juce::Timer
@@ -26,16 +29,31 @@ public:
         drawStereo (g, stereo, led);
 
         area.removeFromTop (10);
-        graphViewport = area;
         drawPatchMap (g, area, led, accent);
     }
 
     void mouseDown (const juce::MouseEvent& e) override
     {
-        if (! graphViewport.contains (e.position)) return;
-        selectedNode = hitTestNode (e.position);
-        if (selectedNode < 0 || e.mods.isMiddleButtonDown() || e.mods.isRightButtonDown())
+        if (const auto action = hitToolbar (e.position); action != ToolbarAction::none)
         {
+            handleToolbar (action);
+            return;
+        }
+
+        if (! graphViewport.contains (e.position)) return;
+        const int hit = hitTestNode (e.position);
+        if (hit >= 0 && ! e.mods.isMiddleButtonDown() && ! e.mods.isRightButtonDown())
+        {
+            selectedNodeId = nodes[(size_t) hit].id.toStdString();
+            draggingNode = true;
+            draggingNodeId = selectedNodeId;
+            nodeDragStartWorld = toWorld (e.position);
+            const auto it = nodeOffsets.find (draggingNodeId);
+            nodeOffsetAtDragStart = it != nodeOffsets.end() ? it->second : juce::Point<float>();
+        }
+        else
+        {
+            selectedNodeId.clear();
             panning = true;
             panDragStart = e.position;
             panAtDragStart = graphPan;
@@ -45,12 +63,31 @@ public:
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
-        if (! panning) return;
-        graphPan = panAtDragStart + (e.position - panDragStart);
-        repaint();
+        if (draggingNode)
+        {
+            auto offset = nodeOffsetAtDragStart + (toWorld (e.position) - nodeDragStartWorld);
+            if (snapToGrid && ! e.mods.isShiftDown())
+            {
+                offset.x = std::round (offset.x / gridSize) * gridSize;
+                offset.y = std::round (offset.y / gridSize) * gridSize;
+            }
+            nodeOffsets[draggingNodeId] = offset;
+            repaint();
+            return;
+        }
+        if (panning)
+        {
+            graphPan = panAtDragStart + (e.position - panDragStart);
+            repaint();
+        }
     }
 
-    void mouseUp (const juce::MouseEvent&) override { panning = false; }
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        panning = false;
+        draggingNode = false;
+        draggingNodeId.clear();
+    }
 
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
@@ -58,36 +95,41 @@ public:
         const int hit = hitTestNode (e.position);
         if (hit >= 0 && juce::isPositiveAndBelow (hit, (int) nodes.size()))
         {
-            selectedNode = hit;
+            selectedNodeId = nodes[(size_t) hit].id.toStdString();
             navigateTo (nodes[(size_t) hit]);
         }
         else
         {
-            graphZoom = 0.82f;
-            graphPan = { 18.0f, 18.0f };
-            repaint();
+            fitToView();
         }
     }
 
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
     {
         if (! graphViewport.contains (e.position)) return;
-        const auto before = toWorld (e.position);
-        graphZoom = juce::jlimit (0.35f, 2.2f, graphZoom * (1.0f + wheel.deltaY * 0.18f));
-        graphPan = e.position - graphViewport.getPosition() - before * graphZoom;
-        repaint();
+        setZoomAround (e.position, graphZoom * (1.0f + wheel.deltaY * 0.18f));
     }
 
 private:
+    enum class EdgeKind { audio, modulation, clock };
+    enum class ToolbarAction { none, autoArrange, fit, zoomOut, zoom100, zoomIn, grid };
+
     struct GraphNode
     {
-        juce::Rectangle<float> worldBounds;
+        juce::String id;
+        juce::Rectangle<float> baseBounds, worldBounds;
         juce::String title, detail, tab;
-        int layer = -2; // -1 main, >=0 stored layer, -2 global/no instance selection
+        int layer = -2;
+        juce::Colour colour;
+        bool inputPort = true, outputPort = true;
     };
+
+    struct GraphEdge { int from = -1, to = -1; EdgeKind kind = EdgeKind::audio; };
+    struct ToolbarButton { juce::Rectangle<float> bounds; juce::String label; ToolbarAction action = ToolbarAction::none; };
 
     RetroMatchSynthAudioProcessor& proc;
     static constexpr int size = 2048;
+    static constexpr float gridSize = 12.0f;
     std::array<float, size> left {}, right {};
     std::array<float, AudioVisualBuffer::capacity> incomingLeft {}, incomingRight {};
     std::array<float, size * 2> fftData {};
@@ -98,11 +140,14 @@ private:
 
     juce::Rectangle<float> graphViewport;
     std::vector<GraphNode> nodes;
+    std::vector<GraphEdge> edges;
+    std::vector<ToolbarButton> toolbarButtons;
+    std::map<std::string, juce::Point<float>> nodeOffsets;
     float graphZoom = 0.82f;
     juce::Point<float> graphPan { 18.0f, 18.0f };
-    bool panning = false;
-    juce::Point<float> panDragStart, panAtDragStart;
-    int selectedNode = -1;
+    bool panning = false, draggingNode = false, snapToGrid = true;
+    juce::Point<float> panDragStart, panAtDragStart, nodeDragStartWorld, nodeOffsetAtDragStart;
+    std::string selectedNodeId, draggingNodeId;
 
     float parameter (const juce::String& id, float fallback = 0.0f) const
     {
@@ -134,12 +179,62 @@ private:
         return -1;
     }
 
+    ToolbarAction hitToolbar (juce::Point<float> point) const
+    {
+        for (const auto& button : toolbarButtons)
+            if (button.bounds.contains (point)) return button.action;
+        return ToolbarAction::none;
+    }
+
+    void handleToolbar (ToolbarAction action)
+    {
+        switch (action)
+        {
+            case ToolbarAction::autoArrange:
+                nodeOffsets.clear();
+                for (auto& node : nodes) node.worldBounds = node.baseBounds;
+                fitToView();
+                break;
+            case ToolbarAction::fit: fitToView(); break;
+            case ToolbarAction::zoomOut: setZoomAround (graphViewport.getCentre(), graphZoom / 1.18f); break;
+            case ToolbarAction::zoom100: setZoomAround (graphViewport.getCentre(), 1.0f); break;
+            case ToolbarAction::zoomIn: setZoomAround (graphViewport.getCentre(), graphZoom * 1.18f); break;
+            case ToolbarAction::grid: snapToGrid = ! snapToGrid; repaint(); break;
+            case ToolbarAction::none: break;
+        }
+    }
+
+    void setZoomAround (juce::Point<float> screenPoint, float requestedZoom)
+    {
+        if (graphViewport.isEmpty()) return;
+        const auto before = toWorld (screenPoint);
+        graphZoom = juce::jlimit (0.35f, 2.2f, requestedZoom);
+        graphPan = screenPoint - graphViewport.getPosition() - before * graphZoom;
+        repaint();
+    }
+
+    void fitToView()
+    {
+        if (nodes.empty() || graphViewport.isEmpty())
+        {
+            graphZoom = 0.82f;
+            graphPan = { 18.0f, 18.0f };
+            repaint();
+            return;
+        }
+        auto world = nodes.front().worldBounds;
+        for (size_t i = 1; i < nodes.size(); ++i) world = world.getUnion (nodes[i].worldBounds);
+        world = world.expanded (28.0f);
+        const float sx = graphViewport.getWidth() / juce::jmax (1.0f, world.getWidth());
+        const float sy = graphViewport.getHeight() / juce::jmax (1.0f, world.getHeight());
+        graphZoom = juce::jlimit (0.35f, 1.65f, juce::jmin (sx, sy));
+        graphPan = graphViewport.getCentre() - graphViewport.getPosition() - world.getCentre() * graphZoom;
+        repaint();
+    }
+
     void navigateTo (const GraphNode& node)
     {
-        if (node.layer >= -1)
-        {
-            if (node.layer < 0 || proc.hasLayer (node.layer)) proc.selectEditingLayer (node.layer);
-        }
+        if (node.layer >= -1 && (node.layer < 0 || proc.hasLayer (node.layer))) proc.selectEditingLayer (node.layer);
         for (auto* c = getParentComponent(); c != nullptr; c = c->getParentComponent())
         {
             if (auto* tabs = dynamic_cast<juce::TabbedComponent*> (c))
@@ -223,84 +318,191 @@ private:
         glow (g, field, led, 0.8f);
     }
 
+    int addNode (juce::Rectangle<float> base, const juce::String& id, const juce::String& title,
+                 const juce::String& detail, const juce::String& tab, int layer, juce::Colour colour,
+                 bool inputPort = true, bool outputPort = true)
+    {
+        auto offset = juce::Point<float>();
+        if (const auto it = nodeOffsets.find (id.toStdString()); it != nodeOffsets.end()) offset = it->second;
+        nodes.push_back ({ id, base, base.translated (offset.x, offset.y), title, detail, tab, layer, colour, inputPort, outputPort });
+        return (int) nodes.size() - 1;
+    }
+
+    void connect (int from, int to, EdgeKind kind = EdgeKind::audio)
+    {
+        if (juce::isPositiveAndBelow (from, (int) nodes.size()) && juce::isPositiveAndBelow (to, (int) nodes.size()))
+            edges.push_back ({ from, to, kind });
+    }
+
+    void drawGrid (juce::Graphics& g, juce::Colour led)
+    {
+        const auto topLeft = toWorld (graphViewport.getTopLeft());
+        const auto bottomRight = toWorld (graphViewport.getBottomRight());
+        const float step = gridSize * 2.0f;
+        const float x0 = std::floor (topLeft.x / step) * step;
+        const float y0 = std::floor (topLeft.y / step) * step;
+        g.setColour (led.withAlpha (snapToGrid ? 0.07f : 0.035f));
+        for (float x = x0; x <= bottomRight.x + step; x += step)
+        {
+            const float sx = toScreen ({ x, 0.0f }).x;
+            g.drawVerticalLine ((int) sx, graphViewport.getY(), graphViewport.getBottom());
+        }
+        for (float y = y0; y <= bottomRight.y + step; y += step)
+        {
+            const float sy = toScreen ({ 0.0f, y }).y;
+            g.drawHorizontalLine ((int) sy, graphViewport.getX(), graphViewport.getRight());
+        }
+    }
+
+    void drawEdge (juce::Graphics& g, const GraphEdge& edge, juce::Colour led, juce::Colour accent)
+    {
+        if (! juce::isPositiveAndBelow (edge.from, (int) nodes.size()) || ! juce::isPositiveAndBelow (edge.to, (int) nodes.size())) return;
+        const auto& from = nodes[(size_t) edge.from];
+        const auto& to = nodes[(size_t) edge.to];
+        juce::Point<float> a, b;
+        if (edge.kind == EdgeKind::modulation)
+        {
+            a = toScreen ({ from.worldBounds.getCentreX(), from.worldBounds.getY() });
+            b = toScreen ({ to.worldBounds.getCentreX(), to.worldBounds.getBottom() });
+        }
+        else if (edge.kind == EdgeKind::clock)
+        {
+            a = toScreen ({ from.worldBounds.getX(), from.worldBounds.getCentreY() });
+            b = toScreen ({ to.worldBounds.getCentreX(), to.worldBounds.getBottom() });
+        }
+        else
+        {
+            a = toScreen ({ from.worldBounds.getRight(), from.worldBounds.getCentreY() });
+            b = toScreen ({ to.worldBounds.getX(), to.worldBounds.getCentreY() });
+        }
+        const float bend = juce::jmax (24.0f, std::abs (b.x - a.x) * 0.42f);
+        juce::Path wire;
+        wire.startNewSubPath (a);
+        wire.cubicTo ({ a.x + bend, a.y }, { b.x - bend, b.y }, b);
+        if (edge.kind == EdgeKind::audio)
+            glow (g, wire, from.colour.interpolatedWith (to.colour, 0.45f).withAlpha (0.7f), juce::jmax (0.9f, graphZoom));
+        else
+        {
+            const auto colour = edge.kind == EdgeKind::clock ? accent : led;
+            g.setColour (colour.withAlpha (edge.kind == EdgeKind::clock ? 0.32f : 0.24f));
+            g.strokePath (wire, juce::PathStrokeType (juce::jmax (0.7f, graphZoom * 0.85f)));
+        }
+    }
+
+    void drawNode (juce::Graphics& g, const GraphNode& node, juce::Colour accent)
+    {
+        auto r = toScreen (node.worldBounds);
+        const bool selected = node.id.toStdString() == selectedNodeId;
+        g.setColour (juce::Colours::black.withAlpha (0.45f)); g.fillRoundedRectangle (r.translated (0, 2.5f * graphZoom), 5.0f * graphZoom);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff17272b), r.getTopLeft(), juce::Colour (0xff0d171a), r.getBottomRight(), false));
+        g.fillRoundedRectangle (r, 5.0f * graphZoom);
+        g.setColour ((selected ? juce::Colours::white : node.colour).withAlpha (selected ? 0.95f : 0.72f));
+        g.drawRoundedRectangle (r, 5.0f * graphZoom, juce::jmax (1.0f, 1.3f * graphZoom));
+        g.setColour (node.colour); g.setFont (juce::Font (juce::FontOptions (juce::jmax (7.0f, 10.0f * graphZoom), juce::Font::bold)));
+        g.drawFittedText (node.title, r.reduced (6 * graphZoom, 2 * graphZoom).removeFromTop (r.getHeight() * 0.53f).toNearestInt(), juce::Justification::centredLeft, 1);
+        g.setColour (accent.withAlpha (0.82f)); g.setFont (juce::Font (juce::FontOptions (juce::jmax (6.5f, 8.5f * graphZoom))));
+        g.drawFittedText (node.detail, r.reduced (6 * graphZoom, 2 * graphZoom).withTrimmedTop (r.getHeight() * 0.48f).toNearestInt(), juce::Justification::centredLeft, 1);
+
+        const float portRadius = juce::jmax (2.3f, 3.1f * graphZoom);
+        g.setColour (node.colour.withAlpha (0.9f));
+        if (node.inputPort) g.fillEllipse (r.getX() - portRadius, r.getCentreY() - portRadius, portRadius * 2, portRadius * 2);
+        if (node.outputPort) g.fillEllipse (r.getRight() - portRadius, r.getCentreY() - portRadius, portRadius * 2, portRadius * 2);
+    }
+
+    void drawToolbar (juce::Graphics& g, juce::Rectangle<float> header, juce::Colour led, juce::Colour accent)
+    {
+        toolbarButtons.clear();
+        const float gap = 4.0f, h = 20.0f;
+        struct Def { const char* label; float width; ToolbarAction action; };
+        const Def defs[] {{ "AUTO", 48, ToolbarAction::autoArrange }, { "FIT", 40, ToolbarAction::fit },
+                          { "-", 26, ToolbarAction::zoomOut }, { "100%", 42, ToolbarAction::zoom100 },
+                          { "+", 26, ToolbarAction::zoomIn }, { "GRID", 48, ToolbarAction::grid }};
+        float total = -gap;
+        for (const auto& d : defs) total += d.width + gap;
+        float x = header.getRight() - total - 6.0f;
+        for (const auto& d : defs)
+        {
+            juce::Rectangle<float> r (x, header.getCentreY() - h * 0.5f, d.width, h);
+            toolbarButtons.push_back ({ r, d.label, d.action });
+            const bool active = d.action == ToolbarAction::grid && snapToGrid;
+            g.setColour (active ? led.withAlpha (0.18f) : juce::Colour (0xff132126)); g.fillRoundedRectangle (r, 4);
+            g.setColour ((active ? led : accent).withAlpha (0.8f)); g.drawRoundedRectangle (r, 4, 1);
+            g.setFont (juce::Font (juce::FontOptions (8.0f, juce::Font::bold))); g.setColour (active ? led : juce::Colour (0xffb7c5c8));
+            g.drawText (d.label, r, juce::Justification::centred);
+            x += d.width + gap;
+        }
+
+        auto textArea = header.withTrimmedRight (total + 12.0f).reduced (8, 0);
+        g.setColour (led); g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+        const bool daw = parameter ("tempoSource", 1.0f) >= 0.5f;
+        g.drawFittedText ("PATCH MAP / DRAG NODE TO MOVE / EMPTY SPACE TO PAN / WHEEL TO ZOOM / DOUBLE-CLICK TO EDIT    CLOCK: "
+                          + juce::String (proc.getEffectiveBpm(), 1) + " BPM " + (daw ? "DAW" : "MANUAL"),
+                          textArea.toNearestInt(), juce::Justification::centredLeft, 1);
+    }
+
     void drawPatchMap (juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour led, juce::Colour accent)
     {
         g.setColour (juce::Colour (0xff03080b)); g.fillRoundedRectangle (bounds, 7);
         g.setColour (juce::Colour (0xff506166)); g.drawRoundedRectangle (bounds, 7, 1);
-        auto header = bounds.removeFromTop (26);
-        g.setColour (led); g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
-        const bool daw = parameter ("tempoSource", 1.0f) >= 0.5f;
-        g.drawText ("PATCH MAP / DRAG EMPTY SPACE TO PAN / WHEEL TO ZOOM / DOUBLE-CLICK NODE TO EDIT    CLOCK: " + juce::String (proc.getEffectiveBpm(), 1) + " BPM " + (daw ? "DAW" : "MANUAL"), header.reduced (8, 0), juce::Justification::centredLeft);
+        auto header = bounds.removeFromTop (30);
         graphViewport = bounds.reduced (4);
-        g.saveState(); g.reduceClipRegion (graphViewport.toNearestInt());
-        nodes.clear();
 
+        nodes.clear(); edges.clear();
         std::vector<int> instances { -1 };
         for (int i = 0; i < VoiceParameters::extraLayerCount; ++i)
             if (proc.hasLayer (i) && parameter ("layer" + juce::String (i + 1) + "Enabled") >= 0.5f) instances.push_back (i);
 
-        const float rowGap = 74.0f, nodeW = 104.0f, nodeH = 42.0f;
-        const std::array<float, 7> xs {{ 0, 122, 244, 366, 488, 610, 732 }};
-        const juce::String stages[] { "INSTANCE", "OSC / WT", "6-OP FM", "FILTER / AMP", "MOD", "FX", "COMBINE" };
-        const juce::String tabs[] { "SYNTH", "SYNTH", "FM", "FILTER + AMP", "MOD", "FX", "LAYERS" };
+        const float rowGap = 112.0f, nodeW = 104.0f, nodeH = 42.0f;
+        const std::array<float, 6> xs {{ 0, 122, 244, 366, 488, 610 }};
+        const juce::String stages[] { "INSTANCE", "OSC / WT", "6-OP FM", "FILTER / AMP", "FX", "COMBINE" };
+        const juce::String tabs[] { "SYNTH", "SYNTH", "FM", "FILTER + AMP", "FX", "LAYERS" };
         const juce::uint32 colours[] { 0xff54f5d1, 0xffffbd65, 0xffc9a0ff, 0xff78f1c4, 0xffff91b8, 0xffa6cf75, 0xff94aaff, 0xffff9673 };
-
-        auto addNode = [this, &g, led, accent] (juce::Rectangle<float> world, const juce::String& title, const juce::String& detail, const juce::String& tab, int layer, juce::Colour colour)
-        {
-            const int index = (int) nodes.size(); nodes.push_back ({ world, title, detail, tab, layer });
-            auto r = toScreen (world);
-            g.setColour (juce::Colour (0xff142226)); g.fillRoundedRectangle (r, 5.0f * graphZoom);
-            g.setColour ((index == selectedNode ? juce::Colours::white : colour).withAlpha (0.72f)); g.drawRoundedRectangle (r, 5.0f * graphZoom, juce::jmax (1.0f, 1.3f * graphZoom));
-            g.setColour (colour); g.setFont (juce::Font (juce::FontOptions (juce::jmax (7.0f, 10.0f * graphZoom), juce::Font::bold)));
-            g.drawFittedText (title, r.reduced (6 * graphZoom, 2 * graphZoom).removeFromTop (r.getHeight() * 0.53f).toNearestInt(), juce::Justification::centredLeft, 1);
-            g.setColour (accent.withAlpha (0.82f)); g.setFont (juce::Font (juce::FontOptions (juce::jmax (6.5f, 8.5f * graphZoom))));
-            g.drawFittedText (detail, r.reduced (6 * graphZoom, 2 * graphZoom).withTrimmedTop (r.getHeight() * 0.48f).toNearestInt(), juce::Justification::centredLeft, 1);
-        };
+        std::vector<int> combineNodes, modNodes;
 
         for (size_t row = 0; row < instances.size(); ++row)
         {
             const int layer = instances[row]; const float y = (float) row * rowGap;
             const auto colour = juce::Colour (colours[row % std::size (colours)]);
-            juce::String instanceDetail = layer < 0 ? "MAIN / level " + juce::String (parameter ("mainLayerGain", 1.0f), 2)
-                                                    : "SYNTH " + juce::String (layer + 2) + " / level " + juce::String (parameter ("layer" + juce::String (layer + 1) + "Gain", 0.5f), 2);
+            const juce::String prefix = "L" + juce::String (layer);
+            const juce::String instanceDetail = layer < 0 ? "MAIN / level " + juce::String (parameter ("mainLayerGain", 1.0f), 2)
+                                                           : "SYNTH " + juce::String (layer + 2) + " / level " + juce::String (parameter ("layer" + juce::String (layer + 1) + "Gain", 0.5f), 2);
             const int op = layer < 0 ? -1 : (int) parameter ("layer" + juce::String (layer + 1) + "Operation", 0.0f);
             const juce::String opNames[] { "ADD", "MIX", "SUBTRACT", "MULTIPLY", "DIVIDE" };
             const juce::String combineDetail = layer < 0 ? "MASTER START" : opNames[juce::jlimit (0, 4, op)] + " / " + juce::String (parameter ("layer" + juce::String (layer + 1) + "Amount", 1.0f), 2);
-            const juce::String details[] { instanceDetail, "sources + tables", "algorithm + ops", "cutoff + ADSR", "LFO / MSEG / routes", "pre + built-in + post", combineDetail };
-            for (int stage = 0; stage < 7; ++stage)
+            const juce::String details[] { instanceDetail, "sources + tables", "algorithm + ops", "cutoff + ADSR", "pre + built-in + post", combineDetail };
+            std::array<int, 6> rowNodes {};
+            for (int stage = 0; stage < 6; ++stage)
             {
-                const juce::Rectangle<float> world (xs[(size_t) stage], y, nodeW, nodeH);
-                if (stage > 0)
-                {
-                    juce::Path wire;
-                    wire.startNewSubPath (toScreen (juce::Point<float> { xs[(size_t) stage - 1] + nodeW, y + nodeH * 0.5f }));
-                    wire.lineTo (toScreen (juce::Point<float> { xs[(size_t) stage], y + nodeH * 0.5f }));
-                    glow (g, wire, colour.withAlpha (0.6f), juce::jmax (0.8f, graphZoom));
-                }
-                addNode (world, stage == 0 ? (layer < 0 ? "INSTANCE 1 / MAIN" : "INSTANCE " + juce::String (layer + 2)) : stages[stage], details[stage], tabs[stage], layer, colour);
+                rowNodes[(size_t) stage] = addNode ({ xs[(size_t) stage], y, nodeW, nodeH }, prefix + ":S" + juce::String (stage),
+                    stage == 0 ? (layer < 0 ? "INSTANCE 1 / MAIN" : "INSTANCE " + juce::String (layer + 2)) : stages[stage],
+                    details[stage], tabs[stage], layer, colour, stage != 0, true);
+                if (stage > 0) connect (rowNodes[(size_t) stage - 1], rowNodes[(size_t) stage], EdgeKind::audio);
             }
+            combineNodes.push_back (rowNodes.back());
+
+            const int mod = addNode ({ 305.0f, y + 58.0f, 126.0f, 36.0f }, prefix + ":MOD", "MOD / ROUTES", "LFO / MSEG / matrix", "MOD", layer, accent, false, false);
+            modNodes.push_back (mod);
+            connect (mod, rowNodes[1], EdgeKind::modulation);
+            connect (mod, rowNodes[2], EdgeKind::modulation);
+            connect (mod, rowNodes[3], EdgeKind::modulation);
+            connect (mod, rowNodes[4], EdgeKind::modulation);
         }
 
-        const float busX = 860.0f;
         const float firstY = nodeH * 0.5f;
         const float lastY = (instances.size() - 1) * rowGap + nodeH * 0.5f;
-        juce::Path bus;
-        bus.startNewSubPath (toScreen (juce::Point<float> { xs.back() + nodeW, firstY }));
-        bus.lineTo (toScreen (juce::Point<float> { busX, firstY }));
-        bus.lineTo (toScreen (juce::Point<float> { busX, lastY }));
-        for (size_t row = 1; row < instances.size(); ++row)
-        {
-            const float y = row * rowGap + nodeH * 0.5f;
-            bus.startNewSubPath (toScreen (juce::Point<float> { xs.back() + nodeW, y }));
-            bus.lineTo (toScreen (juce::Point<float> { busX, y }));
-        }
         const float masterY = (firstY + lastY) * 0.5f;
-        bus.startNewSubPath (toScreen (juce::Point<float> { busX, masterY }));
-        bus.lineTo (toScreen (juce::Point<float> { 888.0f, masterY }));
-        glow (g, bus, led, juce::jmax (1.0f, graphZoom));
-        addNode ({ 888.0f, masterY - nodeH * 0.5f, 118.0f, nodeH }, "MASTER OUT", juce::String (parameter ("outputGain", -3.0f), 1) + " dB", "FX", -2, led);
-        addNode ({ 888.0f, masterY + 56.0f, 118.0f, nodeH }, "TEMPO CLOCK", juce::String (proc.getEffectiveBpm(), 1) + " BPM", "MOD", -2, accent);
+        const int master = addNode ({ 770.0f, masterY - nodeH * 0.5f, 126.0f, nodeH }, "MASTER", "MASTER OUT",
+                                    juce::String (parameter ("masterOutputGain", 0.0f), 1) + " dB", "FX", -2, led, true, false);
+        for (const auto combine : combineNodes) connect (combine, master, EdgeKind::audio);
+        const int clock = addNode ({ 770.0f, masterY + 64.0f, 126.0f, nodeH }, "CLOCK", "TEMPO CLOCK",
+                                   juce::String (proc.getEffectiveBpm(), 1) + " BPM", "MOD", -2, accent, false, true);
+        for (const auto mod : modNodes) connect (clock, mod, EdgeKind::clock);
 
+        drawToolbar (g, header, led, accent);
+        g.saveState(); g.reduceClipRegion (graphViewport.toNearestInt());
+        drawGrid (g, led);
+        for (const auto& edge : edges) drawEdge (g, edge, led, accent);
+        for (const auto& node : nodes) drawNode (g, node, accent);
         g.restoreState();
     }
 
