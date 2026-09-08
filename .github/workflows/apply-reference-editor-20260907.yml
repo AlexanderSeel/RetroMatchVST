@@ -9,119 +9,47 @@ permissions:
   contents: write
 
 jobs:
-  migrate-and-validate:
+  migrate-and-diagnose:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Validate migration scripts
+      - name: Apply migrations
         shell: pwsh
         run: |
           python -m py_compile scripts/apply-reference-editor-20260907.py
           python -m py_compile scripts/apply-sound-designer-20260907.py
-
-      - name: Apply large reference editor migration
-        shell: pwsh
-        run: python scripts/apply-reference-editor-20260907.py
-
-      - name: Fix generated MSVC coordinate types
-        shell: pwsh
-        run: |
+          python scripts/apply-reference-editor-20260907.py
           $path = 'Source/UI/ReferenceRegion.h'
           $text = Get-Content $path -Raw
           $old = 'return juce::jlimit (0.0, 1.0, (x - r.getX()) / juce::jmax (1.0f, r.getWidth())) * thumbnail.getTotalLength();'
           $new = 'return juce::jlimit (0.0, 1.0, (double) (x - r.getX()) / (double) juce::jmax (1.0f, r.getWidth())) * thumbnail.getTotalLength();'
           if (-not $text.Contains($old)) { throw 'ReferenceRegion coordinate marker not found.' }
-          $text = $text.Replace($old, $new)
-          Set-Content -Path $path -Value $text -NoNewline
-
-      - name: Apply professional sound designer migration
-        shell: pwsh
-        run: python scripts/apply-sound-designer-20260907.py
-
-      - name: Update selection-aware static contract
-        shell: pwsh
-        run: |
+          Set-Content -Path $path -Value ($text.Replace($old, $new)) -NoNewline
+          python scripts/apply-sound-designer-20260907.py
           $path = 'scripts/static-check.py'
           $text = Get-Content $path -Raw
           $old = "'reference pitch correction': ['expectedFundamentalHz', 'estimateConfidenceAtFundamental', 'analyzeFile (loadedReferenceFile, expectedHz)'],"
           $new = "'reference pitch correction': ['expectedFundamentalHz', 'estimateConfidenceAtFundamental', 'analyzeFile (loadedReferenceFile, expectedHz, start, end)'],"
           if (-not $text.Contains($old)) { throw 'Reference pitch static contract marker not found.' }
-          $text = $text.Replace($old, $new)
-          Set-Content -Path $path -Value $text -NoNewline
+          Set-Content -Path $path -Value ($text.Replace($old, $new)) -NoNewline
+          python scripts/static-check.py
 
-      - name: Instrument DSP test progression
+      - name: Configure ASan DSP tests
         shell: pwsh
         run: |
-          @'
-          from pathlib import Path
+          cmake -S . -B build-asan -A x64 -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON '-DCMAKE_CXX_FLAGS=/fsanitize=address /Zi' '-DCMAKE_EXE_LINKER_FLAGS=/INCREMENTAL:NO'
 
-          def inject(path, marker, label):
-              p = Path(path)
-              text = p.read_text(encoding='utf-8')
-              if marker not in text:
-                  raise RuntimeError(f'{path}: trace marker missing: {marker[:80]!r}')
-              text = text.replace(marker, f'std::cerr << "TRACE_{label}" << std::endl;\n    ' + marker, 1)
-              p.write_text(text, encoding='utf-8')
-
-          inject('Tests/MelodyTests.cpp', 'constexpr double sr = 22050.0;', 'MELODY_START')
-          inject('Tests/MelodyTests.cpp', 'const auto clip = MelodyAnalyzer::analyzeBuffer (audio, sr, false, 120);', 'MELODY_FIRST_ANALYZE')
-          inject('Tests/MelodyTests.cpp', 'const auto chord = MelodyAnalyzer::analyzeBuffer (audio, sr, true, 120);', 'MELODY_CHORD')
-          inject('Tests/MelodyTests.cpp', 'const auto repeated = MelodyAnalyzer::analyzeBuffer (audio, sr, false, 120);', 'MELODY_REPEATED')
-          inject('Tests/MelodyTests.cpp', 'auto restored = MelodyClip::fromState (clip.toState());', 'MELODY_STATE')
-          inject('Tests/MelodyTests.cpp', 'MelodyTransport transport; MelodyClip probe;', 'MELODY_TRANSPORT')
-          inject('Tests/MelodyTests.cpp', 'AudioVisualBuffer visual;', 'MELODY_VISUAL')
-          inject('Tests/SmokeTests.cpp', 'if (! runMelodyTests()) return 1;', 'SMOKE_BEFORE_MELODY')
-          inject('Tests/SmokeTests.cpp', 'VoiceParameters tone; tone.osc1Wave = 1; tone.osc2Mix = 0; tone.release = 0.02f;', 'SMOKE_AFTER_MELODY')
-          inject('Tests/SmokeTests.cpp', 'if (factoryPresetCatalog.size() != 110) return fail ("factory catalog must contain 110 presets");', 'SMOKE_BEFORE_FACTORY')
-          inject('Tests/SmokeTests.cpp', 'auto combined = makeFactoryPreset (0);', 'SMOKE_AFTER_FACTORY_META')
-          inject('Tests/SmokeTests.cpp', 'for (int i = 0; i < (int) factoryPresetCatalog.size(); ++i)', 'SMOKE_FACTORY_RENDER_LOOP')
-          inject('Tests/SmokeTests.cpp', 'VoiceParameters tone; tone.osc1Wave = 0; tone.osc2Mix = 0; tone.release = 0.02f;', 'SMOKE_SECOND_BLOCK')
-          inject('Tests/SmokeTests.cpp', '// Optional local reference benchmarks; audio remains outside the repository.', 'SMOKE_AFTER_LAYER_BLOCK')
-          inject('Tests/SmokeTests.cpp', 'for (const double rate : { 44100.0, 48000.0 })', 'SMOKE_SINE_BANK')
-          inject('Tests/SmokeTests.cpp', 'juce::TemporaryFile recording (".wav");', 'SMOKE_RECORDING')
-          print('DSP crash tracing injected')
-          '@ | python -
-
-      - name: Static source integrity
+      - name: Build ASan DSP tests
         shell: pwsh
-        run: python scripts/static-check.py
+        run: cmake --build build-asan --config RelWithDebInfo --target RetroMatchTests --parallel
 
-      - name: Configure
-        shell: pwsh
-        run: cmake -S . -B build-reference-editor -A x64 -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON
-
-      - name: Build VST3 and Standalone
-        shell: pwsh
-        run: cmake --build build-reference-editor --config Release --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
-
-      - name: Build and run DSP tests
+      - name: Run ASan DSP tests directly
         shell: pwsh
         run: |
-          cmake --build build-reference-editor --config Release --target RetroMatchTests --parallel
-          ctest --test-dir build-reference-editor -C Release --output-on-failure
-
-      - name: Remove temporary DSP trace markers
-        if: success()
-        shell: pwsh
-        run: |
-          @'
-          from pathlib import Path
-          for name in ('Tests/SmokeTests.cpp', 'Tests/MelodyTests.cpp'):
-              p = Path(name)
-              lines = p.read_text(encoding='utf-8').splitlines()
-              p.write_text('\n'.join(line for line in lines if 'TRACE_' not in line) + '\n', encoding='utf-8')
-          '@ | python -
-
-      - name: Commit validated migrations and remove one-shot files
-        shell: bash
-        run: |
-          git config user.name "Alexander Seel"
-          git config user.email "mr.alexander.seel@gmail.com"
-          git rm .github/workflows/apply-reference-editor-20260907.yml scripts/apply-reference-editor-20260907.py scripts/apply-sound-designer-20260907.py
-          git add -A
-          git diff --cached --check
-          git commit -m "Add reference editor, master mix and professional resynthesis modes"
-          git push origin HEAD:main
+          $env:ASAN_OPTIONS = 'symbolize=1:abort_on_error=1:windows_hook_rtl_allocators=true'
+          $exe = Resolve-Path 'build-asan/RetroMatchTests_artefacts/RelWithDebInfo/RetroMatchTests.exe'
+          & $exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
