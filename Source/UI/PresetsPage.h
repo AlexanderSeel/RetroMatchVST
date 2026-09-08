@@ -8,8 +8,12 @@ class PresetsPage final : public juce::Component, private juce::ListBoxModel, pr
 public:
     explicit PresetsPage (RetroMatchSynthAudioProcessor& p) : proc (p), list ("Preset browser", this)
     {
-        addAndMakeVisible (list); addAndMakeVisible (description); addAndMakeVisible (current); addAndMakeVisible (visual);
-        list.setRowHeight (44); description.setJustificationType (juce::Justification::topLeft);
+        addAndMakeVisible (list); addAndMakeVisible (description); addAndMakeVisible (current); addAndMakeVisible (visual); addAndMakeVisible (autoLoad);
+        list.setRowHeight (54); description.setMultiLine (true); description.setReadOnly (true); description.setScrollbarsShown (true);
+        description.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff071012));
+        description.setColour (juce::TextEditor::textColourId, juce::Colour (0xffb9c9c4));
+        autoLoad.setButtonText ("LOAD ON SELECT"); autoLoad.setToggleState (true, juce::dontSendNotification);
+        autoLoad.setTooltip ("When enabled, a single click loads the highlighted preset immediately. Double-click and LOAD SELECTED always work.");
         visual.parameters = [this] { return proc.getMainVoiceParameters(); };
         for (auto* b : { &load, &save, &open, &randomize, &audition }) addAndMakeVisible (*b);
         load.setButtonText ("LOAD SELECTED"); save.setButtonText ("SAVE CURRENT"); open.setButtonText ("OPEN PRESET");
@@ -33,20 +37,21 @@ public:
     ~PresetsPage() override { if (auditionUntil > 0) proc.noteOffFromEditor (60); }
     void resized() override
     {
-        auto r = getLocalBounds().reduced (16); current.setBounds (r.removeFromTop (30)); r.removeFromTop (8);
+        auto r = getLocalBounds().reduced (16); auto titleRow = r.removeFromTop (30); current.setBounds (titleRow.removeFromLeft (juce::jmax (300, titleRow.getWidth() - 180))); autoLoad.setBounds (titleRow.reduced (4, 2)); r.removeFromTop (8);
         auto filters = r.removeFromTop (34); category.setBounds (filters.removeFromRight (180).reduced (2)); search.setBounds (filters.reduced (2)); r.removeFromTop (8);
         auto actions = r.removeFromTop (34); const int w = actions.getWidth() / 3;
         load.setBounds (actions.removeFromLeft (w).reduced (2)); save.setBounds (actions.removeFromLeft (w).reduced (2)); open.setBounds (actions.reduced (2));
         r.removeFromTop (8); auto bottom = r.removeFromBottom (36);
         randomize.setBounds (bottom.removeFromLeft (bottom.getWidth() * 2 / 3).reduced (2)); audition.setBounds (bottom.reduced (2));
         list.setBounds (r.removeFromLeft (r.getWidth() / 2).reduced (2)); r.removeFromLeft (10);
-        visual.setBounds (r.removeFromTop (180)); description.setBounds (r.reduced (4, 12));
+        visual.setBounds (r.removeFromTop (210)); description.setBounds (r.reduced (4, 8));
     }
     void paint (juce::Graphics& g) override { g.fillAll (juce::Colour (0xff101719)); }
 private:
     RetroMatchSynthAudioProcessor& proc; juce::ListBox list;
     juce::TextEditor search; juce::ComboBox category; std::vector<int> visibleRows;
-    juce::Label description, current; SynthInstanceVisual visual;
+    juce::TextEditor description; juce::Label current; SynthInstanceVisual visual;
+    juce::ToggleButton autoLoad;
     juce::TextButton load, save, open, randomize, audition;
     juce::Array<juce::File> userFiles; std::unique_ptr<juce::FileChooser> chooser;
     double auditionUntil = 0;
@@ -90,9 +95,8 @@ private:
     void selectedRowsChanged (int row) override
     {
         if (row < 0 || row >= getNumRows()) return;
-        row = visibleRows[(size_t) row];
-        if (row < (int) factoryPresetCatalog.size()) description.setText (factoryPresetCatalog[(size_t) row].description, juce::dontSendNotification);
-        else description.setText ("Your saved synth instances, wavetables, modulation and FX chain.", juce::dontSendNotification);
+        updateDetails (visibleRows[(size_t) row]);
+        if (autoLoad.getToggleState()) loadSelected();
     }
     void listBoxItemDoubleClicked (int, const juce::MouseEvent&) override { loadSelected(); }
     void loadSelected()
@@ -102,7 +106,71 @@ private:
         else if (! proc.loadPreset (userFiles[row - (int) factoryPresetCatalog.size()])) description.setText ("Could not load this preset.", juce::dontSendNotification);
         refreshCurrent();
     }
-    void refreshCurrent() { current.setText ("CURRENT / " + proc.getPresetName(), juce::dontSendNotification); visual.repaint(); }
+    void refreshCurrent()
+    {
+        current.setText ("CURRENT / " + proc.getPresetName(), juce::dontSendNotification);
+        visual.repaint();
+    }
+
+    static juce::String waveName (int wave)
+    {
+        const juce::StringArray names { "Sine", "Saw", "Square", "Triangle", "Pulse" };
+        return names[juce::jlimit (0, names.size() - 1, wave)];
+    }
+
+    static juce::String filterName (int type)
+    {
+        return type == 1 ? "High-pass" : type == 2 ? "Band-pass" : "Low-pass";
+    }
+
+    juce::String describePatch (const VoiceParameters& p, const juce::String& descriptionText) const
+    {
+        int layers = 1;
+        for (const auto& layer : p.layers) if (layer) ++layers;
+        juce::String s;
+        if (descriptionText.isNotEmpty()) s << descriptionText << "\n\n";
+        s << "SYNTHESIS\n"
+          << "  " << layers << " instance" << (layers == 1 ? "" : "s")
+          << "  |  OSC1 " << waveName (p.osc1Wave) << " " << juce::String (p.osc1Mix, 2)
+          << "  |  OSC2 " << waveName (p.osc2Wave) << " " << juce::String (p.osc2Mix, 2) << "\n"
+          << "  Wavetable " << juce::String (p.wavetableMix, 2)
+          << "  |  Ref WT " << juce::String (p.referenceWavetableMix, 2)
+          << "  |  FM " << juce::String (p.fmMix, 2) << " / algorithm " << juce::String (p.fmAlgorithm + 1)
+          << "  |  Supersaw " << juce::String (p.supersawMix, 2) << "\n\n"
+          << "FILTER + ENVELOPE\n"
+          << "  " << filterName (p.filterType) << "  " << juce::String (p.cutoff, 0) << " Hz"
+          << "  |  Resonance " << juce::String (p.resonance, 2) << "\n"
+          << "  ADSR  " << juce::String (p.attack, 3) << " / " << juce::String (p.decay, 3)
+          << " / " << juce::String (p.sustain, 2) << " / " << juce::String (p.release, 3) << " s\n\n"
+          << "MOTION + SPACE\n"
+          << "  MSEG " << (p.mseg.enabled ? "ON" : "off")
+          << "  |  Chorus " << juce::String (p.chorusMix, 2)
+          << "  |  Delay " << juce::String (p.delayMix, 2)
+          << "  |  Reverb " << juce::String (p.reverbMix, 2)
+          << "  |  Width " << juce::String (p.stereoWidth, 2) << "\n"
+          << "  Patch output " << juce::String (p.outputGainDb, 1) << " dB";
+        return s;
+    }
+
+    void updateDetails (int row)
+    {
+        if (row < 0) return;
+        if (row < (int) factoryPresetCatalog.size())
+        {
+            const auto& info = factoryPresetCatalog[(size_t) row];
+            description.setText ("FACTORY / " + info.category + " / " + info.name + "\n\n"
+                                 + describePatch (makeFactoryPreset (row), info.description), false);
+        }
+        else
+        {
+            const int userIndex = row - (int) factoryPresetCatalog.size();
+            const auto file = userFiles[userIndex];
+            description.setText ("USER PRESET / " + file.getFileNameWithoutExtension() + "\n"
+                                 + file.getFullPathName()
+                                 + "\n\nSingle-click loads this preset when LOAD ON SELECT is active. "
+                                   "After loading, the CURRENT display and synth visual show its complete state.", false);
+        }
+    }
     void timerCallback() override
     {
         if (auditionUntil > 0 && juce::Time::getMillisecondCounterHiRes() >= auditionUntil) { proc.noteOffFromEditor (60); auditionUntil = 0; }

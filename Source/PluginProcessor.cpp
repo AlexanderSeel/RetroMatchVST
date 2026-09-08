@@ -117,27 +117,46 @@ public:
 
         if (auto* tabbed = findTabbedComponent())
         {
-            if (tabbed->getNumTabs() > 5)
+            // Base editor contributes these pages without transferring ownership.
+            // Rebuild the outer tab strip in the requested sound-design workflow order.
+            auto* synthContent = tabbed->getTabContentComponent (0);
+            auto* fmContent = tabbed->getTabContentComponent (1);
+            auto* filterContent = tabbed->getTabContentComponent (2);
+            auto* builtInMod = tabbed->getTabContentComponent (3);
+            auto* builtInFx = tabbed->getTabContentComponent (4);
+            auto* baseSettings = tabbed->getTabContentComponent (5);
+            auto* baseAiLog = tabbed->getTabContentComponent (6);
+            auto* signalContent = tabbed->getTabContentComponent (7);
+            auto* melodyContent = tabbed->getTabContentComponent (8);
+
+            settingsPage = baseSettings;
+            if (settingsPage != nullptr)
             {
-                settingsPage = tabbed->getTabContentComponent (5);
-                if (settingsPage != nullptr)
-                {
-                    settingsPage->addAndMakeVisible (qualityLabel);
-                    settingsPage->addAndMakeVisible (qualityChoice);
-                }
+                settingsPage->addAndMakeVisible (qualityLabel);
+                settingsPage->addAndMakeVisible (qualityChoice);
             }
 
+            for (int i = tabbed->getNumTabs() - 1; i >= 0; --i)
+                tabbed->removeTab (i);
+
+            auto* settingsHub = new juce::TabbedComponent (juce::TabbedButtonBar::TabsAtTop);
+            settingsHub->setTabBarDepth (32);
+            settingsHub->addTab ("GENERAL + AI", juce::Colour (0xff171d1d), baseSettings, false);
+            settingsHub->addTab ("AI LOG", juce::Colour (0xff10191b), baseAiLog, false);
+
+            tabbed->addTab ("PRESETS", juce::Colour (0xff101719), new PresetsPage (proc), true);
+            tabbed->addTab ("LAYERS", juce::Colour (0xff101719), new LayersPage (proc), true);
+            tabbed->addTab ("SYNTH", juce::Colour (0xff14201e), synthContent, false);
+            tabbed->addTab ("FM", juce::Colour (0xff211b14), fmContent, false);
             tabbed->addTab ("MSEG", juce::Colour (0xff10201d), new MsegPage (proc), true);
+            tabbed->addTab ("FILTER", juce::Colour (0xff151e20), filterContent, false);
+            tabbed->addTab ("MOD", juce::Colour (0xff101719), new ModulatorsPage (proc, builtInMod), true);
+            tabbed->addTab ("FX", juce::Colour (0xff101719), new FxRackPage (proc, builtInFx), true);
             tabbed->addTab ("WAVETABLE", juce::Colour (0xff101b20), new UserWavetablePage (proc), true);
+            tabbed->addTab ("SIGNAL", juce::Colour (0xff102024), signalContent, false);
             tabbed->addTab ("MIDI MAP", juce::Colour (0xff171b20), new MidiMappingPage (proc), true);
-            auto* builtInFx = tabbed->getTabContentComponent (4);
-            tabbed->removeTab (4);
-            tabbed->addTab ("FX", juce::Colour (0xff101719), new FxRackPage (proc, builtInFx), true, 4);
-            auto* builtInMod = tabbed->getTabContentComponent (3);
-            tabbed->removeTab (3);
-            tabbed->addTab ("MOD", juce::Colour (0xff101719), new ModulatorsPage (proc, builtInMod), true, 3);
-            tabbed->addTab ("LAYERS", juce::Colour (0xff101719), new LayersPage (proc), true, 0);
-            tabbed->addTab ("PRESETS", juce::Colour (0xff101719), new PresetsPage (proc), true, 1);
+            tabbed->addTab ("MELODY", juce::Colour (0xff102024), melodyContent, false);
+            tabbed->addTab ("SETTINGS", juce::Colour (0xff171d1d), settingsHub, true);
             tabbed->setCurrentTabIndex (0);
         }
         resized();
@@ -191,6 +210,8 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
     setDefault ("msegLoopEnabled", false);
     setDefault ("msegLoopStart", 1);
     setDefault ("msegLoopEnd", 2);
+    setDefault ("msegTarget", (int) ModDestination::amplitude);
+    setDefault ("msegDepth", 1.0f);
     setDefault ("userWavetableMix", 0.0f);
     setDefault ("distortionMode", 0); setDefault ("distortionMix", 1.0f); setDefault ("mainLayerGain", 1.0f);
     for (int i = 1; i <= VoiceParameters::extraLayerCount; ++i)
@@ -357,6 +378,8 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams (const juce::ValueTree
     }
 
     p.mseg.enabled = v ("msegEnabled") >= 0.5f;
+    p.msegTarget = juce::jlimit ((int) ModDestination::none, (int) ModDestination::wavefold, (int) v ("msegTarget"));
+    p.msegDepth = juce::jlimit (-1.0f, 1.0f, v ("msegDepth"));
     p.mseg.loopEnabled = v ("msegLoopEnabled") >= 0.5f;
     p.mseg.loopStartPoint = juce::jlimit (0, MsegParameters::pointCount - 2, (int) v ("msegLoopStart"));
     p.mseg.loopEndPoint = juce::jlimit (1, MsegParameters::pointCount - 1, (int) v ("msegLoopEnd") + 1);
@@ -1027,6 +1050,8 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
     }
     set ("userWavetableMix", q.userWavetableMix);
     set ("msegEnabled", q.mseg.enabled ? 1.0f : 0.0f);
+    set ("msegTarget", (float) q.msegTarget);
+    set ("msegDepth", q.msegDepth);
     set ("msegLoopEnabled", q.mseg.loopEnabled ? 1.0f : 0.0f);
     set ("msegLoopStart", (float) q.mseg.loopStartPoint); set ("msegLoopEnd", (float) q.mseg.loopEndPoint - 1);
     for (int i = 0; i < MsegParameters::pointCount; ++i) set ("msegLevel" + juce::String (i + 1), q.mseg.levels[(size_t) i]);
@@ -1252,6 +1277,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
     l.add (std::make_unique<B> ("msegLoopEnabled", "MSEG 1 Loop Enabled", false));
     l.add (std::make_unique<C> ("msegLoopStart", "MSEG 1 Loop Start", juce::StringArray { "P1", "P2", "P3", "P4", "P5" }, 1));
     l.add (std::make_unique<C> ("msegLoopEnd", "MSEG 1 Loop End", juce::StringArray { "P2", "P3", "P4", "P5", "P6" }, 2));
+    l.add (std::make_unique<C> ("msegTarget", "MSEG 1 Direct Target", actualModDestinations, (int) ModDestination::amplitude));
+    l.add (std::make_unique<P> ("msegDepth", "MSEG 1 Direct Depth", juce::NormalisableRange<float> (-1.0f, 1.0f, 0.001f), 1.0f));
 
     const float defaultMsegLevels[] = { 0.0f, 1.0f, 0.78f, 0.58f, 0.28f, 0.0f };
     for (int i = 0; i < MsegParameters::pointCount; ++i)

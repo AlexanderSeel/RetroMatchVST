@@ -27,12 +27,26 @@ public:
         loopStartAttachment = std::make_unique<ComboAttachment> (state, "msegLoopStart", loopStart);
         loopEndAttachment = std::make_unique<ComboAttachment> (state, "msegLoopEnd", loopEnd);
 
+        styleLabel (targetLabel, "DIRECT TARGET");
+        target.addItemList ({ "Off", "Pitch", "Cutoff", "Amplitude", "Pulse Width", "PM Amount", "6-OP FM Mix", "Wavetable Position", "Wavefold" }, 1);
+        targetAttachment = std::make_unique<ComboAttachment> (state, "msegTarget", target);
+        styleLabel (depthLabel, "DEPTH");
+        depth.setSliderStyle (juce::Slider::LinearHorizontal);
+        depth.setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 22);
+        depth.setNumDecimalPlacesToDisplay (2);
+        depth.setTooltip ("Dedicated MSEG depth. At the default Amplitude / +1.00, enabling MSEG directly shapes loudness in addition to the ADSR.");
+        depthAttachment = std::make_unique<SliderAttachment> (state, "msegDepth", depth);
+
         addAndMakeVisible (enabled);
         addAndMakeVisible (loopEnabled);
         addAndMakeVisible (loopStartLabel);
         addAndMakeVisible (loopStart);
         addAndMakeVisible (loopEndLabel);
         addAndMakeVisible (loopEnd);
+        addAndMakeVisible (targetLabel);
+        addAndMakeVisible (target);
+        addAndMakeVisible (depthLabel);
+        addAndMakeVisible (depth);
 
         for (int i = 0; i < MsegParameters::pointCount; ++i)
         {
@@ -103,7 +117,7 @@ public:
 
         drawSection (g, graphBounds.toFloat(), "MSEG 1  //  SIX-POINT ENVELOPE", findColour (RetroLookAndFeel::primaryLed));
         drawSection (g, shapeBounds.toFloat(), "SEGMENT TIME + CURVE", findColour (RetroLookAndFeel::secondaryLed));
-        drawSection (g, routeBounds.toFloat(), "POST-1.0 MODULATION GRAPH", findColour (RetroLookAndFeel::tertiaryLed));
+        drawSection (g, routeBounds.toFloat(), "EXTRA MODULATION ROUTES", findColour (RetroLookAndFeel::tertiaryLed));
 
         auto graph = graphBounds.toFloat().reduced (15.0f, 30.0f).withTrimmedBottom (8.0f);
         if (graph.getWidth() < 40.0f || graph.getHeight() < 40.0f) return;
@@ -171,13 +185,20 @@ public:
         sync.setBounds (clock.removeFromLeft (210).reduced (2));
         area.removeFromTop (4);
 
-        auto header = area.removeFromTop (34);
-        enabled.setBounds (header.removeFromLeft (150).reduced (2, 2));
-        loopEnabled.setBounds (header.removeFromLeft (190).reduced (2, 2));
-        loopStartLabel.setBounds (header.removeFromLeft (78));
-        loopStart.setBounds (header.removeFromLeft (82).reduced (2, 2));
-        loopEndLabel.setBounds (header.removeFromLeft (72));
-        loopEnd.setBounds (header.removeFromLeft (82).reduced (2, 2));
+        auto header = area.removeFromTop (68);
+        auto enableRow = header.removeFromTop (32);
+        enabled.setBounds (enableRow.removeFromLeft (150).reduced (2, 2));
+        loopEnabled.setBounds (enableRow.removeFromLeft (190).reduced (2, 2));
+        loopStartLabel.setBounds (enableRow.removeFromLeft (78));
+        loopStart.setBounds (enableRow.removeFromLeft (82).reduced (2, 2));
+        loopEndLabel.setBounds (enableRow.removeFromLeft (72));
+        loopEnd.setBounds (enableRow.removeFromLeft (82).reduced (2, 2));
+        auto directRow = header.removeFromTop (32);
+        targetLabel.setBounds (directRow.removeFromLeft (95));
+        target.setBounds (directRow.removeFromLeft (250).reduced (2, 2));
+        directRow.removeFromLeft (10);
+        depthLabel.setBounds (directRow.removeFromLeft (55));
+        depth.setBounds (directRow.removeFromLeft (300).reduced (2, 2));
         area.removeFromTop (5);
 
         const int graphHeight = juce::jlimit (140, 225, area.getHeight() / 3);
@@ -231,8 +252,9 @@ private:
     TempoSyncBar tempo;
     TempoSyncSelector sync;
     juce::ToggleButton enabled, loopEnabled;
-    juce::Label loopStartLabel, loopEndLabel;
-    juce::ComboBox loopStart, loopEnd;
+    juce::Label loopStartLabel, loopEndLabel, targetLabel, depthLabel;
+    juce::ComboBox loopStart, loopEnd, target;
+    juce::Slider depth;
 
     std::array<juce::Label, MsegParameters::pointCount> pointLabels;
     std::array<juce::Slider, MsegParameters::pointCount> pointLevels;
@@ -244,7 +266,8 @@ private:
     std::array<juce::Slider, VoiceParameters::modGraphSlotCount> routeAmounts;
 
     std::unique_ptr<ButtonAttachment> enabledAttachment, loopAttachment;
-    std::unique_ptr<ComboAttachment> loopStartAttachment, loopEndAttachment;
+    std::unique_ptr<ComboAttachment> loopStartAttachment, loopEndAttachment, targetAttachment;
+    std::unique_ptr<SliderAttachment> depthAttachment;
     std::array<std::unique_ptr<SliderAttachment>, MsegParameters::pointCount> pointAttachments;
     std::array<std::unique_ptr<SliderAttachment>, MsegParameters::segmentCount> timeAttachments, curveAttachments;
     std::array<std::unique_ptr<ComboAttachment>, VoiceParameters::modGraphSlotCount> sourceAttachments, destinationAttachments;

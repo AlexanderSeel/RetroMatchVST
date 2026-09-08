@@ -101,7 +101,7 @@ required_tokens = {
     'MSEG engine': ['MsegParameters', 'MultiSegmentEnvelope', 'loopStartPoint', 'loopEndPoint', 'noteOn()', 'noteOff()', 'shapeProgress'],
     'MSEG voice routing': ['mseg.setSampleRate', 'mseg.setParameters', 'mseg.noteOn', 'mseg.noteOff', 'params.modGraphSlots', 'ModSource::mseg1'],
     'MSEG processor state': ['"msegEnabled"', '"msegLoopEnabled"', '"msegLevel"', '"msegTime"', '"msegCurve"', '"modGraph"'],
-    'MSEG editor': ['ENABLE MSEG 1', 'LOOP WHILE NOTE HELD', 'POST-1.0 MODULATION GRAPH', 'MSEG 1', 'modGraph', 'msegSync', 'msegDivision'],
+    'MSEG editor': ['ENABLE MSEG 1', 'LOOP WHILE NOTE HELD', 'EXTRA MODULATION ROUTES', 'MSEG 1', 'modGraph', 'msegSync', 'msegDivision'],
     'user wavetable importer': ['importSet', 'importSetFromBuffer', 'chooseSourceFrameSize', 'cyclicFrameSample', 'source frame', '5 x 2048'],
     'user wavetable engine': ['userWavetableMix', 'userWavetable', 'params.userWavetable->sample'],
     'user wavetable processor': ['"userWavetableMix"', 'loadUserWavetable', 'clearUserWavetable', '"userWavetable"', 'userWavetableDescription', 'presetVersion", "1.4"'],

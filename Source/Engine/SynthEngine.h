@@ -82,6 +82,10 @@ struct VoiceParameters
     std::array<ModSlotParameters, modSlotCount> modSlots {};
 
     MsegParameters mseg;
+    // Dedicated MSEG destination makes ENABLE MSEG immediately audible.
+    // The graph slots below remain available for additional parallel routes.
+    int msegTarget = (int) ModDestination::amplitude;
+    float msegDepth = 1.0f;
     std::array<ModSlotParameters, modGraphSlotCount> modGraphSlots {};
     std::array<ModSlotParameters, 4> moduleModSlots {};
     std::array<float, 3> extraLfoRate {{ 0.5f, 2.0f, 5.0f }};

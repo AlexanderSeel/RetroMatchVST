@@ -219,7 +219,7 @@ float HybridVoice::getModSourceValue (int source, float lfo, float envelopeValue
         case ModSource::keyTrack:     return juce::jlimit (-1.0f, 1.0f, (currentMidiNote - 60) / 36.0f);
         case ModSource::randomNote:   return randomNoteValue;
         case ModSource::ampEnvelope: return envelopeValue * 2.0f - 1.0f;
-        case ModSource::mseg1:       return msegValue;
+        case ModSource::mseg1:       return msegValue * 2.0f - 1.0f;
         case ModSource::lfo2:        return extraLfoValue[0];
         case ModSource::lfo3:        return extraLfoValue[1];
         case ModSource::lfo4:        return extraLfoValue[2];
@@ -337,6 +337,36 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
         const float env = ampEnv.getNextSample();
         const float msegValue = params.mseg.enabled ? mseg.getNextSample() : 0.0f;
 
+        // A hardware-style MSEG should do something as soon as it is enabled.
+        // The dedicated target is intentionally separate from the general graph:
+        // default AMP/100% acts as a second contour multiplied with the ADSR.
+        float directMsegPitch = 0.0f, directMsegCutoff = 0.0f, directMsegAmp = 1.0f;
+        float directMsegPulse = 0.0f, directMsegFmAmount = 0.0f, directMsegFmMix = 0.0f;
+        float directMsegWavetable = 0.0f, directMsegWavefold = 0.0f;
+        if (params.mseg.enabled && std::abs (params.msegDepth) > 0.0001f)
+        {
+            const float depth = juce::jlimit (-1.0f, 1.0f, params.msegDepth);
+            const float unipolar = juce::jlimit (0.0f, 1.0f, msegValue);
+            const float bipolar = unipolar * 2.0f - 1.0f;
+            switch ((ModDestination) params.msegTarget)
+            {
+                case ModDestination::pitch:             directMsegPitch = bipolar * depth * 12.0f; break;
+                case ModDestination::cutoff:            directMsegCutoff = bipolar * depth * 4.0f; break;
+                case ModDestination::amplitude:
+                {
+                    const float shaped = depth >= 0.0f ? unipolar : 1.0f - unipolar;
+                    directMsegAmp = juce::jmap (std::abs (depth), 1.0f, shaped);
+                    break;
+                }
+                case ModDestination::pulseWidth:        directMsegPulse = bipolar * depth * 0.42f; break;
+                case ModDestination::fmAmount:          directMsegFmAmount = bipolar * depth * 0.65f; break;
+                case ModDestination::fmMix:             directMsegFmMix = bipolar * depth; break;
+                case ModDestination::wavetablePosition: directMsegWavetable = bipolar * depth * 0.5f; break;
+                case ModDestination::wavefold:          directMsegWavefold = bipolar * depth * 0.5f; break;
+                default: break;
+            }
+        }
+
         float matrixPitch = 0.0f, matrixCutoff = 0.0f, matrixAmp = 0.0f;
         float matrixPulse = 0.0f, matrixFmAmount = 0.0f, matrixFmMix = 0.0f;
         float matrixWavetable = 0.0f, matrixWavefold = 0.0f;
@@ -366,17 +396,17 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
         for (const auto& slot : params.modGraphSlots) applySlot (slot);
         for (const auto& slot : params.moduleModSlots) applySlot (slot);
 
-        const float globalSemis = params.masterTuneCents / 100.0f + pitchWheelSemitones + matrixPitch;
+        const float globalSemis = params.masterTuneCents / 100.0f + pitchWheelSemitones + matrixPitch + directMsegPitch;
         const float f1 = baseHz * std::pow (2.0f, (globalSemis + params.lfoPitch * lfo) / 12.0f);
         const float f2 = baseHz * std::pow (2.0f, (globalSemis + params.osc2Semitones + params.osc2Detune / 100.0f) / 12.0f);
         const float fSub = f1 * 0.5f;
         const auto dt1 = juce::jlimit (0.0, 0.49, f1 / sr);
         const auto dt2 = juce::jlimit (0.0, 0.49, f2 / sr);
-        const float dynamicPulseWidth = juce::jlimit (0.05f, 0.95f, params.pulseWidth + matrixPulse);
-        const float dynamicFmAmount = juce::jlimit (0.0f, 1.2f, params.fmAmount + matrixFmAmount);
-        const float dynamicFmMix = juce::jlimit (0.0f, 1.0f, params.fmMix + matrixFmMix);
-        const float dynamicWavetablePosition = juce::jlimit (0.0f, 1.0f, params.wavetablePosition + matrixWavetable);
-        const float dynamicWavefold = juce::jlimit (0.0f, 1.0f, params.wavefold + matrixWavefold);
+        const float dynamicPulseWidth = juce::jlimit (0.05f, 0.95f, params.pulseWidth + matrixPulse + directMsegPulse);
+        const float dynamicFmAmount = juce::jlimit (0.0f, 1.2f, params.fmAmount + matrixFmAmount + directMsegFmAmount);
+        const float dynamicFmMix = juce::jlimit (0.0f, 1.0f, params.fmMix + matrixFmMix + directMsegFmMix);
+        const float dynamicWavetablePosition = juce::jlimit (0.0f, 1.0f, params.wavetablePosition + matrixWavetable + directMsegWavetable);
+        const float dynamicWavefold = juce::jlimit (0.0f, 1.0f, params.wavefold + matrixWavefold + directMsegWavefold);
 
         const float modulator = wave (0, phase2 * params.fmRatio, dt2 * params.fmRatio, 0.5f);
         const float phaseMod = modulator * dynamicFmAmount;
@@ -419,11 +449,11 @@ void HybridVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, int
         if (scratchRight != nullptr) scratchRight[i] = (mono + uniR * params.supersawMix) * 0.21f;
 
         cutoffScratch[(size_t) i] = juce::jlimit (20.0f, (float) (sr * 0.45),
-                                                  params.cutoff * std::pow (2.0f, params.lfoCutoff * lfo + matrixCutoff));
+                                                  params.cutoff * std::pow (2.0f, params.lfoCutoff * lfo + matrixCutoff + directMsegCutoff));
         wavefoldScratch[(size_t) i] = dynamicWavefold;
         const float tremolo = 1.0f - params.lfoAmp * 0.5f + params.lfoAmp * 0.5f * (lfo + 1.0f);
         const float matrixGain = juce::jlimit (0.0f, 2.0f, 1.0f + matrixAmp);
-        gainScratch[(size_t) i] = env * level * juce::jlimit (0.0f, 1.5f, tremolo) * matrixGain;
+        gainScratch[(size_t) i] = env * level * juce::jlimit (0.0f, 1.5f, tremolo) * matrixGain * directMsegAmp;
 
         phase1 += f1 / sr;
         phase2 += f2 / sr;
