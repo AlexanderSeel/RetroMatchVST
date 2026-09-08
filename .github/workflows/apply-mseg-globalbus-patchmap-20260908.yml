@@ -5,6 +5,7 @@ on:
     branches: [ main ]
     paths:
       - 'scripts/apply-mseg-globalbus-patchmap-20260908.py'
+      - '.github/workflows/apply-mseg-globalbus-patchmap-20260908.yml'
 
 permissions:
   contents: write
