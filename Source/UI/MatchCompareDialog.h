@@ -72,9 +72,8 @@ public:
         const auto cyan = laf.findColour (RetroLookAndFeel::tertiaryLed);
         const RetroHardware3D::Palette palette { led, gold, cyan };
 
-        // This window deliberately uses a brighter hardware face than the synth's
-        // recessed editor pages: comparison traces and metric text must remain
-        // readable even on low-brightness displays.
+        // Brighter than the deeply recessed editor pages by design: comparison
+        // traces, labels and metrics must remain legible on low-brightness displays.
         g.fillAll (juce::Colour (0xff111719));
         auto outer = getLocalBounds().toFloat().reduced (6.0f);
         RetroHardware3D::drawRecessedPanel (g, outer, palette, 10.0f);
@@ -91,7 +90,6 @@ public:
         g.drawText ("REFERENCE  ↔  RESYNTH VISUAL COMPARE", 24, 16, getWidth() - 48, 26,
                     juce::Justification::centredLeft);
 
-        // Persistent legend avoids the previous dark-on-dark ambiguity.
         auto legend = juce::Rectangle<float> ((float) getWidth() - 300.0f, 18.0f, 270.0f, 22.0f);
         drawLegend (g, legend.removeFromLeft (125.0f), led, "REFERENCE");
         drawLegend (g, legend, gold, "RESYNTH");
@@ -135,11 +133,7 @@ private:
 
     void timerCallback() override
     {
-        if (laf.getCurrentColourScheme().getUIColour (juce::LookAndFeel_V4::ColourScheme::UIColour::windowBackground)
-            != laf.getCurrentColourScheme().getUIColour (juce::LookAndFeel_V4::ColourScheme::UIColour::windowBackground))
-        {
-            // Intentionally empty: keeping all visible colours palette-driven is handled in paint().
-        }
+        laf.setPalette (proc.lightPalette.load());
         syncButtonState();
         repaint();
     }
