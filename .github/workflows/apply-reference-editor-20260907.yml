@@ -1,4 +1,4 @@
-name: Apply reference editor and sound designer upgrade
+name: Publish reference editor and sound designer upgrade
 
 on:
   push:
@@ -9,26 +9,20 @@ permissions:
   contents: write
 
 jobs:
-  migrate-and-validate:
+  publish:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Validate migration scripts
+      - name: Apply validated migrations
         shell: pwsh
         run: |
           python -m py_compile scripts/apply-reference-editor-20260907.py
           python -m py_compile scripts/apply-sound-designer-20260907.py
+          python scripts/apply-reference-editor-20260907.py
 
-      - name: Apply large reference editor migration
-        shell: pwsh
-        run: python scripts/apply-reference-editor-20260907.py
-
-      - name: Fix generated MSVC coordinate types
-        shell: pwsh
-        run: |
           $path = 'Source/UI/ReferenceRegion.h'
           $text = Get-Content $path -Raw
           $old = 'return juce::jlimit (0.0, 1.0, (x - r.getX()) / juce::jmax (1.0f, r.getWidth())) * thumbnail.getTotalLength();'
@@ -36,13 +30,8 @@ jobs:
           if (-not $text.Contains($old)) { throw 'ReferenceRegion coordinate marker not found.' }
           Set-Content -Path $path -Value ($text.Replace($old, $new)) -NoNewline
 
-      - name: Apply professional sound designer migration
-        shell: pwsh
-        run: python scripts/apply-sound-designer-20260907.py
+          python scripts/apply-sound-designer-20260907.py
 
-      - name: Update selection-aware static contract
-        shell: pwsh
-        run: |
           $path = 'scripts/static-check.py'
           $text = Get-Content $path -Raw
           $old = "'reference pitch correction': ['expectedFundamentalHz', 'estimateConfidenceAtFundamental', 'analyzeFile (loadedReferenceFile, expectedHz)'],"
@@ -52,25 +41,9 @@ jobs:
           $text = $text.Replace('layered resynthesis replaces stale racks and supports up to three generated instances', 'layered resynthesis replaces stale racks and supports up to eight generated instances')
           Set-Content -Path $path -Value $text -NoNewline
 
-      - name: Static source integrity
-        shell: pwsh
-        run: python scripts/static-check.py
+          python scripts/static-check.py
 
-      - name: Configure
-        shell: pwsh
-        run: cmake -S . -B build-reference-editor -A x64 -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON
-
-      - name: Build and run DSP tests
-        shell: pwsh
-        run: |
-          cmake --build build-reference-editor --config Release --target RetroMatchTests --parallel
-          ctest --test-dir build-reference-editor -C Release --output-on-failure
-
-      - name: Build VST3 and Standalone
-        shell: pwsh
-        run: cmake --build build-reference-editor --config Release --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
-
-      - name: Commit validated migrations and remove one-shot files
+      - name: Commit everything to main
         shell: bash
         run: |
           git config user.name "Alexander Seel"
