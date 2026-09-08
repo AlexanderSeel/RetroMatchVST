@@ -1,0 +1,143 @@
+from pathlib import Path
+
+probe = Path('Source/Matching/EffectChainProbe.h')
+text = probe.read_text(encoding='utf-8')
+old = '''            ModuleRack rack;
+            juce::AudioBuffer<float> buffer { 2, totalSamples };
+            Context() { rack.prepare (sampleRate, blockSize, 2); }
+'''
+new = '''            ModuleRack voiceRack, globalRack;
+            juce::AudioBuffer<float> buffer { 2, totalSamples };
+            Context()
+            {
+                voiceRack.prepare (sampleRate, blockSize, 2);
+                globalRack.prepare (sampleRate, blockSize, 2);
+            }
+'''
+if text.count(old) != 1:
+    raise SystemExit(f'EffectChainProbe Context marker count={text.count(old)}')
+text = text.replace(old, new, 1)
+old = '''                context.rack.process (block, p.fxModules, 0, p.tempoBpm);
+                context.rack.process (block, p.fxModules, 1, p.tempoBpm);
+'''
+new = '''                context.voiceRack.process (block, p.fxModules, 0, p.tempoBpm);
+                context.voiceRack.process (block, p.fxModules, 1, p.tempoBpm);
+                context.globalRack.process (block, p.globalFxModules, 0, p.tempoBpm);
+                context.globalRack.process (block, p.globalFxModules, 1, p.tempoBpm);
+'''
+if text.count(old) != 1:
+    raise SystemExit(f'EffectChainProbe process marker count={text.count(old)}')
+text = text.replace(old, new, 1)
+reset_count = text.count('context.rack.reset();')
+if reset_count != 3:
+    raise SystemExit(f'EffectChainProbe reset marker count={reset_count}')
+text = text.replace('context.rack.reset();', 'context.voiceRack.reset(); context.globalRack.reset();')
+probe.write_text(text, encoding='utf-8')
+
+processor = Path('Source/PluginProcessor.cpp')
+text = processor.read_text(encoding='utf-8')
+old = '        static const int sensibleTypes[] { 0, 1, 2, 3, 6, 8, 9, 13 };'
+new = '        static const int sensibleTypes[] { 0, 1, 2, 3, 6, 7, 8, 9, 13 };'
+if text.count(old) != 1:
+    raise SystemExit(f'sensibleTypes marker count={text.count(old)}')
+text = text.replace(old, new, 1)
+
+old = '''            if (voice->mseg.enabled)
+            {
+                voice->msegDepth = goldMutateLinear (voice->msegDepth, -1.0f, 1.0f, amount * 0.40f, random);
+                for (auto& level : voice->mseg.levels)
+                    level = goldMutateLinear (level, 0.0f, 1.0f, amount * 0.20f, random);
+                for (auto& time : voice->mseg.times)
+                    time = goldMutateLog (time, 0.001f, 5.0f, amount * 0.18f, random);
+            }
+'''
+new = '''            if (voice->mseg.enabled)
+            {
+                voice->msegDepth = goldMutateLinear (voice->msegDepth, -1.0f, 1.0f, amount * 0.40f, random);
+                for (auto& level : voice->mseg.levels)
+                    level = goldMutateLinear (level, 0.0f, 1.0f, amount * 0.20f, random);
+                for (auto& time : voice->mseg.times)
+                    time = goldMutateLog (time, 0.001f, 5.0f, amount * 0.18f, random);
+                for (auto& curve : voice->mseg.curves)
+                    curve = goldMutateLinear (curve, -1.0f, 1.0f, amount * 0.18f, random);
+                if (random.nextFloat() < 0.08f)
+                {
+                    static const int usefulMsegTargets[] {
+                        (int) ModDestination::amplitude,
+                        (int) ModDestination::cutoff,
+                        (int) ModDestination::wavetablePosition,
+                        (int) ModDestination::wavefold
+                    };
+                    voice->msegTarget = usefulMsegTargets[random.nextInt ((int) std::size (usefulMsegTargets))];
+                }
+            }
+'''
+if text.count(old) != 1:
+    raise SystemExit(f'layer MSEG marker count={text.count(old)}')
+text = text.replace(old, new, 1)
+
+old = '''    if (strategy == 6 && reference.transientScore > 0.35f)
+    {
+        // Keep the pick contour important while still allowing Gold to tune it.
+        rack.mseg.enabled = true;
+        rack.msegDepth = goldMutateLinear (rack.msegDepth, 0.35f, 1.0f, amount * 0.28f, random);
+    }
+    return rack;
+'''
+new = '''    if (strategy == 6 && reference.transientScore > 0.35f)
+    {
+        // Keep the pick contour important while still allowing Gold to tune it.
+        rack.mseg.enabled = true;
+        rack.msegDepth = goldMutateLinear (rack.msegDepth, 0.35f, 1.0f, amount * 0.28f, random);
+    }
+    if (rack.mseg.enabled)
+    {
+        rack.msegDepth = goldMutateLinear (rack.msegDepth, -1.0f, 1.0f, amount * 0.30f, random);
+        for (auto& level : rack.mseg.levels)
+            level = goldMutateLinear (level, 0.0f, 1.0f, amount * 0.16f, random);
+        for (auto& time : rack.mseg.times)
+            time = goldMutateLog (time, 0.001f, 5.0f, amount * 0.14f, random);
+        for (auto& curve : rack.mseg.curves)
+            curve = goldMutateLinear (curve, -1.0f, 1.0f, amount * 0.16f, random);
+        if (random.nextFloat() < 0.06f)
+        {
+            static const int usefulMsegTargets[] {
+                (int) ModDestination::amplitude,
+                (int) ModDestination::cutoff,
+                (int) ModDestination::wavetablePosition,
+                (int) ModDestination::wavefold
+            };
+            rack.msegTarget = usefulMsegTargets[random.nextInt ((int) std::size (usefulMsegTargets))];
+        }
+    }
+    return rack;
+'''
+if text.count(old) != 1:
+    raise SystemExit(f'main MSEG marker count={text.count(old)}')
+text = text.replace(old, new, 1)
+
+old = '        candidate.evaluatedCandidates += best.evaluatedCandidates + evaluated + 1;'
+new = '        candidate.evaluatedCandidates = seed.evaluatedCandidates + evaluated + 1;'
+if text.count(old) != 1:
+    raise SystemExit(f'evaluatedCandidates marker count={text.count(old)}')
+text = text.replace(old, new, 1)
+processor.write_text(text, encoding='utf-8')
+
+tests = Path('Tests/SmokeTests.cpp')
+text = tests.read_text(encoding='utf-8')
+old = '''        if (drivenSignature.nonlinear <= drySignature.nonlinear)
+            return fail ("two-tone FX probe did not detect added saturation");
+'''
+new = '''        if (drivenSignature.nonlinear <= drySignature.nonlinear)
+            return fail ("two-tone FX probe did not detect added saturation");
+
+        VoiceParameters probeGlobal;
+        const auto globalDrySignature = EffectChainProbe::probe (probeGlobal);
+        probeGlobal.globalFxModules[0] = { 3, 0, false, 0.72f, 0.45f, 0.50f, 1.0f };
+        const auto globalDrivenSignature = EffectChainProbe::probe (probeGlobal);
+        if (globalDrivenSignature.nonlinear <= globalDrySignature.nonlinear)
+            return fail ("two-tone FX probe ignored post-sum global saturation");
+'''
+if text.count(old) != 1:
+    raise SystemExit(f'probe regression marker count={text.count(old)}')
+tests.write_text(text.replace(old, new, 1), encoding='utf-8')
