@@ -1,12 +1,18 @@
 #pragma once
 #include "../Analysis/MelodyAnalyzer.h"
 #include <atomic>
+#include <vector>
 
 // Message-thread commands, sample-accurate audio-thread scheduling. The audio
 // thread never waits for the UI and owns the live transport/event storage.
+// Event storage is allocated once on construction: a long transcription can
+// contain thousands of notes, so fixed std::array storage here would make every
+// MelodyTransport instance enormous and can overflow the Windows thread stack.
 class MelodyTransport
 {
 public:
+    MelodyTransport() : pending ((size_t) capacity), events ((size_t) capacity) {}
+
     void start (const MelodyClip& clip)
     {
         const juce::SpinLock::ScopedLockType guard (commandLock);
@@ -60,7 +66,7 @@ public:
 private:
     struct Event { double seconds = 0.0; int pitch = 60, velocity = 0; };
     static constexpr int capacity = MelodyClip::maxNotes * 2;
-    std::array<Event, capacity> pending {}, events {};
+    std::vector<Event> pending, events;
     std::array<bool, 128> active {};
     juce::SpinLock commandLock;
     std::atomic<bool> commandReady { false }, playing { false };
