@@ -7,6 +7,21 @@
 class ReferenceSamplePlayer
 {
 public:
+    struct EditTone
+    {
+        float lowCutHz = 20.0f;
+        float lowGainDb = 0.0f;
+        float midGainDb = 0.0f;
+        float highGainDb = 0.0f;
+        float highCutHz = 20000.0f;
+
+        bool isNeutral() const noexcept
+        {
+            return lowCutHz <= 20.01f && std::abs (lowGainDb) < 0.001f && std::abs (midGainDb) < 0.001f
+                   && std::abs (highGainDb) < 0.001f && highCutHz >= 19999.0f;
+        }
+    };
+
     ReferenceSamplePlayer();
 
     void prepare (double sampleRate);
@@ -21,11 +36,16 @@ public:
 
     bool previewRegion (const juce::File& file, int rootMidiNote, double startSeconds, double endSeconds,
                         bool normalize, float fadeInSeconds, float fadeOutSeconds);
+    bool previewRegion (const juce::File& file, int rootMidiNote, double startSeconds, double endSeconds,
+                        bool normalize, float fadeInSeconds, float fadeOutSeconds, const EditTone& tone);
     void stopPreview();
     bool isPreviewing() const noexcept { return previewing.load(); }
     static bool writeProcessedRegion (const juce::File& source, const juce::File& destination,
                                       double startSeconds, double endSeconds, bool normalize,
                                       float fadeInSeconds, float fadeOutSeconds);
+    static bool writeProcessedRegion (const juce::File& source, const juce::File& destination,
+                                      double startSeconds, double endSeconds, bool normalize,
+                                      float fadeInSeconds, float fadeOutSeconds, const EditTone& tone);
 
     bool hasSample() const noexcept { return loaded.load(); }
     int getRootMidiNote() const noexcept { return rootNote.load(); }
