@@ -1,5 +1,13 @@
 # RetroMatch implementation plan
 
+## MSEG + global bus + large Patch Map implementation block
+
+- MSEG is treated as a primary resynthesis dimension: the matcher seeds MSEG from transient/spectral-motion analysis and mutates target, depth, loop and shape during refinement.
+- Factory families with meaningful motion now intentionally author MSEG rather than relying only on LFOs.
+- The FX page exposes a GLOBAL BUS rack using the same filter/effect catalog as instance racks. It processes once after all active synth instances are combined.
+- Patch Map shows the global bus explicitly, exposes editable cables by normal left-click, increases cable hit targets and provides a BIG overlay view.
+- Next matching milestone: advisor-driven method/depth ranking, heterogeneous method search, complete multilayer scoring and excitation-probe FX-chain reconstruction.
+
 ## Current milestone: playable semi-modular patch map
 
 The next major UI/DSP milestone turns **SIGNAL LAB / PATCH MAP** from a read-only overview into a safe semi-modular sound-design surface. The goal is creative routing freedom without allowing illegal graphs, unstable feedback, hidden real-time allocations, or breaking existing `.rmsynth`/DAW automation compatibility.

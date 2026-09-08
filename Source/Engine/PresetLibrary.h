@@ -22,6 +22,7 @@ inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
             catalog.push_back ({ names[variation] + " " + families[family], families[family],
                 families[family] + " / " + juce::String (variation < 3 ? 1 : juce::jmin (6, variation - 1)) + " instances. "
                 + "Voiced with tuned oscillators, envelope movement and complementary spatial effects."
+                + (variation >= 2 && (family == 2 || family == 3 || family == 4 || family == 5 || family == 6 || family == 8 || family == 9) ? " MSEG motion is part of the authored sound." : "")
                 + (variation >= 5 ? " Layer controls shape the ordered combination; edit each instance independently." : "") });
     return catalog;
 }();
@@ -42,6 +43,21 @@ inline VoiceParameters makeFactoryPreset (int index)
         p.outputGainDb = variation >= 5 ? -15.0f : -11.0f;
         p.extraLfoRate[0] = 0.08f + t * (family == 4 ? 7.0f : 1.2f);
         p.moduleModSlots[1] = { (int) ModSource::lfo2, (int) ModDestination::cutoff, 0.08f + t * 0.2f };
+        if (variation >= 2 && (family == 2 || family == 3 || family == 4 || family == 5 || family == 6 || family == 8 || family == 9))
+        {
+            p.mseg.enabled = true;
+            p.mseg.loopEnabled = family == 3 || family == 4 || family == 5 || family == 8 || family == 9;
+            p.msegTarget = family == 2 || family == 4 ? (int) ModDestination::amplitude
+                          : (family == 3 || family == 8 || family == 9 ? (int) ModDestination::wavetablePosition : (int) ModDestination::cutoff);
+            p.msegDepth = family == 2 ? 0.92f : 0.28f + 0.36f * t;
+            p.mseg.levels = family == 2
+                ? std::array<float, MsegParameters::pointCount> {{ 0.0f, 1.0f, 0.52f, 0.24f, 0.10f, 0.0f }}
+                : std::array<float, MsegParameters::pointCount> {{ 0.16f, 0.86f, 0.42f, 0.92f, 0.34f, 0.62f }};
+            p.mseg.times = {{ 0.015f + t * 0.08f, 0.08f + t * 0.24f, 0.16f + t * 0.48f, 0.28f + t * 0.72f, 0.22f + t * 0.64f }};
+            p.mseg.curves = {{ -0.24f, 0.16f, -0.18f, 0.24f, -0.12f }};
+            if (p.msegTarget != (int) ModDestination::cutoff)
+                p.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::cutoff, 0.12f + 0.18f * t };
+        }
         if (family == 7) { p.fmOpRatio[1] = 2.1f + t * 3.3f; p.decay = 1.4f + t; p.release = 0.9f; }
         if (family == 8) { p.attack = 1.0f + t * 2; p.release = 2.5f; p.noiseMix = 0.02f + t * 0.04f; }
         p.fxModules[2] = { 9, 1, false, 0.25f + t * 0.35f, 0.5f, 0.45f, family == 0 ? 0.04f : 0.12f + t * 0.16f };

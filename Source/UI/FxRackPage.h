@@ -48,7 +48,8 @@ public:
 class ModularFxPage final : public juce::Component, private juce::Timer
 {
 public:
-    explicit ModularFxPage (RetroMatchSynthAudioProcessor& p) : proc (p)
+    ModularFxPage (RetroMatchSynthAudioProcessor& p, juce::String prefix = "fxModule", juce::String title = "INSTANCE")
+        : proc (p), parameterPrefix (std::move (prefix)), rackTitle (std::move (title))
     {
         addAndMakeVisible (viewport); viewport.setViewedComponent (&content, false);
         addAndMakeVisible (addType); addAndMakeVisible (add); add.setButtonText ("+ ADD MODULE");
@@ -63,7 +64,7 @@ public:
             for (size_t k = 0; k < fxModuleCatalog.size(); ++k) row.type.addItem (fxModuleCatalog[k].name, (int) k + 1);
             row.stage.addItemList ({ "PRE", "POST" }, 1); row.bypass.setButtonText ("BYPASS");
             row.up.setButtonText ("UP"); row.down.setButtonText ("DN"); row.copy.setButtonText ("COPY"); row.remove.setButtonText ("X");
-            const auto prefix = "fxModule" + juce::String (i + 1);
+            const auto prefix = parameterPrefix + juce::String (i + 1);
             row.typeAttachment = std::make_unique<ComboAttachment> (proc.apvts, prefix + "Type", row.type);
             row.stageAttachment = std::make_unique<ComboAttachment> (proc.apvts, prefix + "Stage", row.stage);
             row.bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, prefix + "Bypass", row.bypass);
@@ -93,7 +94,7 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.fillAll (juce::Colour (0xff101719)); const auto led = findColour (RetroLookAndFeel::primaryLed); g.setColour (led); g.setFont (13);
-        juce::String chain = "SYNTH  >  PRE: ";
+        juce::String chain = rackTitle + "  >  PRE: ";
         for (int stage = 0; stage < 2; ++stage)
         {
             bool any = false;
@@ -110,6 +111,7 @@ private:
     inline static constexpr std::array<const char*, 4> suffixes {{ "Amount", "Rate", "Feedback", "Mix" }};
     inline static constexpr std::array<const char*, 9> allKeys {{ "Type", "Stage", "Bypass", "Amount", "Rate", "Feedback", "Mix", "TempoSync", "Division" }};
     RetroMatchSynthAudioProcessor& proc;
+    juce::String parameterPrefix, rackTitle;
     struct Row
     {
         juce::Component panel; juce::ComboBox type, stage; juce::ToggleButton bypass;
@@ -122,8 +124,8 @@ private:
     };
     juce::Component content; juce::Viewport viewport; juce::ComboBox addType; juce::TextButton add;
     std::array<Row, FxModuleParameters::slotCount> rows;
-    float value (int i, const char* key) const { return proc.apvts.getRawParameterValue ("fxModule" + juce::String (i + 1) + key)->load(); }
-    void set (int i, const char* key, float v) { auto* p = proc.apvts.getParameter ("fxModule" + juce::String (i + 1) + key); p->setValueNotifyingHost (p->convertTo0to1 (v)); }
+    float value (int i, const char* key) const { return proc.apvts.getRawParameterValue (parameterPrefix + juce::String (i + 1) + key)->load(); }
+    void set (int i, const char* key, float v) { auto* p = proc.apvts.getParameter (parameterPrefix + juce::String (i + 1) + key); p->setValueNotifyingHost (p->convertTo0to1 (v)); }
     void swap (int a, int b) { for (const auto* key : allKeys) { const float old = value (a, key); set (a, key, value (b, key)); set (b, key, old); } refresh(); }
     void timerCallback() override { refresh(); }
     void refresh()
@@ -162,10 +164,12 @@ class FxRackPage final : public juce::Component
 {
 public:
     FxRackPage (RetroMatchSynthAudioProcessor& p, juce::Component* builtIn)
-        : tempo (p), chorusSync (p, "chorusSync", "chorusDivision", "CHORUS"), delaySync (p, "delaySync", "delayDivision", "DELAY"), rack (p)
+        : tempo (p), chorusSync (p, "chorusSync", "chorusDivision", "CHORUS"), delaySync (p, "delaySync", "delayDivision", "DELAY"),
+          globalRack (p, "globalFxModule", "GLOBAL BUS"), rack (p, "fxModule", "INSTANCE")
     {
         addAndMakeVisible (tempo); addAndMakeVisible (chorusSync); addAndMakeVisible (delaySync); addAndMakeVisible (tabs);
-        tabs.addTab ("MODULE RACK", juce::Colour (0xff101719), &rack, false);
+        tabs.addTab ("GLOBAL BUS", juce::Colour (0xff101719), &globalRack, false);
+        tabs.addTab ("INSTANCE RACK", juce::Colour (0xff101719), &rack, false);
         tabs.addTab ("BUILT-IN FX", juce::Colour (0xff101719), builtIn, false);
     }
     void resized() override
@@ -180,6 +184,6 @@ public:
 private:
     TempoSyncBar tempo;
     TempoSyncSelector chorusSync, delaySync;
-    ModularFxPage rack;
+    ModularFxPage globalRack, rack;
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
 };

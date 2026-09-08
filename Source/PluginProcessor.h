@@ -189,6 +189,8 @@ public:
 
 private:
     SynthEngine engine;
+    // True whole-instrument bus: runs once after main + all layer instances are combined.
+    ModuleRack globalModuleRack;
     juce::MidiBuffer renderMidi;
     juce::MidiBuffer editorMidi;
     juce::CriticalSection editorMidiLock;

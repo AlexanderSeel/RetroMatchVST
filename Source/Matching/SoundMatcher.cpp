@@ -63,8 +63,13 @@ void applyAlgorithmProfile (VoiceParameters& p, int algorithm, const SoundFeatur
                 p.wavetableMix *= 0.35f;
                 p.wavetablePosition = juce::jlimit (0.05f, 0.95f, 0.18f + reference.highEnergyRatio * 1.5f + motion * 0.25f);
                 if (reference.spectralMotion > 0.06f)
-                    p.modGraphSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::wavetablePosition,
-                                           juce::jlimit (0.08f, 0.42f, reference.spectralMotion * 1.8f) };
+                {
+                    p.mseg.enabled = true; p.mseg.loopEnabled = true;
+                    p.msegTarget = (int) ModDestination::wavetablePosition;
+                    p.msegDepth = juce::jlimit (0.22f, 0.62f, reference.spectralMotion * 2.2f);
+                    p.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::cutoff,
+                                           juce::jlimit (0.08f, 0.32f, reference.spectralMotion * 1.35f) };
+                }
             }
             p.cutoff = juce::jmax (p.cutoff, juce::jmin (19000.0f, reference.spectralRolloffHz * 1.25f));
             break;
@@ -93,8 +98,12 @@ void applyAlgorithmProfile (VoiceParameters& p, int algorithm, const SoundFeatur
             p.unisonSpread = juce::jmax (p.unisonSpread, 0.55f);
             p.chorusMix = juce::jmax (p.chorusMix, juce::jlimit (0.04f, 0.24f, reference.stereoWidth * 0.22f));
             if (reference.spectralMotion > 0.05f)
-                p.modGraphSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::wavetablePosition,
-                                       juce::jlimit (0.06f, 0.32f, reference.spectralMotion * 1.25f) };
+            {
+                p.mseg.enabled = true; p.mseg.loopEnabled = true; p.msegTarget = (int) ModDestination::cutoff;
+                p.msegDepth = juce::jlimit (0.18f, 0.58f, 0.20f + reference.spectralMotion * 1.7f);
+                p.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::wavetablePosition,
+                                       juce::jlimit (0.08f, 0.38f, reference.spectralMotion * 1.45f) };
+            }
             break;
 
         case 5: // Texture / chopped-table reconstruction.
@@ -102,8 +111,10 @@ void applyAlgorithmProfile (VoiceParameters& p, int algorithm, const SoundFeatur
             p.wavetableMix = juce::jmax (p.wavetableMix, 0.18f + motion * 0.28f);
             p.wavefold = juce::jmax (p.wavefold, juce::jlimit (0.03f, 0.32f, reference.highEnergyRatio * 0.55f));
             p.noiseMix = juce::jmax (p.noiseMix, juce::jlimit (0.0f, 0.18f, reference.spectralFlatness * 0.22f));
-            p.modGraphSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::wavetablePosition,
-                                   juce::jlimit (0.12f, 0.52f, 0.16f + motion * 0.38f) };
+            p.mseg.enabled = true; p.mseg.loopEnabled = true; p.msegTarget = (int) ModDestination::wavetablePosition;
+            p.msegDepth = juce::jlimit (0.26f, 0.72f, 0.30f + motion * 0.36f);
+            p.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::wavefold,
+                                   juce::jlimit (0.10f, 0.42f, 0.12f + motion * 0.30f) };
             p.extraLfoRate[0] = juce::jlimit (0.05f, 1.8f, 0.10f + reference.spectralMotion * 2.4f);
             break;
 
@@ -129,6 +140,31 @@ MatchResult SoundMatcher::initialFit (const SoundFeatures& f)
     p.decay = juce::jlimit (0.02f, 3.0f, f.decaySeconds > 0.01f ? f.decaySeconds : (f.transientScore > 0.6f ? 0.18f : 0.45f));
     p.sustain = juce::jlimit (0.05f, 1.0f, f.sustainLevel);
     p.release = juce::jlimit (0.03f, 5.0f, f.releaseSeconds > 0.01f ? f.releaseSeconds : (f.duration < 1.0f ? 0.18f : 0.55f));
+
+    // MSEG is valuable whenever the target contains a meaningful transient or
+    // time-varying spectrum. Seed it from measured envelope/motion instead of
+    // leaving the optimizer to discover the topology by chance.
+    const bool transientMseg = f.transientScore > 0.28f;
+    const bool movingMseg = f.spectralMotion > 0.045f;
+    const bool evolvingMseg = f.duration > 1.4f && f.sustainLevel > 0.18f;
+    p.mseg.enabled = transientMseg || movingMseg || evolvingMseg;
+    if (p.mseg.enabled)
+    {
+        p.msegTarget = transientMseg ? (int) ModDestination::amplitude
+                                    : (movingMseg ? (int) ModDestination::wavetablePosition : (int) ModDestination::cutoff);
+        p.msegDepth = transientMseg ? 0.92f : juce::jlimit (0.22f, 0.72f, 0.28f + f.spectralMotion * 2.2f);
+        p.mseg.levels = {{ 0.0f, 1.0f, juce::jlimit (0.18f, 0.92f, f.sustainLevel + 0.16f),
+                           juce::jlimit (0.10f, 0.86f, f.sustainLevel),
+                           juce::jlimit (0.06f, 0.78f, f.sustainLevel * 0.78f), 0.0f }};
+        p.mseg.times = {{ juce::jlimit (0.002f, 2.5f, p.attack), juce::jlimit (0.008f, 2.5f, p.decay * 0.42f),
+                          juce::jlimit (0.015f, 3.5f, p.decay * 0.75f), juce::jlimit (0.025f, 5.0f, f.duration * 0.18f),
+                          juce::jlimit (0.025f, 5.0f, p.release) }};
+        p.mseg.curves = {{ transientMseg ? -0.34f : 0.10f, 0.18f, -0.08f, movingMseg ? 0.28f : 0.08f, -0.22f }};
+        p.mseg.loopEnabled = ! transientMseg && (movingMseg || evolvingMseg);
+        p.mseg.loopStartPoint = 1; p.mseg.loopEndPoint = 4;
+        if (transientMseg && movingMseg)
+            p.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::cutoff, 0.28f };
+    }
 
     p.cutoff = juce::jlimit (120.0f, 19000.0f, f.spectralCentroidHz * 3.0f + 120.0f);
     p.resonance = juce::jlimit (0.04f, 0.72f, 0.10f + f.harmonicity * 0.22f);
@@ -322,6 +358,10 @@ VoiceParameters SoundMatcher::mutate (const VoiceParameters& source, juce::Rando
     if (allowTopology && random.nextFloat() < 0.12f) p.mseg.enabled = ! p.mseg.enabled;
     if (p.mseg.enabled)
     {
+        p.msegDepth = mutateLinear (p.msegDepth, -1.0f, 1.0f, amount * 0.70f, random);
+        if (allowTopology && random.nextFloat() < 0.14f)
+            p.msegTarget = random.nextInt ((int) ModDestination::wavefold + 1);
+        if (allowTopology && random.nextFloat() < 0.09f) p.mseg.loopEnabled = ! p.mseg.loopEnabled;
         for (auto& level : p.mseg.levels) level = mutateLinear (level, 0, 1, amount, random);
         for (auto& time : p.mseg.times) time = mutateLog (time, 0.001f, 4, amount, random);
         for (auto& curve : p.mseg.curves) curve = mutateLinear (curve, -1, 1, amount, random);

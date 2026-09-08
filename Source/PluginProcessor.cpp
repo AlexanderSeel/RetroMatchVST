@@ -15,7 +15,7 @@ namespace
 {
 bool isGlobalRackOrClockParameter (const juce::String& id)
 {
-    if (id.startsWith ("layer") || id == "mainLayerGain" || id == "oversamplingQuality" || id == "resynthInstances"
+    if (id.startsWith ("layer") || id.startsWith ("globalFxModule") || id == "mainLayerGain" || id == "oversamplingQuality" || id == "resynthInstances"
         || id == "masterOutputGain" || id == "resynthStrategy" || id == "resynthComplexity")
         return true;
     if (id == "tempoSource" || id == "manualBpm" || id == "chorusSync" || id == "chorusDivision"
@@ -69,11 +69,16 @@ VoiceParameters makeResynthCompanion (const VoiceParameters& source, int role, i
             p.filterType = 0; p.cutoff = juce::jlimit (160.0f, 1800.0f, p.cutoff * 0.28f);
             p.chorusMix = p.delayMix = p.reverbMix = 0.0f; p.stereoWidth = 0.82f;
             break;
-        case 3: // Motion table.
+        case 3: // Motion table: let MSEG carry the long-form motion, with LFO as a secondary shimmer.
             if (table) p.referenceWavetableMix = juce::jmax (0.52f, p.referenceWavetableMix);
             p.wavetableMix = juce::jmax (0.16f, p.wavetableMix);
+            p.mseg.enabled = true; p.mseg.loopEnabled = true; p.msegTarget = (int) ModDestination::wavetablePosition; p.msegDepth = 0.48f;
+            p.mseg.levels = {{ 0.18f, 0.82f, 0.46f, 0.94f, 0.35f, 0.62f }};
+            p.mseg.times = {{ 0.18f, 0.46f, 0.72f, 0.54f, 0.90f }};
+            p.mseg.curves = {{ -0.15f, 0.24f, -0.22f, 0.18f, -0.08f }};
             p.extraLfoRate[0] = 0.11f;
-            p.modGraphSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::wavetablePosition, 0.36f };
+            p.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::cutoff, 0.24f };
+            p.modGraphSlots[1] = { (int) ModSource::lfo2, (int) ModDestination::wavetablePosition, 0.12f };
             p.chorusMix = juce::jmax (0.10f, p.chorusMix); p.stereoWidth = juce::jmax (1.2f, p.stereoWidth);
             break;
         case 4: // Harmonic / FM colour.
@@ -246,6 +251,13 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
         setDefault (prefix + "Amount", 0.5f); setDefault (prefix + "Rate", 0.25f); setDefault (prefix + "Feedback", 0.25f); setDefault (prefix + "Mix", 0.5f);
         setDefault (prefix + "TempoSync", false); setDefault (prefix + "Division", 3);
     }
+    for (int i = 1; i <= FxModuleParameters::slotCount; ++i)
+    {
+        const auto prefix = "globalFxModule" + juce::String (i);
+        setDefault (prefix + "Type", 0); setDefault (prefix + "Stage", 0); setDefault (prefix + "Bypass", false);
+        setDefault (prefix + "Amount", 0.5f); setDefault (prefix + "Rate", 0.25f); setDefault (prefix + "Feedback", 0.25f); setDefault (prefix + "Mix", 0.5f);
+        setDefault (prefix + "TempoSync", false); setDefault (prefix + "Division", 3);
+    }
     for (int i = 2; i <= 4; ++i)
     {
         const auto prefix = "lfoModule" + juce::String (i); setDefault (prefix + "Rate", i == 2 ? 0.5f : i == 3 ? 2.0f : 5.0f); setDefault (prefix + "Shape", 0);
@@ -283,6 +295,7 @@ void RetroMatchSynthAudioProcessor::prepareToPlay (double sr, int bs)
 {
     const int channels = getTotalNumOutputChannels();
     engine.prepare (sr, bs, channels);
+    globalModuleRack.prepare (sr, bs, channels);
     renderMidi.ensureSize (131072);
     { const juce::ScopedLock lock (editorMidiLock); editorMidi.clear(); editorMidi.ensureSize (16384); }
     melodyTransport.stop();
@@ -531,6 +544,36 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
     const auto mode = getReferenceAuditionMode();
     engine.setParameters (readParams());
     engine.render (b, renderMidi);
+
+    // Whole-synth global bus. This happens after SynthEngine has rendered and combined
+    // every active instance, so filters/effects here colour the complete patch instead
+    // of being repeated separately inside each layer. Reference-only audition remains dry.
+    if (mode != ReferenceAuditionMode::referenceOnly)
+    {
+        std::array<FxModuleParameters, FxModuleParameters::slotCount> globalModules {};
+        for (int i = 0; i < FxModuleParameters::slotCount; ++i)
+        {
+            const auto prefix = "globalFxModule" + juce::String (i + 1);
+            auto value = [this, &prefix] (const char* suffix, float fallback)
+            {
+                if (auto* v = apvts.getRawParameterValue (prefix + suffix)) return v->load();
+                return fallback;
+            };
+            auto& module = globalModules[(size_t) i];
+            module.type = (int) value ("Type", 0.0f);
+            module.stage = (int) value ("Stage", 0.0f);
+            module.bypass = value ("Bypass", 0.0f) >= 0.5f;
+            module.amount = value ("Amount", 0.5f);
+            module.rate = value ("Rate", 0.25f);
+            module.feedback = value ("Feedback", 0.25f);
+            module.mix = value ("Mix", 0.5f);
+            module.tempoSync = value ("TempoSync", 0.0f) >= 0.5f;
+            module.tempoDivision = (int) value ("Division", 3.0f);
+        }
+        globalModuleRack.process (b, globalModules, 0, effectiveBpm.load (std::memory_order_relaxed));
+        globalModuleRack.process (b, globalModules, 1, effectiveBpm.load (std::memory_order_relaxed));
+    }
+
     if (mode == ReferenceAuditionMode::referenceOnly) b.clear();
 
     if (mode != ReferenceAuditionMode::synthOnly && referencePlayer.hasSample())
@@ -1382,6 +1425,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
         juce::StringArray { "Classic / legacy 1-3", "Studio / 4 instances", "Deep / 6 instances", "Maximum / 8 instances" }, 0));
     l.add (std::make_unique<P> ("masterOutputGain", "Master Output",
         juce::NormalisableRange<float> (-36.0f, 12.0f, 0.1f), 0.0f));
+
+    // Append-only whole-synth bus parameters. Kept after all existing parameters so
+    // established automation indices remain stable. Each slot can be a filter or FX.
+    for (int i = 1; i <= FxModuleParameters::slotCount; ++i)
+    {
+        const auto prefix = "globalFxModule" + juce::String (i);
+        l.add (std::make_unique<C> (prefix + "Type", prefix + " Type", moduleTypes, 0));
+        l.add (std::make_unique<C> (prefix + "Stage", prefix + " Stage", juce::StringArray { "PRE", "POST" }, 0));
+        l.add (std::make_unique<B> (prefix + "Bypass", prefix + " Bypass", false));
+        l.add (std::make_unique<P> (prefix + "Amount", prefix + " Amount", juce::NormalisableRange<float> (0, 1), 0.5f));
+        l.add (std::make_unique<P> (prefix + "Rate", prefix + " Rate", juce::NormalisableRange<float> (0, 1), 0.25f));
+        l.add (std::make_unique<P> (prefix + "Feedback", prefix + " Feedback", juce::NormalisableRange<float> (0, 1), 0.25f));
+        l.add (std::make_unique<P> (prefix + "Mix", prefix + " Mix", juce::NormalisableRange<float> (0, 1), 0.5f));
+        l.add (std::make_unique<B> (prefix + "TempoSync", prefix + " Tempo Sync", false));
+        l.add (std::make_unique<C> (prefix + "Division", prefix + " Division", divisions, 3));
+    }
     return l;
 }
 

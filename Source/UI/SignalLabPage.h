@@ -11,7 +11,7 @@
 class SignalLabPage final : public juce::Component, private juce::Timer
 {
 public:
-    explicit SignalLabPage (RetroMatchSynthAudioProcessor& p) : proc (p)
+    explicit SignalLabPage (RetroMatchSynthAudioProcessor& p, bool mapOnly = false) : proc (p), mapOnlyMode (mapOnly)
     {
         setWantsKeyboardFocus (true);
         startTimerHz (30);
@@ -20,8 +20,13 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.fillAll (juce::Colour (0xff101719));
-        auto area = getLocalBounds().toFloat().reduced (16);
+        auto area = getLocalBounds().toFloat().reduced (mapOnlyMode ? 8.0f : 16.0f);
         const auto led = findColour (RetroLookAndFeel::primaryLed), accent = findColour (RetroLookAndFeel::secondaryLed);
+        if (mapOnlyMode)
+        {
+            drawPatchMap (g, area, led, accent);
+            return;
+        }
         g.setColour (led); g.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
         g.drawText ("SIGNAL LAB  /  LIVE OUTPUT + WHOLE-SYNTH PATCH MAP", area.removeFromTop (32), juce::Justification::centredLeft);
 
@@ -70,6 +75,15 @@ public:
 
         if (! e.mods.isMiddleButtonDown())
         {
+            // Editable cables are deliberately left-clickable as well as right-clickable.
+            // This removes the hidden-context-menu feel of the first patch-map version.
+            if (const int edge = hitTestEdge (e.position); edge >= 0 && edges[(size_t) edge].editKind != EdgeEditKind::none)
+            {
+                selectedEdgeKey = edges[(size_t) edge].key.toStdString();
+                showEdgeMenu (edges[(size_t) edge]);
+                repaint();
+                return;
+            }
             if (const int output = hitTestModOutput (e.position); output >= 0)
             {
                 connecting = true;
@@ -199,7 +213,7 @@ private:
     enum class EdgeKind { audio, modulation, clock };
     enum class EdgeEditKind { none, modulationRoute, layerCombine };
     enum class NodeRole { stage, modHub, master, clock };
-    enum class ToolbarAction { none, autoArrange, fit, zoomOut, zoom100, zoomIn, grid };
+    enum class ToolbarAction { none, autoArrange, fit, zoomOut, zoom100, zoomIn, grid, expand };
 
     struct GraphNode
     {
@@ -226,6 +240,7 @@ private:
     struct ToolbarButton { juce::Rectangle<float> bounds; juce::String label; ToolbarAction action = ToolbarAction::none; };
 
     RetroMatchSynthAudioProcessor& proc;
+    bool mapOnlyMode = false;
     static constexpr int size = 2048;
     static constexpr float gridSize = 12.0f;
     std::array<float, size> left {}, right {};
@@ -616,7 +631,27 @@ private:
             case ToolbarAction::zoom100: setZoomAround (graphViewport.getCentre(), 1.0f); break;
             case ToolbarAction::zoomIn: setZoomAround (graphViewport.getCentre(), graphZoom * 1.18f); break;
             case ToolbarAction::grid: snapToGrid = ! snapToGrid; repaint(); break;
+            case ToolbarAction::expand: showPatchMapOverlay(); break;
             case ToolbarAction::none: break;
+        }
+    }
+
+    void showPatchMapOverlay()
+    {
+        if (mapOnlyMode) return;
+        auto* content = new SignalLabPage (proc, true);
+        content->setSize (1320, 760);
+        juce::DialogWindow::LaunchOptions options;
+        options.content.setOwned (content);
+        options.dialogTitle = "RM-01 / LARGE PATCH MAP";
+        options.dialogBackgroundColour = juce::Colour (0xff101719);
+        options.escapeKeyTriggersCloseButton = true;
+        options.useNativeTitleBar = false;
+        options.resizable = true;
+        if (auto* window = options.launchAsync())
+        {
+            window->setResizeLimits (900, 540, 2400, 1600);
+            window->centreWithSize (1320, 760);
         }
     }
 
@@ -817,7 +852,7 @@ private:
             if (! juce::isPositiveAndBelow (edges[(size_t) i].from, (int) nodes.size())
                 || ! juce::isPositiveAndBelow (edges[(size_t) i].to, (int) nodes.size())) continue;
             juce::Path hitArea;
-            juce::PathStrokeType (juce::jmax (8.0f, 10.0f * graphZoom)).createStrokedPath (hitArea, edgePath (edges[(size_t) i]));
+            juce::PathStrokeType (juce::jmax (14.0f, 16.0f * graphZoom)).createStrokedPath (hitArea, edgePath (edges[(size_t) i]));
             if (hitArea.contains (point.x, point.y)) return i;
         }
         return -1;
@@ -950,7 +985,7 @@ private:
         toolbarButtons.clear();
         const float gap = 4.0f, h = 20.0f;
         struct Def { const char* label; float width; ToolbarAction action; };
-        const Def defs[] {{ "AUTO", 48, ToolbarAction::autoArrange }, { "FIT", 40, ToolbarAction::fit },
+        const Def defs[] {{ "BIG", 42, ToolbarAction::expand }, { "AUTO", 48, ToolbarAction::autoArrange }, { "FIT", 40, ToolbarAction::fit },
                           { "-", 26, ToolbarAction::zoomOut }, { "100%", 42, ToolbarAction::zoom100 },
                           { "+", 26, ToolbarAction::zoomIn }, { "GRID", 48, ToolbarAction::grid }};
         float total = -gap;
@@ -971,7 +1006,7 @@ private:
         auto textArea = header.withTrimmedRight (total + 12.0f).reduced (8, 0);
         g.setColour (led); g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
         const bool daw = parameter ("tempoSource", 1.0f) >= 0.5f;
-        g.drawFittedText ("PATCH MAP / DRAG MOD JACK > VALID DESTINATION TO ADD / RIGHT-CLICK CABLE TO EDIT / FIXED AUDIO ORDER STAYS SAFE    CLOCK: "
+        g.drawFittedText ("PATCH MAP / LEFT-CLICK EDITABLE CABLE / DRAG MOD JACK TO ADD / BIG = LARGE OVERLAY / FIXED AUDIO ORDER STAYS SAFE    CLOCK: "
                           + juce::String (proc.getEffectiveBpm(), 1) + " BPM " + (daw ? "DAW" : "MANUAL"),
                           textArea.toNearestInt(), juce::Justification::centredLeft, 1);
     }
@@ -1044,25 +1079,32 @@ private:
         const float firstY = nodeH * 0.5f;
         const float lastY = (instances.size() - 1) * rowGap + nodeH * 0.5f;
         const float masterY = (firstY + lastY) * 0.5f;
-        const int master = addNode ({ 770.0f, masterY - nodeH * 0.5f, 126.0f, nodeH }, "MASTER", "MASTER OUT",
+        int activeGlobalFx = 0;
+        for (int i = 1; i <= FxModuleParameters::slotCount; ++i)
+            if ((int) parameter ("globalFxModule" + juce::String (i) + "Type", 0.0f) > 0
+                && parameter ("globalFxModule" + juce::String (i) + "Bypass", 0.0f) < 0.5f) ++activeGlobalFx;
+        const int globalBus = addNode ({ 760.0f, masterY - nodeH * 0.5f, 132.0f, nodeH }, "GLOBALBUS", "GLOBAL FILTER / FX",
+                                       juce::String (activeGlobalFx) + " ACTIVE / WHOLE MIX", "FX", -2, accent, true, true, NodeRole::stage);
+        const int master = addNode ({ 930.0f, masterY - nodeH * 0.5f, 126.0f, nodeH }, "MASTER", "MASTER OUT",
                                     juce::String (parameter ("masterOutputGain", 0.0f), 1) + " dB", "FX", -2, led,
                                     true, false, NodeRole::master);
         for (size_t i = 0; i < combineNodes.size(); ++i)
         {
             const int layer = combineLayers[i];
             if (layer < 0)
-                connect (combineNodes[i], master, EdgeKind::audio);
+                connect (combineNodes[i], globalBus, EdgeKind::audio);
             else
             {
                 const auto prefix = "layer" + juce::String (layer + 1);
                 const int operation = juce::jlimit (0, 4, (int) parameter (prefix + "Operation", 0.0f));
                 const juce::String opNames[] { "ADD", "MIX", "SUB", "MULT", "DIV" };
-                connect (combineNodes[i], master, EdgeKind::audio, EdgeEditKind::layerCombine, layer, -1,
-                         "combine:" + juce::String (layer), opNames[operation] + " " + juce::String (parameter (prefix + "Amount", 1.0f), 2));
+                connect (combineNodes[i], globalBus, EdgeKind::audio, EdgeEditKind::layerCombine, layer, -1,
+                         "combine:" + juce::String (layer), "EDIT / " + opNames[operation] + " " + juce::String (parameter (prefix + "Amount", 1.0f), 2));
             }
         }
+        connect (globalBus, master, EdgeKind::audio);
 
-        const int clock = addNode ({ 770.0f, masterY + 64.0f, 126.0f, nodeH }, "CLOCK", "TEMPO CLOCK",
+        const int clock = addNode ({ 930.0f, masterY + 64.0f, 126.0f, nodeH }, "CLOCK", "TEMPO CLOCK",
                                    juce::String (proc.getEffectiveBpm(), 1) + " BPM", "MOD", -2, accent,
                                    false, true, NodeRole::clock);
         for (const auto mod : modNodes) connect (clock, mod, EdgeKind::clock);
