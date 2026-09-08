@@ -1,0 +1,175 @@
+name: Apply UI and MSEG fixes
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-ui-mseg-fixes.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Apply requested UI and MSEG changes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              if old not in text:
+                  raise SystemExit(f'missing replacement anchor: {label}')
+              if text.count(old) != 1:
+                  raise SystemExit(f'non-unique replacement anchor: {label} ({text.count(old)})')
+              return text.replace(old, new, 1)
+
+          # ------------------------------------------------------------------
+          # Voice model + DSP: make ENABLE MSEG immediately audible via a
+          # dedicated target/depth path, while retaining the modulation graph.
+          # ------------------------------------------------------------------
+          p = Path('Source/Engine/SynthEngine.h')
+          text = p.read_text(encoding='utf-8')
+          text = replace_once(text,
+              '    MsegParameters mseg;\n    std::array<ModSlotParameters, modGraphSlotCount> modGraphSlots {};',
+              '    MsegParameters mseg;\n    // Dedicated MSEG destination makes ENABLE MSEG immediately audible.\n    // The graph slots below remain available for additional parallel routes.\n    int msegTarget = (int) ModDestination::amplitude;\n    float msegDepth = 1.0f;\n    std::array<ModSlotParameters, modGraphSlotCount> modGraphSlots {};',
+              'SynthEngine.h MSEG fields')
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('Source/Engine/SynthEngine.cpp')
+          text = p.read_text(encoding='utf-8')
+          text = replace_once(text,
+              '        case ModSource::mseg1:       return msegValue;',
+              '        case ModSource::mseg1:       return msegValue * 2.0f - 1.0f;',
+              'MSEG graph bipolar source')
+
+          anchor = '''        const float env = ampEnv.getNextSample();\n        const float msegValue = params.mseg.enabled ? mseg.getNextSample() : 0.0f;\n\n        float matrixPitch = 0.0f, matrixCutoff = 0.0f, matrixAmp = 0.0f;'''
+          replacement = '''        const float env = ampEnv.getNextSample();\n        const float msegValue = params.mseg.enabled ? mseg.getNextSample() : 0.0f;\n\n        // A hardware-style MSEG should do something as soon as it is enabled.\n        // The dedicated target is intentionally separate from the general graph:\n        // default AMP/100% acts as a second contour multiplied with the ADSR.\n        float directMsegPitch = 0.0f, directMsegCutoff = 0.0f, directMsegAmp = 1.0f;\n        float directMsegPulse = 0.0f, directMsegFmAmount = 0.0f, directMsegFmMix = 0.0f;\n        float directMsegWavetable = 0.0f, directMsegWavefold = 0.0f;\n        if (params.mseg.enabled && std::abs (params.msegDepth) > 0.0001f)\n        {\n            const float depth = juce::jlimit (-1.0f, 1.0f, params.msegDepth);\n            const float unipolar = juce::jlimit (0.0f, 1.0f, msegValue);\n            const float bipolar = unipolar * 2.0f - 1.0f;\n            switch ((ModDestination) params.msegTarget)\n            {\n                case ModDestination::pitch:             directMsegPitch = bipolar * depth * 12.0f; break;\n                case ModDestination::cutoff:            directMsegCutoff = bipolar * depth * 4.0f; break;\n                case ModDestination::amplitude:\n                {\n                    const float shaped = depth >= 0.0f ? unipolar : 1.0f - unipolar;\n                    directMsegAmp = juce::jmap (std::abs (depth), 1.0f, shaped);\n                    break;\n                }\n                case ModDestination::pulseWidth:        directMsegPulse = bipolar * depth * 0.42f; break;\n                case ModDestination::fmAmount:          directMsegFmAmount = bipolar * depth * 0.65f; break;\n                case ModDestination::fmMix:             directMsegFmMix = bipolar * depth; break;\n                case ModDestination::wavetablePosition: directMsegWavetable = bipolar * depth * 0.5f; break;\n                case ModDestination::wavefold:          directMsegWavefold = bipolar * depth * 0.5f; break;\n                default: break;\n            }\n        }\n\n        float matrixPitch = 0.0f, matrixCutoff = 0.0f, matrixAmp = 0.0f;'''
+          text = replace_once(text, anchor, replacement, 'MSEG direct DSP block')
+          text = replace_once(text,
+              '        const float globalSemis = params.masterTuneCents / 100.0f + pitchWheelSemitones + matrixPitch;',
+              '        const float globalSemis = params.masterTuneCents / 100.0f + pitchWheelSemitones + matrixPitch + directMsegPitch;',
+              'MSEG pitch')
+          text = replace_once(text,
+              '        const float dynamicPulseWidth = juce::jlimit (0.05f, 0.95f, params.pulseWidth + matrixPulse);\n        const float dynamicFmAmount = juce::jlimit (0.0f, 1.2f, params.fmAmount + matrixFmAmount);\n        const float dynamicFmMix = juce::jlimit (0.0f, 1.0f, params.fmMix + matrixFmMix);\n        const float dynamicWavetablePosition = juce::jlimit (0.0f, 1.0f, params.wavetablePosition + matrixWavetable);\n        const float dynamicWavefold = juce::jlimit (0.0f, 1.0f, params.wavefold + matrixWavefold);',
+              '        const float dynamicPulseWidth = juce::jlimit (0.05f, 0.95f, params.pulseWidth + matrixPulse + directMsegPulse);\n        const float dynamicFmAmount = juce::jlimit (0.0f, 1.2f, params.fmAmount + matrixFmAmount + directMsegFmAmount);\n        const float dynamicFmMix = juce::jlimit (0.0f, 1.0f, params.fmMix + matrixFmMix + directMsegFmMix);\n        const float dynamicWavetablePosition = juce::jlimit (0.0f, 1.0f, params.wavetablePosition + matrixWavetable + directMsegWavetable);\n        const float dynamicWavefold = juce::jlimit (0.0f, 1.0f, params.wavefold + matrixWavefold + directMsegWavefold);',
+              'MSEG dynamic destinations')
+          text = replace_once(text,
+              '                                                  params.cutoff * std::pow (2.0f, params.lfoCutoff * lfo + matrixCutoff));',
+              '                                                  params.cutoff * std::pow (2.0f, params.lfoCutoff * lfo + matrixCutoff + directMsegCutoff));',
+              'MSEG cutoff')
+          text = replace_once(text,
+              '        gainScratch[(size_t) i] = env * level * juce::jlimit (0.0f, 1.5f, tremolo) * matrixGain;',
+              '        gainScratch[(size_t) i] = env * level * juce::jlimit (0.0f, 1.5f, tremolo) * matrixGain * directMsegAmp;',
+              'MSEG amplitude')
+          p.write_text(text, encoding='utf-8')
+
+          # ------------------------------------------------------------------
+          # APVTS/state + exact requested tab order.
+          # ------------------------------------------------------------------
+          p = Path('Source/PluginProcessor.cpp')
+          text = p.read_text(encoding='utf-8')
+          text = replace_once(text,
+              '    setDefault ("msegLoopEnd", 2);\n    setDefault ("userWavetableMix", 0.0f);',
+              '    setDefault ("msegLoopEnd", 2);\n    setDefault ("msegTarget", (int) ModDestination::amplitude);\n    setDefault ("msegDepth", 1.0f);\n    setDefault ("userWavetableMix", 0.0f);',
+              'MSEG state defaults')
+          text = replace_once(text,
+              '    p.mseg.enabled = v ("msegEnabled") >= 0.5f;\n    p.mseg.loopEnabled = v ("msegLoopEnabled") >= 0.5f;',
+              '    p.mseg.enabled = v ("msegEnabled") >= 0.5f;\n    p.msegTarget = juce::jlimit ((int) ModDestination::none, (int) ModDestination::wavefold, (int) v ("msegTarget"));\n    p.msegDepth = juce::jlimit (-1.0f, 1.0f, v ("msegDepth"));\n    p.mseg.loopEnabled = v ("msegLoopEnabled") >= 0.5f;',
+              'read MSEG direct params')
+          text = replace_once(text,
+              '    set ("msegEnabled", q.mseg.enabled ? 1.0f : 0.0f);\n    set ("msegLoopEnabled", q.mseg.loopEnabled ? 1.0f : 0.0f);',
+              '    set ("msegEnabled", q.mseg.enabled ? 1.0f : 0.0f);\n    set ("msegTarget", (float) q.msegTarget);\n    set ("msegDepth", q.msegDepth);\n    set ("msegLoopEnabled", q.mseg.loopEnabled ? 1.0f : 0.0f);',
+              'apply MSEG direct params')
+          text = replace_once(text,
+              '    l.add (std::make_unique<C> ("msegLoopEnd", "MSEG 1 Loop End", juce::StringArray { "P2", "P3", "P4", "P5", "P6" }, 2));\n\n    const float defaultMsegLevels[]',
+              '    l.add (std::make_unique<C> ("msegLoopEnd", "MSEG 1 Loop End", juce::StringArray { "P2", "P3", "P4", "P5", "P6" }, 2));\n    l.add (std::make_unique<C> ("msegTarget", "MSEG 1 Direct Target", actualModDestinations, (int) ModDestination::amplitude));\n    l.add (std::make_unique<P> ("msegDepth", "MSEG 1 Direct Depth", juce::NormalisableRange<float> (-1.0f, 1.0f, 0.001f), 1.0f));\n\n    const float defaultMsegLevels[]',
+              'create MSEG direct params')
+
+          start = text.index('        if (auto* tabbed = findTabbedComponent())')
+          end = text.index('        resized();', start)
+          old_block = text[start:end]
+          new_block = '''        if (auto* tabbed = findTabbedComponent())\n        {\n            // Base editor contributes these pages without transferring ownership.\n            // Rebuild the outer tab strip in the requested sound-design workflow order.\n            auto* synthContent = tabbed->getTabContentComponent (0);\n            auto* fmContent = tabbed->getTabContentComponent (1);\n            auto* filterContent = tabbed->getTabContentComponent (2);\n            auto* builtInMod = tabbed->getTabContentComponent (3);\n            auto* builtInFx = tabbed->getTabContentComponent (4);\n            auto* baseSettings = tabbed->getTabContentComponent (5);\n            auto* baseAiLog = tabbed->getTabContentComponent (6);\n            auto* signalContent = tabbed->getTabContentComponent (7);\n            auto* melodyContent = tabbed->getTabContentComponent (8);\n\n            settingsPage = baseSettings;\n            if (settingsPage != nullptr)\n            {\n                settingsPage->addAndMakeVisible (qualityLabel);\n                settingsPage->addAndMakeVisible (qualityChoice);\n            }\n\n            for (int i = tabbed->getNumTabs() - 1; i >= 0; --i)\n                tabbed->removeTab (i);\n\n            auto* settingsHub = new juce::TabbedComponent (juce::TabbedButtonBar::TabsAtTop);\n            settingsHub->setTabBarDepth (32);\n            settingsHub->addTab ("GENERAL + AI", juce::Colour (0xff171d1d), baseSettings, false);\n            settingsHub->addTab ("AI LOG", juce::Colour (0xff10191b), baseAiLog, false);\n\n            tabbed->addTab ("PRESETS", juce::Colour (0xff101719), new PresetsPage (proc), true);\n            tabbed->addTab ("LAYERS", juce::Colour (0xff101719), new LayersPage (proc), true);\n            tabbed->addTab ("SYNTH", juce::Colour (0xff14201e), synthContent, false);\n            tabbed->addTab ("FM", juce::Colour (0xff211b14), fmContent, false);\n            tabbed->addTab ("MSEG", juce::Colour (0xff10201d), new MsegPage (proc), true);\n            tabbed->addTab ("FILTER", juce::Colour (0xff151e20), filterContent, false);\n            tabbed->addTab ("MOD", juce::Colour (0xff101719), new ModulatorsPage (proc, builtInMod), true);\n            tabbed->addTab ("FX", juce::Colour (0xff101719), new FxRackPage (proc, builtInFx), true);\n            tabbed->addTab ("WAVETABLE", juce::Colour (0xff101b20), new UserWavetablePage (proc), true);\n            tabbed->addTab ("SIGNAL", juce::Colour (0xff102024), signalContent, false);\n            tabbed->addTab ("MIDI MAP", juce::Colour (0xff171b20), new MidiMappingPage (proc), true);\n            tabbed->addTab ("MELODY", juce::Colour (0xff102024), melodyContent, false);\n            tabbed->addTab ("SETTINGS", juce::Colour (0xff171d1d), settingsHub, true);\n            tabbed->setCurrentTabIndex (0);\n        }\n'''
+          text = text[:start] + new_block + text[end:]
+          p.write_text(text, encoding='utf-8')
+
+          # ------------------------------------------------------------------
+          # MSEG page: obvious target/depth strip above the shape editor.
+          # ------------------------------------------------------------------
+          p = Path('Source/UI/MsegPage.h')
+          text = p.read_text(encoding='utf-8')
+          text = replace_once(text,
+              '        loopStartAttachment = std::make_unique<ComboAttachment> (state, "msegLoopStart", loopStart);\n        loopEndAttachment = std::make_unique<ComboAttachment> (state, "msegLoopEnd", loopEnd);',
+              '        loopStartAttachment = std::make_unique<ComboAttachment> (state, "msegLoopStart", loopStart);\n        loopEndAttachment = std::make_unique<ComboAttachment> (state, "msegLoopEnd", loopEnd);\n\n        styleLabel (targetLabel, "DIRECT TARGET");\n        target.addItemList ({ "Off", "Pitch", "Cutoff", "Amplitude", "Pulse Width", "PM Amount", "6-OP FM Mix", "Wavetable Position", "Wavefold" }, 1);\n        targetAttachment = std::make_unique<ComboAttachment> (state, "msegTarget", target);\n        styleLabel (depthLabel, "DEPTH");\n        depth.setSliderStyle (juce::Slider::LinearHorizontal);\n        depth.setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 22);\n        depth.setNumDecimalPlacesToDisplay (2);\n        depth.setTooltip ("Dedicated MSEG depth. At the default Amplitude / +1.00, enabling MSEG directly shapes loudness in addition to the ADSR.");\n        depthAttachment = std::make_unique<SliderAttachment> (state, "msegDepth", depth);',
+              'MSEG target controls init')
+          text = replace_once(text,
+              '        addAndMakeVisible (loopEndLabel);\n        addAndMakeVisible (loopEnd);',
+              '        addAndMakeVisible (loopEndLabel);\n        addAndMakeVisible (loopEnd);\n        addAndMakeVisible (targetLabel);\n        addAndMakeVisible (target);\n        addAndMakeVisible (depthLabel);\n        addAndMakeVisible (depth);',
+              'MSEG target visible')
+          text = replace_once(text,
+              '        auto header = area.removeFromTop (34);\n        enabled.setBounds (header.removeFromLeft (150).reduced (2, 2));\n        loopEnabled.setBounds (header.removeFromLeft (190).reduced (2, 2));\n        loopStartLabel.setBounds (header.removeFromLeft (78));\n        loopStart.setBounds (header.removeFromLeft (82).reduced (2, 2));\n        loopEndLabel.setBounds (header.removeFromLeft (72));\n        loopEnd.setBounds (header.removeFromLeft (82).reduced (2, 2));\n        area.removeFromTop (5);',
+              '        auto header = area.removeFromTop (68);\n        auto enableRow = header.removeFromTop (32);\n        enabled.setBounds (enableRow.removeFromLeft (150).reduced (2, 2));\n        loopEnabled.setBounds (enableRow.removeFromLeft (190).reduced (2, 2));\n        loopStartLabel.setBounds (enableRow.removeFromLeft (78));\n        loopStart.setBounds (enableRow.removeFromLeft (82).reduced (2, 2));\n        loopEndLabel.setBounds (enableRow.removeFromLeft (72));\n        loopEnd.setBounds (enableRow.removeFromLeft (82).reduced (2, 2));\n        auto directRow = header.removeFromTop (32);\n        targetLabel.setBounds (directRow.removeFromLeft (95));\n        target.setBounds (directRow.removeFromLeft (250).reduced (2, 2));\n        directRow.removeFromLeft (10);\n        depthLabel.setBounds (directRow.removeFromLeft (55));\n        depth.setBounds (directRow.removeFromLeft (300).reduced (2, 2));\n        area.removeFromTop (5);',
+              'MSEG target layout')
+          text = replace_once(text,
+              '    juce::Label loopStartLabel, loopEndLabel;\n    juce::ComboBox loopStart, loopEnd;',
+              '    juce::Label loopStartLabel, loopEndLabel, targetLabel, depthLabel;\n    juce::ComboBox loopStart, loopEnd, target;\n    juce::Slider depth;',
+              'MSEG target fields')
+          text = replace_once(text,
+              '    std::unique_ptr<ButtonAttachment> enabledAttachment, loopAttachment;\n    std::unique_ptr<ComboAttachment> loopStartAttachment, loopEndAttachment;',
+              '    std::unique_ptr<ButtonAttachment> enabledAttachment, loopAttachment;\n    std::unique_ptr<ComboAttachment> loopStartAttachment, loopEndAttachment, targetAttachment;\n    std::unique_ptr<SliderAttachment> depthAttachment;',
+              'MSEG target attachments')
+          text = replace_once(text,
+              '        drawSection (g, routeBounds.toFloat(), "POST-1.0 MODULATION GRAPH", findColour (RetroLookAndFeel::tertiaryLed));',
+              '        drawSection (g, routeBounds.toFloat(), "EXTRA MODULATION ROUTES", findColour (RetroLookAndFeel::tertiaryLed));',
+              'MSEG graph section title')
+          p.write_text(text, encoding='utf-8')
+
+          # ------------------------------------------------------------------
+          # Preset page: detailed inspector + true single-click browsing option.
+          # ------------------------------------------------------------------
+          p = Path('Source/UI/PresetsPage.h')
+          text = p.read_text(encoding='utf-8')
+          text = replace_once(text,
+              '        addAndMakeVisible (list); addAndMakeVisible (description); addAndMakeVisible (current); addAndMakeVisible (visual);\n        list.setRowHeight (44); description.setJustificationType (juce::Justification::topLeft);',
+              '        addAndMakeVisible (list); addAndMakeVisible (description); addAndMakeVisible (current); addAndMakeVisible (visual); addAndMakeVisible (autoLoad);\n        list.setRowHeight (54); description.setMultiLine (true); description.setReadOnly (true); description.setScrollbarsShown (true);\n        description.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff071012));\n        description.setColour (juce::TextEditor::textColourId, juce::Colour (0xffb9c9c4));\n        autoLoad.setButtonText ("LOAD ON SELECT"); autoLoad.setToggleState (true, juce::dontSendNotification);\n        autoLoad.setTooltip ("When enabled, a single click loads the highlighted preset immediately. Double-click and LOAD SELECTED always work.");',
+              'preset detail widgets')
+          text = replace_once(text,
+              '        auto r = getLocalBounds().reduced (16); current.setBounds (r.removeFromTop (30)); r.removeFromTop (8);\n        auto filters = r.removeFromTop (34); category.setBounds (filters.removeFromRight (180).reduced (2)); search.setBounds (filters.reduced (2)); r.removeFromTop (8);',
+              '        auto r = getLocalBounds().reduced (16); auto titleRow = r.removeFromTop (30); current.setBounds (titleRow.removeFromLeft (juce::jmax (300, titleRow.getWidth() - 180))); autoLoad.setBounds (titleRow.reduced (4, 2)); r.removeFromTop (8);\n        auto filters = r.removeFromTop (34); category.setBounds (filters.removeFromRight (180).reduced (2)); search.setBounds (filters.reduced (2)); r.removeFromTop (8);',
+              'preset title layout')
+          text = replace_once(text,
+              '        visual.setBounds (r.removeFromTop (180)); description.setBounds (r.reduced (4, 12));',
+              '        visual.setBounds (r.removeFromTop (210)); description.setBounds (r.reduced (4, 8));',
+              'preset detail layout')
+          text = replace_once(text,
+              '    juce::Label description, current; SynthInstanceVisual visual;\n    juce::TextButton load, save, open, randomize, audition;',
+              '    juce::TextEditor description; juce::Label current; SynthInstanceVisual visual;\n    juce::ToggleButton autoLoad;\n    juce::TextButton load, save, open, randomize, audition;',
+              'preset detail fields')
+
+          old_selected = '''    void selectedRowsChanged (int row) override\n    {\n        if (row < 0 || row >= getNumRows()) return;\n        row = visibleRows[(size_t) row];\n        if (row < (int) factoryPresetCatalog.size()) description.setText (factoryPresetCatalog[(size_t) row].description, juce::dontSendNotification);\n        else description.setText ("Your saved synth instances, wavetables, modulation and FX chain.", juce::dontSendNotification);\n    }'''
+          new_selected = '''    void selectedRowsChanged (int row) override\n    {\n        if (row < 0 || row >= getNumRows()) return;\n        updateDetails (visibleRows[(size_t) row]);\n        if (autoLoad.getToggleState()) loadSelected();\n    }'''
+          text = replace_once(text, old_selected, new_selected, 'preset selected behavior')
+
+          old_refresh = '    void refreshCurrent() { current.setText ("CURRENT / " + proc.getPresetName(), juce::dontSendNotification); visual.repaint(); }'
+          new_refresh = '''    void refreshCurrent()\n    {\n        current.setText ("CURRENT / " + proc.getPresetName(), juce::dontSendNotification);\n        visual.repaint();\n    }\n\n    static juce::String waveName (int wave)\n    {\n        const juce::StringArray names { "Sine", "Saw", "Square", "Triangle", "Pulse" };\n        return names[juce::jlimit (0, names.size() - 1, wave)];\n    }\n\n    static juce::String filterName (int type)\n    {\n        return type == 1 ? "High-pass" : type == 2 ? "Band-pass" : "Low-pass";\n    }\n\n    juce::String describePatch (const VoiceParameters& p, const juce::String& descriptionText) const\n    {\n        int layers = 1;\n        for (const auto& layer : p.layers) if (layer) ++layers;\n        juce::String s;\n        if (descriptionText.isNotEmpty()) s << descriptionText << "\\n\\n";\n        s << "SYNTHESIS\\n"\n          << "  " << layers << " instance" << (layers == 1 ? "" : "s")\n          << "  |  OSC1 " << waveName (p.osc1Wave) << " " << juce::String (p.osc1Mix, 2)\n          << "  |  OSC2 " << waveName (p.osc2Wave) << " " << juce::String (p.osc2Mix, 2) << "\\n"\n          << "  Wavetable " << juce::String (p.wavetableMix, 2)\n          << "  |  Ref WT " << juce::String (p.referenceWavetableMix, 2)\n          << "  |  FM " << juce::String (p.fmMix, 2) << " / algorithm " << juce::String (p.fmAlgorithm + 1)\n          << "  |  Supersaw " << juce::String (p.supersawMix, 2) << "\\n\\n"\n          << "FILTER + ENVELOPE\\n"\n          << "  " << filterName (p.filterType) << "  " << juce::String (p.cutoff, 0) << " Hz"\n          << "  |  Resonance " << juce::String (p.resonance, 2) << "\\n"\n          << "  ADSR  " << juce::String (p.attack, 3) << " / " << juce::String (p.decay, 3)\n          << " / " << juce::String (p.sustain, 2) << " / " << juce::String (p.release, 3) << " s\\n\\n"\n          << "MOTION + SPACE\\n"\n          << "  MSEG " << (p.mseg.enabled ? "ON" : "off")\n          << "  |  Chorus " << juce::String (p.chorusMix, 2)\n          << "  |  Delay " << juce::String (p.delayMix, 2)\n          << "  |  Reverb " << juce::String (p.reverbMix, 2)\n          << "  |  Width " << juce::String (p.stereoWidth, 2) << "\\n"\n          << "  Patch output " << juce::String (p.outputGainDb, 1) << " dB";\n        return s;\n    }\n\n    void updateDetails (int row)\n    {\n        if (row < 0) return;\n        if (row < (int) factoryPresetCatalog.size())\n        {\n            const auto& info = factoryPresetCatalog[(size_t) row];\n            description.setText ("FACTORY / " + info.category + " / " + info.name + "\\n\\n"\n                                 + describePatch (makeFactoryPreset (row), info.description), false);\n        }\n        else\n        {\n            const int userIndex = row - (int) factoryPresetCatalog.size();\n            const auto file = userFiles[userIndex];\n            description.setText ("USER PRESET / " + file.getFileNameWithoutExtension() + "\\n"\n                                 + file.getFullPathName()\n                                 + "\\n\\nSingle-click loads this preset when LOAD ON SELECT is active. "\n                                   "After loading, the CURRENT display and synth visual show its complete state.", false);\n        }\n    }'''
+          text = replace_once(text, old_refresh, new_refresh, 'preset detailed inspector')
+          p.write_text(text, encoding='utf-8')
+
+          # Static checks catch source-level contract regressions before committing.
+          import subprocess
+          subprocess.run(['python3', 'scripts/static-check.py'], check=True)
+          PY
+
+      - name: Commit implementation and remove helper workflow
+        shell: bash
+        run: |
+          git config user.name "Alexander Seel"
+          git config user.email "mr.alexander.seel@gmail.com"
+          git rm .github/workflows/apply-ui-mseg-fixes.yml
+          git add Source/Engine/SynthEngine.h Source/Engine/SynthEngine.cpp Source/PluginProcessor.cpp Source/UI/MsegPage.h Source/UI/PresetsPage.h
+          git commit -m "Reorder synth workflow and make MSEG directly audible"
+          git push origin HEAD:main
