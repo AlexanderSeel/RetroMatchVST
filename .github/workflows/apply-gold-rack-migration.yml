@@ -16,6 +16,19 @@ jobs:
         with:
           ref: validation/gold-rack-evolution-20260908
           fetch-depth: 0
+      - name: Tighten render-tail migration anchor
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/apply-gold-rack-evolution-20260908.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    "        }\\n    }\\n}\\n",\n    "        }\\n    }\\n\\n"'
+          new = '    "                output[n] = a + amount * (combined - a);\\n            }\\n        }\\n    }\\n}\\n",\n    "                output[n] = a + amount * (combined - a);\\n            }\\n        }\\n    }\\n\\n"'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one ambiguous render-tail migration marker, got {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Apply staged migration
         run: python3 scripts/apply-gold-rack-evolution-20260908.py
       - name: Static source integrity
