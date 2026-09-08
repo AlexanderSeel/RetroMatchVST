@@ -19,16 +19,24 @@ public:
     void noteOffFromUi (int midiNote, float velocity = 0.0f);
     void allNotesOff();
 
+    bool previewRegion (const juce::File& file, int rootMidiNote, double startSeconds, double endSeconds,
+                        bool normalize, float fadeInSeconds, float fadeOutSeconds);
+    void stopPreview();
+    bool isPreviewing() const noexcept { return previewing.load(); }
+    static bool writeProcessedRegion (const juce::File& source, const juce::File& destination,
+                                      double startSeconds, double endSeconds, bool normalize,
+                                      float fadeInSeconds, float fadeOutSeconds);
+
     bool hasSample() const noexcept { return loaded.load(); }
     int getRootMidiNote() const noexcept { return rootNote.load(); }
     const juce::File& getSourceFile() const noexcept { return sourceFile; }
 
 private:
-    juce::Synthesiser synth;
+    juce::Synthesiser synth, previewSynth;
     juce::AudioFormatManager formats;
     juce::File sourceFile;
     std::atomic<int> rootNote { 60 };
-    std::atomic<bool> loaded { false };
+    std::atomic<bool> loaded { false }, previewing { false };
     double playbackSampleRate = 44100.0;
 
     bool rebuildSound();

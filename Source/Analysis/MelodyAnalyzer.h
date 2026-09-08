@@ -11,7 +11,8 @@ struct TranscribedNote
 
 struct MelodyClip
 {
-    static constexpr int maxNotes = 4096;
+    static constexpr int maxNotes = 16384;
+    static constexpr double maxDurationSeconds = 6.0 * 60.0 * 60.0;
     std::vector<TranscribedNote> notes;
     double duration = 0.0, bpm = 120.0;
     juce::String sourceName;

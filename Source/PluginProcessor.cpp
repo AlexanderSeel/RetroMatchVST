@@ -15,7 +15,8 @@ namespace
 {
 bool isGlobalRackOrClockParameter (const juce::String& id)
 {
-    if (id.startsWith ("layer") || id == "mainLayerGain" || id == "oversamplingQuality" || id == "resynthInstances")
+    if (id.startsWith ("layer") || id == "mainLayerGain" || id == "oversamplingQuality" || id == "resynthInstances"
+        || id == "masterOutputGain" || id == "resynthStrategy" || id == "resynthComplexity")
         return true;
     if (id == "tempoSource" || id == "manualBpm" || id == "chorusSync" || id == "chorusDivision"
         || id == "delaySync" || id == "delayDivision" || id == "msegSync" || id == "msegDivision")
@@ -24,6 +25,78 @@ bool isGlobalRackOrClockParameter (const juce::String& id)
         if (id == "lfo" + juce::String (i) + "Sync" || id == "lfo" + juce::String (i) + "Division")
             return true;
     return false;
+}
+
+
+float referenceTableWeight (const SoundFeatures& f, int strategy)
+{
+    const float motion = juce::jlimit (0.0f, 1.0f, f.spectralMotion * 2.5f);
+    float weight = juce::jlimit (0.14f, 0.62f,
+        0.12f + f.pitchConfidence * 0.22f + f.harmonicity * 0.16f + motion * 0.24f);
+    if (strategy == 1) weight = juce::jmax (0.72f, weight);
+    if (strategy == 2) weight *= 0.12f;
+    if (strategy == 3) weight *= 0.28f;
+    if (strategy == 4) weight = juce::jmax (0.36f, weight);
+    if (strategy == 5) weight = juce::jmax (0.62f, weight);
+    return juce::jlimit (0.0f, 0.92f, weight);
+}
+
+VoiceParameters makeResynthCompanion (const VoiceParameters& source, int role, int strategy,
+                                      const std::shared_ptr<ReferenceWavetableData>& table)
+{
+    auto p = source;
+    p.layers.fill (nullptr); p.mainLayerGain = 1.0f;
+    p.referenceWavetable = table;
+    p.outputGainDb = juce::jlimit (-12.0f, -4.0f, source.outputGainDb - 1.5f);
+    p.delayMix *= 0.65f; p.reverbMix *= 0.75f;
+
+    switch (role % 7)
+    {
+        case 0: // Body: sample fingerprint + stable fundamental.
+            if (table) p.referenceWavetableMix = juce::jmax (0.48f, p.referenceWavetableMix);
+            p.osc1Mix *= 0.58f; p.osc2Mix *= 0.55f; p.fmMix *= 0.72f;
+            p.cutoff = juce::jlimit (180.0f, 15000.0f, p.cutoff * 0.88f);
+            break;
+        case 1: // Air / shimmer.
+            if (table) p.referenceWavetableMix = juce::jmax (0.32f, p.referenceWavetableMix);
+            p.filterType = 1; p.cutoff = juce::jlimit (2200.0f, 10500.0f, p.cutoff * 0.72f + 2200.0f);
+            p.fmMix = juce::jmax (0.16f, p.fmMix); p.fmAlgorithm = 5;
+            p.stereoWidth = juce::jmax (1.25f, p.stereoWidth); p.reverbMix = juce::jmax (0.12f, p.reverbMix);
+            break;
+        case 2: // Foundation / sub.
+            p.osc1Wave = 0; p.osc1Mix = 0.62f; p.osc2Mix = 0.0f; p.subMix = juce::jmax (0.24f, p.subMix);
+            p.referenceWavetableMix *= 0.18f; p.wavetableMix *= 0.15f; p.fmMix *= 0.25f; p.supersawMix = 0.0f;
+            p.filterType = 0; p.cutoff = juce::jlimit (160.0f, 1800.0f, p.cutoff * 0.28f);
+            p.chorusMix = p.delayMix = p.reverbMix = 0.0f; p.stereoWidth = 0.82f;
+            break;
+        case 3: // Motion table.
+            if (table) p.referenceWavetableMix = juce::jmax (0.52f, p.referenceWavetableMix);
+            p.wavetableMix = juce::jmax (0.16f, p.wavetableMix);
+            p.extraLfoRate[0] = 0.11f;
+            p.modGraphSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::wavetablePosition, 0.36f };
+            p.chorusMix = juce::jmax (0.10f, p.chorusMix); p.stereoWidth = juce::jmax (1.2f, p.stereoWidth);
+            break;
+        case 4: // Harmonic / FM colour.
+            p.osc1Mix *= 0.48f; p.osc2Mix *= 0.42f;
+            p.fmMix = juce::jmax (0.42f, p.fmMix); p.fmAmount = juce::jmax (0.09f, p.fmAmount);
+            p.fmAlgorithm = strategy == 3 ? 2 : 4;
+            p.fmOpRatio = {{ 1.0f, 2.0f, 3.0f, 1.5f, 4.0f, 6.0f }};
+            p.referenceWavetableMix *= 0.42f;
+            break;
+        case 5: // Width / ensemble body.
+            p.supersawMix = juce::jmax (0.38f, p.supersawMix); p.unisonDetune = juce::jmax (16.0f, p.unisonDetune);
+            p.unisonSpread = juce::jmax (0.78f, p.unisonSpread); p.chorusMix = juce::jmax (0.12f, p.chorusMix);
+            p.stereoWidth = juce::jmax (1.45f, p.stereoWidth); p.referenceWavetableMix *= 0.55f;
+            break;
+        default: // Texture / transient dust.
+            if (table) p.referenceWavetableMix = juce::jmax (0.30f, p.referenceWavetableMix);
+            p.noiseMix = juce::jmax (0.035f, juce::jmin (0.16f, p.noiseMix + 0.04f));
+            p.ringMix = juce::jmax (0.05f, juce::jmin (0.20f, p.ringMix + 0.04f));
+            p.wavefold = juce::jmax (0.06f, juce::jmin (0.28f, p.wavefold + 0.05f));
+            p.attack = juce::jmax (0.003f, p.attack * 0.7f); p.release *= 0.72f;
+            break;
+    }
+    return p;
 }
 
 class OversamplingQualityEditor final : public RetroMatchSynthAudioProcessorEditor
@@ -162,6 +235,9 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
     }
 
     setDefault ("resynthInstances", 1);
+    setDefault ("resynthStrategy", 0);
+    setDefault ("resynthComplexity", 0);
+    setDefault ("masterOutputGain", 0.0f);
     setDefault ("tempoSource", 1);
     setDefault ("manualBpm", 120.0f);
     for (int i = 1; i <= 4; ++i)
@@ -462,6 +538,11 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
         referenceLatencyDelay.reset();
     }
 
+    // Global hardware-style master trim. Unlike patch OUTPUT this survives preset changes
+    // and controls the complete instrument, including reference A/B audition.
+    const float masterDb = apvts.getRawParameterValue ("masterOutputGain")->load();
+    b.applyGain (juce::Decibels::decibelsToGain (masterDb));
+
     if (b.getNumSamples() > 0 && b.getNumChannels() > 0)
     {
         const float left = b.getMagnitude (0, 0, b.getNumSamples());
@@ -525,16 +606,27 @@ bool RetroMatchSynthAudioProcessor::loadReferenceSample (const juce::File& f)
     detectedReferencePitchConfidence = analysed->pitchConfidence;
     detectedReferenceMidiNote = hzToNearestMidiNote (detectedReferenceHz);
     referenceBaseMidiNote.store (detectedReferenceMidiNote);
+    referencePitchLocked.store (false);
     loadedReferenceFile = f;
-    analysisSourceDuration.store (analysed->duration);
+
+    double sourceDuration = analysed->duration;
+    juce::AudioFormatManager durationFormats;
+    durationFormats.registerBasicFormats();
+    if (std::unique_ptr<juce::AudioFormatReader> durationReader (durationFormats.createReaderFor (f)); durationReader != nullptr && durationReader->sampleRate > 0.0)
+        sourceDuration = (double) durationReader->lengthInSamples / durationReader->sampleRate;
+    const float sourceSeconds = (float) juce::jmax (0.0, sourceDuration);
+    analysisSourceDuration.store (sourceSeconds);
     analysisStartSeconds.store (0.0f);
-    analysisEndSeconds.store (analysed->duration);
+    const float initialEnd = sourceSeconds > 0.0f ? juce::jmin (sourceSeconds, juce::jmax (0.05f, analysed->duration)) : analysed->duration;
+    analysisEndSeconds.store (initialEnd);
 
     currentFeatures = std::move (analysed);
     currentCandidateFeatures.reset();
-    referenceWavetable = ReferenceWavetableExtractor::extract (f, currentFeatures->fundamentalHz);
+    const float wavetableHz = currentFeatures->fundamentalHz > 20.0f ? currentFeatures->fundamentalHz : midiNoteToHz (referenceBaseMidiNote.load());
+    referenceWavetable = ReferenceWavetableExtractor::extract (f, wavetableHz, 0.0f, initialEnd);
     referencePlayer.load (f, detectedReferenceMidiNote);
     loadedSampleName = f.getFileName();
+    setMidiAnalysisRegion (0.0f, sourceSeconds);
     lastMatch = {};
     candidateBank = {};
     selectedCandidate = 0;
@@ -547,12 +639,27 @@ bool RetroMatchSynthAudioProcessor::setReferenceAnalysisRegion (float startSecon
     const float duration = analysisSourceDuration.load();
     const float start = juce::jlimit (0.0f, juce::jmax (0.0f, duration - 0.002f), startSeconds);
     const float end = juce::jlimit (start + 0.002f, juce::jmax (start + 0.002f, duration), endSeconds);
-    auto analysed = SampleAnalyzer::analyzeFile (loadedReferenceFile, midiNoteToHz (referenceBaseMidiNote.load()), start, end);
+    const float expected = referencePitchLocked.load() ? midiNoteToHz (referenceBaseMidiNote.load()) : 0.0f;
+    auto analysed = SampleAnalyzer::analyzeFile (loadedReferenceFile, expected, start, end);
     if (! analysed) return false;
+
     analysisStartSeconds.store (start);
     analysisEndSeconds.store (end);
+    if (! referencePitchLocked.load())
+    {
+        detectedReferenceHz = analysed->fundamentalHz;
+        detectedReferencePitchConfidence = analysed->pitchConfidence;
+        if (detectedReferenceHz > 20.0f && detectedReferencePitchConfidence > 0.10f)
+        {
+            detectedReferenceMidiNote = hzToNearestMidiNote (detectedReferenceHz);
+            referenceBaseMidiNote.store (detectedReferenceMidiNote);
+            referencePlayer.setRootMidiNote (detectedReferenceMidiNote);
+        }
+    }
+
     currentFeatures = std::move (analysed);
-    referenceWavetable = ReferenceWavetableExtractor::extract (loadedReferenceFile, currentFeatures->fundamentalHz, start, end);
+    const float wavetableHz = currentFeatures->fundamentalHz > 20.0f ? currentFeatures->fundamentalHz : midiNoteToHz (referenceBaseMidiNote.load());
+    referenceWavetable = ReferenceWavetableExtractor::extract (loadedReferenceFile, wavetableHz, start, end);
     invalidateMatchesAfterReferencePitchChange();
     return true;
 }
@@ -744,20 +851,85 @@ bool RetroMatchSynthAudioProcessor::setReferenceBaseMidiNote (int midiNote)
 
     const int note = juce::jlimit (0, 127, midiNote);
     const float expectedHz = midiNoteToHz (note);
-    auto analysed = SampleAnalyzer::analyzeFile (loadedReferenceFile, expectedHz);
+    const float start = analysisStartSeconds.load();
+    const float end = analysisEndSeconds.load() > start ? analysisEndSeconds.load() : analysisSourceDuration.load();
+    auto analysed = SampleAnalyzer::analyzeFile (loadedReferenceFile, expectedHz, start, end);
     if (! analysed) return false;
 
     currentFeatures = std::move (analysed);
     referenceBaseMidiNote.store (note);
+    referencePitchLocked.store (true);
     referencePlayer.setRootMidiNote (note);
-    referenceWavetable = ReferenceWavetableExtractor::extract (loadedReferenceFile, expectedHz);
+    referenceWavetable = ReferenceWavetableExtractor::extract (loadedReferenceFile, expectedHz, start, end);
     invalidateMatchesAfterReferencePitchChange();
     return true;
 }
 
 bool RetroMatchSynthAudioProcessor::resetReferenceBaseMidiNote()
 {
-    return setReferenceBaseMidiNote (detectedReferenceMidiNote);
+    if (! loadedReferenceFile.existsAsFile()) return false;
+    referencePitchLocked.store (false);
+    const float start = analysisStartSeconds.load();
+    const float end = analysisEndSeconds.load() > start ? analysisEndSeconds.load() : analysisSourceDuration.load();
+    auto analysed = SampleAnalyzer::analyzeFile (loadedReferenceFile, 0.0f, start, end);
+    if (! analysed) return false;
+
+    detectedReferenceHz = analysed->fundamentalHz;
+    detectedReferencePitchConfidence = analysed->pitchConfidence;
+    if (detectedReferenceHz > 20.0f) detectedReferenceMidiNote = hzToNearestMidiNote (detectedReferenceHz);
+    referenceBaseMidiNote.store (detectedReferenceMidiNote);
+    referencePlayer.setRootMidiNote (detectedReferenceMidiNote);
+    currentFeatures = std::move (analysed);
+    const float wavetableHz = currentFeatures->fundamentalHz > 20.0f ? currentFeatures->fundamentalHz : midiNoteToHz (detectedReferenceMidiNote);
+    referenceWavetable = ReferenceWavetableExtractor::extract (loadedReferenceFile, wavetableHz, start, end);
+    invalidateMatchesAfterReferencePitchChange();
+    return true;
+}
+
+float RetroMatchSynthAudioProcessor::getMidiAnalysisStartSeconds() const noexcept
+{
+    const float duration = analysisSourceDuration.load();
+    return juce::jlimit (0.0f, juce::jmax (0.0f, duration), (float) apvts.state.getProperty ("midiAnalysisStart", 0.0f));
+}
+
+float RetroMatchSynthAudioProcessor::getMidiAnalysisEndSeconds() const noexcept
+{
+    const float duration = analysisSourceDuration.load();
+    const float start = getMidiAnalysisStartSeconds();
+    return juce::jlimit (start, juce::jmax (start, duration), (float) apvts.state.getProperty ("midiAnalysisEnd", duration));
+}
+
+void RetroMatchSynthAudioProcessor::setMidiAnalysisRegion (float startSeconds, float endSeconds)
+{
+    const float duration = analysisSourceDuration.load();
+    if (duration <= 0.0f) return;
+    const float start = juce::jlimit (0.0f, juce::jmax (0.0f, duration - 0.002f), startSeconds);
+    const float end = juce::jlimit (start + 0.002f, duration, endSeconds);
+    apvts.state.setProperty ("midiAnalysisStart", start, nullptr);
+    apvts.state.setProperty ("midiAnalysisEnd", end, nullptr);
+}
+
+bool RetroMatchSynthAudioProcessor::previewReferenceRegion (float startSeconds, float endSeconds, bool normalize,
+                                                            float fadeInSeconds, float fadeOutSeconds)
+{
+    if (! loadedReferenceFile.existsAsFile()) return false;
+    setReferenceAuditionMode (ReferenceAuditionMode::referenceOnly);
+    return referencePlayer.previewRegion (loadedReferenceFile, referenceBaseMidiNote.load(), startSeconds, endSeconds,
+                                          normalize, fadeInSeconds, fadeOutSeconds);
+}
+
+void RetroMatchSynthAudioProcessor::stopReferencePreview()
+{
+    referencePlayer.stopPreview();
+}
+
+bool RetroMatchSynthAudioProcessor::exportReferenceSelection (const juce::File& destination,
+                                                              float startSeconds, float endSeconds, bool normalize,
+                                                              float fadeInSeconds, float fadeOutSeconds)
+{
+    if (! loadedReferenceFile.existsAsFile()) return false;
+    return ReferenceSamplePlayer::writeProcessedRegion (loadedReferenceFile, destination, startSeconds, endSeconds,
+                                                        normalize, fadeInSeconds, fadeOutSeconds);
 }
 
 void RetroMatchSynthAudioProcessor::setReferenceAuditionMode (ReferenceAuditionMode mode)
@@ -766,6 +938,7 @@ void RetroMatchSynthAudioProcessor::setReferenceAuditionMode (ReferenceAuditionM
     const int value = juce::jlimit ((int) ReferenceAuditionMode::synthOnly,
                                     (int) ReferenceAuditionMode::mixed,
                                     (int) mode);
+    referencePlayer.stopPreview();
     allEditorNotesOff();
     referenceAuditionMode.store (value);
 }
@@ -883,46 +1056,52 @@ void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainR
     for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) clearLayer (i);
 
     applyMatchResult (mainResult);
-    const int totalInstances = juce::jlimit (1, 3, 1 + (int) apvts.getRawParameterValue ("resynthInstances")->load());
-    if (totalInstances > 1 && juce::isPositiveAndBelow (selectedBankIndex, 3))
+    const int legacyInstances = juce::jlimit (1, 3, 1 + (int) apvts.getRawParameterValue ("resynthInstances")->load());
+    const int complexity = juce::jlimit (0, 3, (int) apvts.getRawParameterValue ("resynthComplexity")->load());
+    const int totalInstances = complexity == 0 ? legacyInstances : (complexity == 1 ? 4 : complexity == 2 ? 6 : 8);
+    const int strategy = juce::jlimit (0, 5, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
+
+    std::array<int, 2> complement {{ -1, -1 }};
+    int complementCount = 0;
+    for (int candidate = 0; candidate < 3 && complementCount < 2; ++candidate)
+        if (candidate != selectedBankIndex && candidateBank[(size_t) candidate].confidence > 0.0f)
+            complement[(size_t) complementCount++] = candidate;
+    if (complementCount == 2 && candidateBank[(size_t) complement[1]].similarity.total > candidateBank[(size_t) complement[0]].similarity.total)
+        std::swap (complement[0], complement[1]);
+
+    static const char* roleNames[] { "BODY", "AIR", "FOUNDATION", "MOTION", "HARMONIC", "WIDTH", "TEXTURE" };
+    static const float roleGain[] { 0.30f, 0.18f, 0.24f, 0.20f, 0.17f, 0.16f, 0.13f };
+    static const float rolePan[]  { -0.10f, 0.34f, 0.0f, -0.30f, 0.18f, 0.42f, -0.42f };
+    static const float roleTune[] { 0.0f, 12.0f, -12.0f, 0.0f, 7.0f, 0.0f, 12.0f };
+
+    const int wantedLayers = juce::jmin (VoiceParameters::extraLayerCount, totalInstances - 1);
+    for (int layer = 0; layer < wantedLayers; ++layer)
     {
-        std::array<int, 2> complement {{ -1, -1 }};
-        int count = 0;
-        for (int candidate = 0; candidate < 3; ++candidate)
-            if (candidate != selectedBankIndex && candidateBank[(size_t) candidate].confidence > 0.0f)
-                complement[(size_t) count++] = candidate;
+        VoiceParameters source = mainResult.params;
+        if (layer < complementCount) source = candidateBank[(size_t) complement[(size_t) layer]].params;
+        auto companion = makeResynthCompanion (source, layer, strategy, referenceWavetable);
+        MatchResult layerResult; layerResult.params = companion;
+        applyMatchResult (layerResult);
+        captureLayer (layer);
 
-        if (count == 2 && candidateBank[(size_t) complement[1]].similarity.total > candidateBank[(size_t) complement[0]].similarity.total)
-            std::swap (complement[0], complement[1]);
+        auto bank = apvts.state.getChildWithName ("SYNTH_LAYERS");
+        auto stored = bank.getChildWithProperty ("index", layer);
+        if (stored.isValid()) stored.setProperty ("name", "RESYNTH / " + juce::String (roleNames[layer]), nullptr);
 
-        const float gains[] { 0.34f, 0.26f };
-        const float amounts[] { 0.70f, 0.55f };
-        const float pans[] { -0.06f, 0.06f };
-        const int wanted = juce::jmin (totalInstances - 1, count);
-        for (int layer = 0; layer < wanted; ++layer)
+        const auto prefix = "layer" + juce::String (layer + 1);
+        auto setLayer = [this, &prefix] (const char* suffix, float value)
         {
-            const int bankIndex = complement[(size_t) layer];
-            applyMatchResult (candidateBank[(size_t) bankIndex]);
-            captureLayer (layer);
-
-            auto bank = apvts.state.getChildWithName ("SYNTH_LAYERS");
-            auto stored = bank.getChildWithProperty ("index", layer);
-            if (stored.isValid())
-                stored.setProperty ("name", "RESYNTH " + juce::String::charToString ((juce_wchar) ('A' + bankIndex)), nullptr);
-
-            const auto prefix = "layer" + juce::String (layer + 1);
-            auto setLayer = [this, &prefix] (const char* suffix, float value)
-            {
-                if (auto* p = apvts.getParameter (prefix + suffix))
-                    p->setValueNotifyingHost (p->convertTo0to1 (value));
-            };
-            setLayer ("Gain", gains[layer]); setLayer ("Pan", pans[layer]); setLayer ("Tune", 0.0f);
-            setLayer ("Operation", 0.0f); setLayer ("Amount", amounts[layer]);
-        }
+            if (auto* parameter = apvts.getParameter (prefix + suffix))
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+        };
+        setLayer ("Gain", roleGain[layer]);
+        setLayer ("Pan", rolePan[layer]);
+        setLayer ("Tune", roleTune[layer]);
+        setLayer ("Operation", 0.0f);
+        setLayer ("Amount", 0.78f);
     }
 
-    // Capturing the complementary candidates temporarily loaded them into the
-    // main editor. Always restore instance 1 last and make it the reported match.
+    // Restore the selected main voice after temporary layer captures.
     applyMatchResult (mainResult);
 }
 
@@ -936,12 +1115,18 @@ MatchResult RetroMatchSynthAudioProcessor::fitReference()
     if (! currentFeatures) return {};
     auto seed = SoundMatcher::initialFit (*currentFeatures);
     const auto authored = getMainVoiceParameters();
-    seed.params.referenceWavetable = referenceWavetable;
-    seed.params.referenceWavetableMix = referenceWavetable && seed.params.osc1Wave != 0 ? 0.32f : 0.0f;
+    const int strategy = juce::jlimit (0, 5, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
+    auto strategyTable = referenceWavetable;
+    if (strategy == 5 && loadedReferenceFile.existsAsFile())
+        if (auto chopped = ReferenceWavetableExtractor::chop (loadedReferenceFile, analysisStartSeconds.load(), analysisEndSeconds.load()))
+            strategyTable = std::move (chopped);
+    seed.params.referenceWavetable = strategyTable;
+    seed.params.referenceWavetableMix = strategyTable ? referenceTableWeight (*currentFeatures, strategy) : 0.0f;
     seed.params.userWavetable = userWavetable;
     seed.params.userWavetableMix = authored.userWavetableMix;
     seed.params.distortionMode = authored.distortionMode; seed.params.distortionMix = authored.distortionMix;
-    auto evaluated = SoundMatcher::evaluateFit (*currentFeatures, seed.params);
+    auto fitSettings = matchSettings; fitSettings.algorithm = strategy;
+    auto evaluated = SoundMatcher::evaluateFit (*currentFeatures, seed.params, fitSettings);
     evaluated.explanation = seed.explanation + " Initial rendered similarity: " + juce::String (evaluated.similarity.total * 100.0f, 1) + "%";
     applyGeneratedRack (evaluated, -1);
     return evaluated;
@@ -950,11 +1135,18 @@ MatchResult RetroMatchSynthAudioProcessor::fitReference()
 MatchResult RetroMatchSynthAudioProcessor::refineReference (SoundMatcher::ProgressCallback progress, SoundMatcher::CancelCallback cancel)
 {
     if (! currentFeatures) return {};
-    const auto settings = matchSettings;
+    auto settings = matchSettings;
+    const int strategy = juce::jlimit (0, 5, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
+    settings.algorithm = strategy;
     const auto reference = *currentFeatures;
     const auto authored = getMainVoiceParameters();
     auto seed = lastMatch.confidence > 0.0f ? lastMatch.params : SoundMatcher::initialFit (reference).params;
-    seed.referenceWavetable = referenceWavetable;
+    auto strategyTable = referenceWavetable;
+    if (strategy == 5 && loadedReferenceFile.existsAsFile())
+        if (auto chopped = ReferenceWavetableExtractor::chop (loadedReferenceFile, analysisStartSeconds.load(), analysisEndSeconds.load()))
+            strategyTable = std::move (chopped);
+    seed.referenceWavetable = strategyTable;
+    if (strategyTable) seed.referenceWavetableMix = juce::jmax (seed.referenceWavetableMix, referenceTableWeight (reference, strategy));
     seed.userWavetable = userWavetable;
     seed.userWavetableMix = authored.userWavetableMix;
     seed.layers.fill (nullptr); seed.mainLayerGain = 1.0f;
@@ -1154,6 +1346,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
         l.add (std::make_unique<B> (prefix + "TempoSync", prefix + " Tempo Sync", false));
         l.add (std::make_unique<C> (prefix + "Division", prefix + " Division", divisions, 3));
     }
+
+    // Append-only professional resynthesis / master section. Existing automation indices stay intact.
+    l.add (std::make_unique<C> ("resynthStrategy", "Resynthesis Strategy",
+        juce::StringArray { "Balanced Hybrid", "Reference Wavetable", "Spectral Subtractive",
+                            "FM / Harmonic", "Layered Studio", "Texture / Chop" }, 0));
+    l.add (std::make_unique<C> ("resynthComplexity", "Resynthesis Complexity",
+        juce::StringArray { "Classic / legacy 1-3", "Studio / 4 instances", "Deep / 6 instances", "Maximum / 8 instances" }, 0));
+    l.add (std::make_unique<P> ("masterOutputGain", "Master Output",
+        juce::NormalisableRange<float> (-36.0f, 12.0f, 0.1f), 0.0f));
     return l;
 }
 
@@ -1163,7 +1364,9 @@ void RetroMatchSynthAudioProcessor::applyPresetParameters (const VoiceParameters
     melodyTransport.stop(); setReferenceAuditionMode (ReferenceAuditionMode::synthOnly);
     for (auto* parameter : getParameters())
         if (auto* identified = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
-            if (identified->paramID != "oversamplingQuality") parameter->setValueNotifyingHost (parameter->getDefaultValue());
+            if (identified->paramID != "oversamplingQuality" && identified->paramID != "masterOutputGain"
+                && identified->paramID != "resynthStrategy" && identified->paramID != "resynthComplexity")
+                parameter->setValueNotifyingHost (parameter->getDefaultValue());
     for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) clearLayer (i);
     for (int i = 0; i < VoiceParameters::extraLayerCount; ++i)
         if (parameters.layers[(size_t) i])
@@ -1189,10 +1392,13 @@ void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
 void RetroMatchSynthAudioProcessor::randomizePreset()
 {
     auto& random = juce::Random::getSystemRandom(); const auto seed = random.nextInt64();
-    const int family = random.nextInt ((int) factoryPresetCatalog.size());
-    auto patch = SoundMatcher::makeVariation (makeFactoryPreset (family), seed, 0.10f + random.nextFloat() * 0.15f);
-    patch.outputGainDb = -12; patch.noiseMix = juce::jmin (patch.noiseMix, 0.15f);
-    applyPresetParameters (patch, "Random / " + juce::String (factoryPresetCatalog[(size_t) family].name) + " / " + juce::String::toHexString (seed).substring (0, 6));
+    const int family = random.nextInt (10);
+    const int variation = 5 + random.nextInt (5);
+    const int presetIndex = 10 + family * 10 + variation;
+    auto patch = SoundMatcher::makeVariation (makeFactoryPreset (presetIndex), seed, 0.06f + random.nextFloat() * 0.08f);
+    patch.outputGainDb = juce::jlimit (-10.0f, -5.0f, patch.outputGainDb);
+    patch.noiseMix = juce::jmin (patch.noiseMix, 0.15f);
+    applyPresetParameters (patch, "Designed / " + juce::String (factoryPresetCatalog[(size_t) presetIndex].name) + " / " + juce::String::toHexString (seed).substring (0, 6));
 }
 
 bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
@@ -1224,7 +1430,18 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
     auto xml = juce::XmlDocument::parse (file);
     if (! xml || ! xml->hasTagName (apvts.state.getType())) return false;
     melodyTransport.stop();
+    const float preservedMaster = apvts.getRawParameterValue ("masterOutputGain")->load();
+    const float preservedStrategy = apvts.getRawParameterValue ("resynthStrategy")->load();
+    const float preservedComplexity = apvts.getRawParameterValue ("resynthComplexity")->load();
     apvts.replaceState (stateWithPost10Defaults (*xml));
+    auto restoreGlobal = [this] (const char* id, float value)
+    {
+        if (auto* parameter = apvts.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+    };
+    restoreGlobal ("masterOutputGain", preservedMaster);
+    restoreGlobal ("resynthStrategy", preservedStrategy);
+    restoreGlobal ("resynthComplexity", preservedComplexity);
     restoreLayers();
     analysisStartSeconds.store ((float) xml->getDoubleAttribute ("analysisStartSeconds", 0.0));
     analysisEndSeconds.store ((float) xml->getDoubleAttribute ("analysisEndSeconds", -1.0));
@@ -1245,6 +1462,7 @@ bool RetroMatchSynthAudioProcessor::exportPreviewWav (const juce::File& file, fl
     const double sr = getSampleRate() > 1000.0 ? getSampleRate() : 44100.0;
     const float f0 = currentFeatures && currentFeatures->fundamentalHz > 20.0f ? currentFeatures->fundamentalHz : 261.6256f;
     auto audio = OfflineRenderer::renderPatch (params, sr, juce::jlimit (0.25f, 12.0f, seconds), f0, 256);
+    audio.applyGain (juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("masterOutputGain")->load()));
     std::unique_ptr<juce::OutputStream> stream = file.createOutputStream();
     if (! stream) return false;
 

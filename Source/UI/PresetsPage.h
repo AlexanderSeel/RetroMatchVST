@@ -13,7 +13,7 @@ public:
         visual.parameters = [this] { return proc.getMainVoiceParameters(); };
         for (auto* b : { &load, &save, &open, &randomize, &audition }) addAndMakeVisible (*b);
         load.setButtonText ("LOAD SELECTED"); save.setButtonText ("SAVE CURRENT"); open.setButtonText ("OPEN PRESET");
-        randomize.setButtonText ("RANDOMIZE NEW PATCH"); audition.setButtonText ("AUDITION");
+        randomize.setButtonText ("DESIGN NEW LAYERED PATCH"); audition.setButtonText ("AUDITION");
         load.onClick = [this] { loadSelected(); };
         randomize.onClick = [this] { proc.randomizePreset(); refreshCurrent(); };
         audition.onClick = [this]

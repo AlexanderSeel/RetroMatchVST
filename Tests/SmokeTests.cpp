@@ -93,6 +93,14 @@ int main (int argc, char** argv)
         }
         if (! routes || ! modules || ! envelopes) return fail ("matcher failed to explore routes, FX and MSEG topology");
         if (factoryPresetCatalog.size() != 110) return fail ("factory catalog must contain 110 presets");
+        bool foundDeepFactoryPreset = false;
+        for (int i = 10; i < (int) factoryPresetCatalog.size(); ++i)
+        {
+            const auto designed = makeFactoryPreset (i); int activeLayers = 0;
+            for (const auto& layer : designed.layers) if (layer) ++activeLayers;
+            foundDeepFactoryPreset |= activeLayers >= 4;
+        }
+        if (! foundDeepFactoryPreset) return fail ("factory library must contain genuinely deep multi-layer patches");
         auto combined = makeFactoryPreset (0);
         combined.layers[0] = std::make_shared<VoiceParameters> (makeFactoryPreset (2));
         const auto additive = OfflineRenderer::renderPatch (combined, 22050, 0.5f, 220);

@@ -20,7 +20,7 @@ inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
     for (int family = 0; family < 10; ++family)
         for (int variation = 0; variation < 10; ++variation)
             catalog.push_back ({ names[variation] + " " + families[family], families[family],
-                families[family] + " / " + juce::String (variation >= 5 ? 2 + variation % 3 : 1) + " instances. "
+                families[family] + " / " + juce::String (variation < 3 ? 1 : juce::jmin (6, variation - 1)) + " instances. "
                 + "Voiced with tuned oscillators, envelope movement and complementary spatial effects."
                 + (variation >= 5 ? " Layer controls shape the ordered combination; edit each instance independently." : "") });
     return catalog;
@@ -45,20 +45,52 @@ inline VoiceParameters makeFactoryPreset (int index)
         if (family == 7) { p.fmOpRatio[1] = 2.1f + t * 3.3f; p.decay = 1.4f + t; p.release = 0.9f; }
         if (family == 8) { p.attack = 1.0f + t * 2; p.release = 2.5f; p.noiseMix = 0.02f + t * 0.04f; }
         p.fxModules[2] = { 9, 1, false, 0.25f + t * 0.35f, 0.5f, 0.45f, family == 0 ? 0.04f : 0.12f + t * 0.16f };
-        if (variation >= 5)
-            for (int layer = 0; layer < 1 + variation % 3; ++layer)
+        const int companionCount = variation < 3 ? 0 : juce::jlimit (1, 5, variation - 2);
+        p.mainLayerGain = companionCount > 0 ? 0.80f : 0.95f;
+        for (int layer = 0; layer < companionCount; ++layer)
+        {
+            auto companion = std::make_shared<VoiceParameters> (makeFactoryPreset ((seeds[family] + layer + 2) % 10));
+            companion->layers.fill (nullptr); companion->mainLayerGain = 1.0f; companion->outputGainDb = -7.5f;
+            const int role = layer % 5;
+            if (role == 0)
             {
-                auto companion = std::make_shared<VoiceParameters> (makeFactoryPreset ((seeds[family] + layer + 2) % 10));
-                companion->layers.fill (nullptr); companion->outputGainDb = -12;
-                companion->attack = p.attack * (1.0f + 0.4f * layer);
-                companion->cutoff = p.cutoff * (0.7f + layer * 0.35f);
-                p.layers[(size_t) layer] = companion;
-                p.layerGain[(size_t) layer] = 0.3f + t * 0.15f;
-                p.layerPan[(size_t) layer] = layer % 2 == 0 ? -0.35f : 0.35f;
-                p.layerTune[(size_t) layer] = layer == 0 ? -12.0f : layer == 1 ? 12.0f : 7.0f;
-                p.layerOperation[(size_t) layer] = family == 5 ? 3 : family == 8 ? 2 : 0;
-                p.layerAmount[(size_t) layer] = family == 5 ? 0.35f : 0.75f;
+                companion->attack = juce::jmax (0.002f, p.attack * 0.75f); companion->cutoff = p.cutoff * 0.78f;
+                companion->supersawMix = juce::jmax (companion->supersawMix, family == 3 || family == 9 ? 0.28f : 0.08f);
             }
+            else if (role == 1)
+            {
+                companion->filterType = 1; companion->cutoff = juce::jlimit (2200.0f, 9800.0f, p.cutoff * 0.75f + 1800.0f);
+                companion->fmMix = juce::jmax (companion->fmMix, 0.18f); companion->stereoWidth = 1.45f; companion->reverbMix = juce::jmax (0.12f, companion->reverbMix);
+            }
+            else if (role == 2)
+            {
+                companion->osc1Wave = 0; companion->osc1Mix = 0.55f; companion->osc2Mix = 0.0f; companion->subMix = 0.28f;
+                companion->fmMix = companion->wavetableMix = companion->supersawMix = 0.0f; companion->cutoff = juce::jlimit (180.0f, 1600.0f, p.cutoff * 0.24f);
+                companion->chorusMix = companion->delayMix = companion->reverbMix = 0.0f; companion->stereoWidth = 0.85f;
+            }
+            else if (role == 3)
+            {
+                companion->wavetableMix = juce::jmax (0.32f, companion->wavetableMix); companion->supersawMix = juce::jmax (0.20f, companion->supersawMix);
+                companion->extraLfoRate[0] = 0.09f + t * 0.18f; companion->moduleModSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::wavetablePosition, 0.34f };
+                companion->chorusMix = juce::jmax (0.10f, companion->chorusMix);
+            }
+            else
+            {
+                companion->fmMix = juce::jmax (0.36f, companion->fmMix); companion->fmAlgorithm = (family + variation) % 6;
+                companion->fmOpRatio[1] = 2.0f + t * 2.0f; companion->fmOpRatio[2] = 3.0f + t; companion->reverbMix = juce::jmax (0.10f, companion->reverbMix);
+            }
+            p.layers[(size_t) layer] = companion;
+            const float gains[] { 0.27f, 0.17f, 0.22f, 0.18f, 0.14f };
+            const float pans[] { -0.16f, 0.34f, 0.0f, -0.32f, 0.28f };
+            const float tunes[] { 0.0f, 12.0f, -12.0f, 0.0f, 7.0f };
+            p.layerGain[(size_t) layer] = gains[role];
+            p.layerPan[(size_t) layer] = pans[role];
+            p.layerTune[(size_t) layer] = tunes[role];
+            p.layerOperation[(size_t) layer] = 0;
+            p.layerAmount[(size_t) layer] = 0.80f;
+        }
+        const float sourceDensity = p.osc1Mix + p.osc2Mix + p.subMix + p.fmMix + p.wavetableMix + p.supersawMix;
+        p.outputGainDb = juce::jlimit (-10.5f, -5.0f, -6.0f - companionCount * 0.55f - juce::jmax (0.0f, sourceDensity - 1.2f) * 1.1f);
         return p;
     }
     VoiceParameters p; p.osc2Mix = 0; p.outputGainDb = -9; p.release = 0.2f;

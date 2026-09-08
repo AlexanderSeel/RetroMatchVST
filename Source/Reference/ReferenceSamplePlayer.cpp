@@ -1,24 +1,74 @@
 #include "ReferenceSamplePlayer.h"
+#include <cmath>
+
+namespace
+{
+bool readProcessedRegion (const juce::File& source, double startSeconds, double endSeconds,
+                          bool normalize, float fadeInSeconds, float fadeOutSeconds,
+                          juce::AudioBuffer<float>& audio, double& sampleRate)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (source));
+    if (reader == nullptr || reader->sampleRate <= 0.0 || reader->lengthInSamples <= 0) return false;
+
+    const double duration = (double) reader->lengthInSamples / reader->sampleRate;
+    const double start = juce::jlimit (0.0, juce::jmax (0.0, duration - 1.0 / reader->sampleRate), startSeconds);
+    const double end = juce::jlimit (start + 1.0 / reader->sampleRate, duration,
+                                     endSeconds > start ? endSeconds : duration);
+    const int64_t firstSample = (int64_t) std::llround (start * reader->sampleRate);
+    const int64_t requested = (int64_t) std::llround ((end - start) * reader->sampleRate);
+    const int64_t available = juce::jmax<int64_t> (0, reader->lengthInSamples - firstSample);
+    const int64_t count64 = juce::jmin (requested, available);
+    if (count64 <= 0 || count64 > (int64_t) std::numeric_limits<int>::max()) return false;
+
+    const int count = (int) count64;
+    const int channels = juce::jlimit (1, 2, (int) reader->numChannels);
+    audio.setSize (channels, count, false, false, true);
+    if (! reader->read (&audio, 0, count, firstSample, true, true)) return false;
+    sampleRate = reader->sampleRate;
+
+    float gain = 1.0f;
+    if (normalize)
+    {
+        float peak = 0.0f;
+        for (int ch = 0; ch < channels; ++ch) peak = juce::jmax (peak, audio.getMagnitude (ch, 0, count));
+        if (peak > 1.0e-7f) gain = juce::Decibels::decibelsToGain (-1.0f) / peak;
+    }
+    if (gain != 1.0f) audio.applyGain (gain);
+
+    const int fadeInSamples = juce::jlimit (0, count / 2, (int) std::llround (juce::jmax (0.0f, fadeInSeconds) * sampleRate));
+    const int fadeOutSamples = juce::jlimit (0, count / 2, (int) std::llround (juce::jmax (0.0f, fadeOutSeconds) * sampleRate));
+    for (int ch = 0; ch < channels; ++ch)
+    {
+        if (fadeInSamples > 0) audio.applyGainRamp (ch, 0, fadeInSamples, 0.0f, 1.0f);
+        if (fadeOutSamples > 0) audio.applyGainRamp (ch, count - fadeOutSamples, fadeOutSamples, 1.0f, 0.0f);
+    }
+    return true;
+}
+}
 
 ReferenceSamplePlayer::ReferenceSamplePlayer()
 {
     formats.registerBasicFormats();
-    for (int i = 0; i < 8; ++i)
-        synth.addVoice (new juce::SamplerVoice());
+    for (int i = 0; i < 8; ++i) synth.addVoice (new juce::SamplerVoice());
+    previewSynth.addVoice (new juce::SamplerVoice());
     synth.setCurrentPlaybackSampleRate (playbackSampleRate);
+    previewSynth.setCurrentPlaybackSampleRate (playbackSampleRate);
 }
 
 void ReferenceSamplePlayer::prepare (double sampleRate)
 {
-    if (sampleRate > 1000.0)
-        playbackSampleRate = sampleRate;
+    if (sampleRate > 1000.0) playbackSampleRate = sampleRate;
     synth.setCurrentPlaybackSampleRate (playbackSampleRate);
+    previewSynth.setCurrentPlaybackSampleRate (playbackSampleRate);
 }
 
 bool ReferenceSamplePlayer::load (const juce::File& file, int rootMidiNote)
 {
     sourceFile = file;
     rootNote.store (juce::jlimit (0, 127, rootMidiNote));
+    stopPreview();
     return rebuildSound();
 }
 
@@ -27,12 +77,14 @@ bool ReferenceSamplePlayer::setRootMidiNote (int rootMidiNote)
     rootNote.store (juce::jlimit (0, 127, rootMidiNote));
     if (! sourceFile.existsAsFile()) return false;
     allNotesOff();
+    stopPreview();
     return rebuildSound();
 }
 
 void ReferenceSamplePlayer::clear()
 {
     allNotesOff();
+    stopPreview();
     synth.clearSounds();
     sourceFile = juce::File();
     loaded.store (false);
@@ -50,11 +102,9 @@ bool ReferenceSamplePlayer::rebuildSound()
 
     juce::BigInteger notes;
     notes.setRange (0, 128, true);
-
     auto sound = std::make_unique<juce::SamplerSound> (
         sourceFile.getFileNameWithoutExtension(), *reader, notes, rootNote.load(),
         0.002, 0.06, 12.0);
-
     synth.clearSounds();
     synth.addSound (sound.release());
     synth.setCurrentPlaybackSampleRate (playbackSampleRate);
@@ -67,8 +117,17 @@ void ReferenceSamplePlayer::render (juce::AudioBuffer<float>& audio,
                                     int startSample,
                                     int numSamples)
 {
-    if (! loaded.load() || numSamples <= 0) return;
-    synth.renderNextBlock (audio, midi, startSample, numSamples);
+    if (numSamples <= 0) return;
+    if (loaded.load()) synth.renderNextBlock (audio, midi, startSample, numSamples);
+    if (previewing.load())
+    {
+        juce::MidiBuffer noMidi;
+        previewSynth.renderNextBlock (audio, noMidi, startSample, numSamples);
+        bool anyActive = false;
+        for (int i = 0; i < previewSynth.getNumVoices(); ++i)
+            if (auto* voice = previewSynth.getVoice (i); voice != nullptr && voice->isVoiceActive()) { anyActive = true; break; }
+        previewing.store (anyActive);
+    }
 }
 
 void ReferenceSamplePlayer::noteOnFromUi (int midiNote, float velocity)
@@ -85,4 +144,60 @@ void ReferenceSamplePlayer::noteOffFromUi (int midiNote, float velocity)
 void ReferenceSamplePlayer::allNotesOff()
 {
     synth.allNotesOff (0, true);
+}
+
+bool ReferenceSamplePlayer::writeProcessedRegion (const juce::File& source, const juce::File& destination,
+                                                  double startSeconds, double endSeconds, bool normalize,
+                                                  float fadeInSeconds, float fadeOutSeconds)
+{
+    juce::AudioBuffer<float> audio;
+    double sr = 0.0;
+    if (! readProcessedRegion (source, startSeconds, endSeconds, normalize, fadeInSeconds, fadeOutSeconds, audio, sr)) return false;
+
+    juce::TemporaryFile temp (destination);
+    std::unique_ptr<juce::OutputStream> stream = temp.getFile().createOutputStream();
+    if (! stream) return false;
+    juce::WavAudioFormat wav;
+    const auto options = juce::AudioFormatWriter::Options {}
+                             .withSampleRate (sr)
+                             .withNumChannels (audio.getNumChannels())
+                             .withBitsPerSample (24);
+    auto writer = wav.createWriterFor (stream, options);
+    if (! writer || ! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples())) return false;
+    writer.reset();
+    return temp.overwriteTargetFileWithTemporary();
+}
+
+bool ReferenceSamplePlayer::previewRegion (const juce::File& file, int rootMidiNote,
+                                           double startSeconds, double endSeconds, bool normalize,
+                                           float fadeInSeconds, float fadeOutSeconds)
+{
+    stopPreview();
+    allNotesOff();
+    const double previewEnd = juce::jmin (endSeconds, startSeconds + 180.0);
+    auto temp = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                    .getNonexistentChildFile ("RetroMatch-reference-preview", ".wav", false);
+    if (! writeProcessedRegion (file, temp, startSeconds, previewEnd, normalize, fadeInSeconds, fadeOutSeconds)) return false;
+
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (temp));
+    if (reader == nullptr) { temp.deleteFile(); return false; }
+    juce::BigInteger notes;
+    notes.setRange (0, 128, true);
+    const double length = juce::jmin (180.0, juce::jmax (0.01, previewEnd - startSeconds));
+    auto sound = std::make_unique<juce::SamplerSound> (
+        "Reference preview", *reader, notes, juce::jlimit (0, 127, rootMidiNote), 0.001, 0.03, length + 0.5);
+    previewSynth.clearSounds();
+    previewSynth.addSound (sound.release());
+    previewSynth.setCurrentPlaybackSampleRate (playbackSampleRate);
+    temp.deleteFile();
+    previewSynth.noteOn (1, juce::jlimit (0, 127, rootMidiNote), 1.0f);
+    previewing.store (true);
+    return true;
+}
+
+void ReferenceSamplePlayer::stopPreview()
+{
+    previewSynth.allNotesOff (0, false);
+    previewSynth.clearSounds();
+    previewing.store (false);
 }

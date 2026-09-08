@@ -61,6 +61,9 @@ public:
     float getReferenceAnalysisDuration() const noexcept { return analysisSourceDuration.load(); }
     float getAnalysisStartSeconds() const noexcept { return analysisStartSeconds.load(); }
     float getAnalysisEndSeconds() const noexcept { return analysisEndSeconds.load(); }
+    float getMidiAnalysisStartSeconds() const noexcept;
+    float getMidiAnalysisEndSeconds() const noexcept;
+    void setMidiAnalysisRegion (float startSeconds, float endSeconds);
     float getEffectiveBpm() const noexcept { return effectiveBpm.load (std::memory_order_relaxed); }
     bool setReferenceAnalysisRegion (float startSeconds, float endSeconds);
     MelodyClip getMelodyClip() const { return MelodyClip::fromState (apvts.state.getChildWithName ("MELODY")); }
@@ -120,6 +123,10 @@ public:
     }
     void setReferenceAuditionLevel (float level) noexcept { referenceAuditionLevel.store (juce::jlimit (0.0f, 1.0f, level)); }
     float getReferenceAuditionLevel() const noexcept { return referenceAuditionLevel.load(); }
+    bool previewReferenceRegion (float startSeconds, float endSeconds, bool normalize, float fadeInSeconds, float fadeOutSeconds);
+    void stopReferencePreview();
+    bool exportReferenceSelection (const juce::File& destination, float startSeconds, float endSeconds,
+                                   bool normalize, float fadeInSeconds, float fadeOutSeconds);
 
     float getOutputPeakLeft() const noexcept { return outputPeakLeft.load (std::memory_order_relaxed); }
     float getOutputPeakRight() const noexcept { return outputPeakRight.load (std::memory_order_relaxed); }
@@ -175,6 +182,7 @@ private:
     std::atomic<float> analysisStartSeconds { 0.0f };
     std::atomic<float> analysisEndSeconds { -1.0f };
     std::atomic<float> analysisSourceDuration { 0.0f };
+    std::atomic<bool> referencePitchLocked { false };
     std::atomic<float> effectiveBpm { 120.0f };
     mutable juce::CriticalSection midiMappingLock;
     std::vector<MidiMapping> midiMappings;

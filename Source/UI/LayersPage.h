@@ -38,11 +38,19 @@ class LayersPage final : public juce::Component, private juce::Timer
 public:
     explicit LayersPage (RetroMatchSynthAudioProcessor& p) : proc (p)
     {
-        addAndMakeVisible (hint); hint.setText ("INSTANCE RACK / Refine and candidate selection own the generated rack: old loaded/edited instances are removed first. Layered resynthesis can combine 1-3 complementary candidates; manual instances can still be added up to 8 total. EDIT jumps the selected instance into the normal synth tabs.", juce::dontSendNotification);
+        addAndMakeVisible (hint); hint.setText ("INSTANCE RACK / Generated resynthesis can stay classic or build a 4, 6 or 8-instance studio stack. Roles are voiced as body, air, foundation, motion, harmonic colour, width and texture instead of cloning the same patch. EDIT jumps any instance into the normal synth tabs.", juce::dontSendNotification);
         hint.setJustificationType (juce::Justification::topLeft);
         addAndMakeVisible (resynthLabel); resynthLabel.setText ("RESYNTH INSTANCES", juce::dontSendNotification); resynthLabel.setJustificationType (juce::Justification::centredRight);
         addAndMakeVisible (resynthInstances); resynthInstances.addItemList ({ "1 / SINGLE", "2 / LAYERED", "3 / DEEP LAYERED" }, 1);
         resynthAttachment = std::make_unique<ComboAttachment> (proc.apvts, "resynthInstances", resynthInstances);
+        addAndMakeVisible (strategyLabel); strategyLabel.setText ("RESYNTH METHOD", juce::dontSendNotification); strategyLabel.setJustificationType (juce::Justification::centredRight);
+        addAndMakeVisible (strategy); strategy.addItemList ({ "BALANCED HYBRID", "REFERENCE WAVETABLE", "SPECTRAL SUBTRACTIVE", "FM / HARMONIC", "LAYERED STUDIO", "TEXTURE / CHOP" }, 1);
+        strategyAttachment = std::make_unique<ComboAttachment> (proc.apvts, "resynthStrategy", strategy);
+        strategy.setTooltip ("Changes the search topology. Reference Wavetable and Texture/Chop deliberately lean on cycles extracted from the selected sample region.");
+        addAndMakeVisible (complexityLabel); complexityLabel.setText ("STACK DEPTH", juce::dontSendNotification); complexityLabel.setJustificationType (juce::Justification::centredRight);
+        addAndMakeVisible (complexity); complexity.addItemList ({ "CLASSIC / 1-3", "STUDIO / 4", "DEEP / 6", "MAXIMUM / 8" }, 1);
+        complexityAttachment = std::make_unique<ComboAttachment> (proc.apvts, "resynthComplexity", complexity);
+        complexity.setTooltip ("Studio and deeper modes add complementary sound-design roles at conservative levels instead of simply duplicating a candidate.");
         addAndMakeVisible (editMain); editMain.setButtonText ("EDIT INSTANCE 1 / MAIN"); editMain.onClick = [this] { editInstance (-1); };
         addAndMakeVisible (add); add.setButtonText ("+ ADD CURRENT SYNTH INSTANCE");
         add.onClick = [this] { for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) if (! proc.hasLayer (i)) { proc.captureLayer (i); break; } refresh(); };
@@ -84,6 +92,7 @@ public:
     {
         auto r = getLocalBounds().reduced (14); hint.setBounds (r.removeFromTop (58));
         auto resynth = r.removeFromTop (30); resynthLabel.setBounds (resynth.removeFromLeft (150)); resynthInstances.setBounds (resynth.removeFromLeft (220).reduced (2));
+        auto method = r.removeFromTop (30); strategyLabel.setBounds (method.removeFromLeft (150)); strategy.setBounds (method.removeFromLeft (260).reduced (2)); complexityLabel.setBounds (method.removeFromLeft (110)); complexity.setBounds (method.reduced (2));
         editMain.setBounds (r.removeFromTop (30).reduced (2));
         auto controls = r.removeFromTop (30); add.setBounds (controls.removeFromLeft (controls.getWidth() * 2 / 3).reduced (2)); mainGain.setBounds (controls.reduced (2));
         mainVisual.setBounds (r.removeFromTop (65)); r.removeFromTop (6); viewport.setBounds (r); layoutRows();
@@ -101,9 +110,10 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
         std::array<std::unique_ptr<SliderAttachment>, 4> attachments;
     };
-    juce::Label hint, resynthLabel; juce::ComboBox resynthInstances; juce::TextButton add, editMain; juce::Slider mainGain; SynthInstanceVisual mainVisual;
+    juce::Label hint, resynthLabel, strategyLabel, complexityLabel;
+    juce::ComboBox resynthInstances, strategy, complexity; juce::TextButton add, editMain; juce::Slider mainGain; SynthInstanceVisual mainVisual;
     std::unique_ptr<SliderAttachment> mainAttachment;
-    std::unique_ptr<ComboAttachment> resynthAttachment;
+    std::unique_ptr<ComboAttachment> resynthAttachment, strategyAttachment, complexityAttachment;
     juce::Component content; juce::Viewport viewport;
     std::array<Row, VoiceParameters::extraLayerCount> rows;
     void editInstance (int index)

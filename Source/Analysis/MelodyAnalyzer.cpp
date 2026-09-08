@@ -65,7 +65,7 @@ MelodyClip MelodyClip::fromState (const juce::ValueTree& state)
     auto bounded = [] (double value, double lo, double hi, double fallback)
     { return std::isfinite (value) ? juce::jlimit (lo, hi, value) : fallback; };
     clip.bpm = bounded ((double) state.getProperty ("bpm", 120.0), 30.0, 300.0, 120.0);
-    clip.duration = bounded ((double) state.getProperty ("duration"), 0.0, 60.0, 0.0);
+    clip.duration = bounded ((double) state.getProperty ("duration"), 0.0, MelodyClip::maxDurationSeconds, 0.0);
     clip.sourceName = state.getProperty ("source").toString().substring (0, 256);
     clip.layered = state.getProperty ("layered"); clip.truncated = state.getProperty ("truncated");
     for (const auto& n : state)
@@ -73,8 +73,9 @@ MelodyClip MelodyClip::fromState (const juce::ValueTree& state)
         if (! n.hasType ("NOTE") || (int) clip.notes.size() >= maxNotes) continue;
         TranscribedNote note;
         note.pitch = juce::jlimit (0, 127, (int) n.getProperty ("pitch", 60));
-        note.start = bounded ((double) n.getProperty ("start"), 0.0, 59.99, 0.0);
-        note.duration = bounded ((double) n.getProperty ("duration"), 0.01, 60.0 - note.start, 0.1);
+        note.start = bounded ((double) n.getProperty ("start"), 0.0, MelodyClip::maxDurationSeconds, 0.0);
+        const double remaining = juce::jmax (0.01, MelodyClip::maxDurationSeconds - note.start);
+        note.duration = bounded ((double) n.getProperty ("duration"), 0.01, remaining, 0.1);
         note.velocity = (float) bounded ((double) n.getProperty ("velocity"), 0.05, 1.0, 0.8);
         note.confidence = (float) bounded ((double) n.getProperty ("confidence"), 0.0, 1.0, 0.0);
         clip.notes.push_back (note); clip.duration = std::max (clip.duration, note.start + note.duration);
@@ -93,16 +94,58 @@ MelodyClip MelodyAnalyzer::analyzeFile (const juce::File& file, bool layered, do
 {
     juce::AudioFormatManager formats; formats.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
-    if (! reader || reader->sampleRate <= 0.0) return {};
+    MelodyClip clip;
+    clip.layered = layered;
+    clip.bpm = std::isfinite (bpm) ? juce::jlimit (30.0, 300.0, bpm) : 120.0;
+    clip.sourceName = file.getFileName();
+    if (! reader || reader->sampleRate <= 0.0) return clip;
+
     const double fileDuration = (double) reader->lengthInSamples / reader->sampleRate;
     const double start = juce::jlimit (0.0, fileDuration, startSeconds);
-    const double end = endSeconds > start ? juce::jlimit (start + 1.0 / reader->sampleRate, fileDuration, endSeconds) : fileDuration;
-    const int64 startSample = (int64) std::llround (start * reader->sampleRate);
-    const int length = (int) std::min ((double) reader->lengthInSamples - startSample, reader->sampleRate * 60.0);
-    juce::AudioBuffer<float> audio (juce::jlimit (1, 2, (int) reader->numChannels), length);
-    if (! reader->read (&audio, 0, length, startSample, true, true)) return {};
-    auto clip = analyzeBuffer (audio, reader->sampleRate, layered, bpm, cancel, progress);
-    clip.sourceName = file.getFileName(); clip.truncated = clip.truncated || (end - start) > 60.0;
+    const double requestedEnd = endSeconds > start ? juce::jlimit (start + 1.0 / reader->sampleRate, fileDuration, endSeconds) : fileDuration;
+    const double end = juce::jmin (requestedEnd, start + MelodyClip::maxDurationSeconds);
+    const double total = juce::jmax (0.0, end - start);
+    clip.duration = total;
+    clip.truncated = requestedEnd > end;
+    if (total <= 0.0) return clip;
+
+    constexpr double chunkSeconds = 45.0;
+    double cursor = start;
+    while (cursor < end - 0.5 / reader->sampleRate)
+    {
+        if (cancel && cancel()) return {};
+        const double chunkEnd = juce::jmin (end, cursor + chunkSeconds);
+        const int64_t firstSample = (int64_t) std::llround (cursor * reader->sampleRate);
+        const int64_t wanted = (int64_t) std::llround ((chunkEnd - cursor) * reader->sampleRate);
+        const int64_t available = juce::jmax<int64_t> (0, reader->lengthInSamples - firstSample);
+        const int length = (int) juce::jmin<int64_t> (wanted, available);
+        if (length <= 0) break;
+
+        juce::AudioBuffer<float> audio (juce::jlimit (1, 2, (int) reader->numChannels), length);
+        if (! reader->read (&audio, 0, length, firstSample, true, true)) break;
+        const double baseProgress = (cursor - start) / total;
+        const double progressSpan = (chunkEnd - cursor) / total;
+        auto chunkProgress = [progress, baseProgress, progressSpan] (float value)
+        {
+            if (progress) progress ((float) juce::jlimit (0.0, 1.0, baseProgress + progressSpan * juce::jlimit (0.0f, 1.0f, value)));
+        };
+        auto part = analyzeBuffer (audio, reader->sampleRate, layered, clip.bpm, cancel, chunkProgress);
+        if (cancel && cancel()) return {};
+
+        const double offset = cursor - start;
+        for (auto note : part.notes)
+        {
+            if ((int) clip.notes.size() >= MelodyClip::maxNotes) { clip.truncated = true; break; }
+            note.start += offset;
+            if (note.start < clip.duration) clip.notes.push_back (note);
+        }
+        clip.truncated = clip.truncated || part.truncated;
+        if ((int) clip.notes.size() >= MelodyClip::maxNotes) break;
+        cursor = chunkEnd;
+    }
+
+    std::sort (clip.notes.begin(), clip.notes.end(), [] (const auto& a, const auto& b) { return a.start < b.start; });
+    if (progress) progress (1.0f);
     return clip;
 }
 

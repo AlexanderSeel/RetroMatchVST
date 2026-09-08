@@ -149,6 +149,9 @@ private:
     juce::TextButton savePatch { "SAVE PATCH" }, loadPatch { "LOAD PATCH" }, exportPreview { "EXPORT WAV" };
     juce::TextButton keyboardToggle { "KEYS" };
     juce::TextButton lightSwitch { "LED: MINT" };
+    juce::Slider masterOutput;
+    juce::Label masterOutputLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterOutputAttachment;
     int displayedPalette = -1;
     std::unique_ptr<juce::Drawable> logo;
     juce::Rectangle<int> logoBounds;
@@ -157,7 +160,7 @@ private:
     void updateLightPalette();
 
     // Persistent reference -> match -> audition workspace.
-    juce::TextButton load { "LOAD REFERENCE" }, quick { "QUICK x3" }, refine { "REFINE x3" }, aiVariants { "AI x3" };
+    juce::TextButton load { "LOAD REFERENCE" }, quick { "QUICK x3" }, refine { "REFINE x3" }, aiVariants { "AI x3" }, compareMatch { "COMPARE" };
     CandidateButton candidateA { "A", "NATURAL" }, candidateB { "B", "FM / HARMONIC" }, candidateC { "C", "WT / TEXTURE" };
     juce::Slider candidateMorph;
     juce::Label candidateMorphLabel;

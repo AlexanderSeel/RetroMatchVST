@@ -2,6 +2,8 @@
 #include "MelodyPage.h"
 #include "SignalLabPage.h"
 #include "LayersPage.h"
+#include "ReferenceEditorDialog.h"
+#include "MatchCompareDialog.h"
 #include <BinaryData.h>
 #include <algorithm>
 #include <cmath>
@@ -424,6 +426,18 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     };
     for (auto* button : { &savePatch, &loadPatch, &exportPreview, &keyboardToggle }) addAndMakeVisible (*button);
 
+    masterOutputLabel.setText ("MASTER", juce::dontSendNotification);
+    masterOutputLabel.setJustificationType (juce::Justification::centred);
+    masterOutputLabel.setColour (juce::Label::textColourId, goldColour (*this));
+    masterOutputLabel.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+    masterOutput.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    masterOutput.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 18);
+    masterOutput.setTextValueSuffix (" dB");
+    masterOutput.setNumDecimalPlacesToDisplay (1);
+    masterOutput.setTooltip ("Global master output trim. This is independent from each patch OUTPUT and stays unchanged while browsing presets.");
+    masterOutputAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "masterOutputGain", masterOutput);
+    addAndMakeVisible (masterOutputLabel); addAndMakeVisible (masterOutput);
+
     load.onClick = [this] { chooseFile(); };
     quick.onClick = [this] { startVariantSearch (WorkMode::quick); };
     refine.onClick = [this] { startVariantSearch (WorkMode::refine); };
@@ -434,6 +448,18 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     candidateB.onClick = [this] { selectCandidate (1); };
     candidateC.onClick = [this] { selectCandidate (2); };
     for (auto* button : { &candidateA, &candidateB, &candidateC }) addAndMakeVisible (*button);
+    addAndMakeVisible (compareMatch);
+    compareMatch.setTooltip ("Open a large waveform, spectral and metric comparison with A/B audition controls.");
+    compareMatch.onClick = [this]
+    {
+        if (! proc.currentFeatures || ! proc.currentCandidateFeatures) return;
+        auto* content = new MatchCompareDialog (proc); content->setSize (1040, 700);
+        juce::DialogWindow::LaunchOptions options; options.content.setOwned (content);
+        options.dialogTitle = "RM-01  /  REFERENCE ↔ RESYNTH COMPARE";
+        options.dialogBackgroundColour = juce::Colour (0xff06090a);
+        options.escapeKeyTriggersCloseButton = true; options.useNativeTitleBar = true; options.resizable = true; options.componentToCentreAround = this;
+        if (auto* window = options.launchAsync()) window->setResizeLimits (780, 520, 1600, 1050);
+    };
 
     candidateMorphLabel.setText ("A  <  MORPH  >  C", juce::dontSendNotification);
     candidateMorphLabel.setColour (juce::Label::textColourId, goldColour (*this));
@@ -651,6 +677,25 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     updateAIControlsFromSettings();
 
     addAndMakeVisible (referenceRegion);
+    referenceRegion.onOpenEditor = [this]
+    {
+        if (! proc.getReferenceFile().existsAsFile())
+        {
+            status.setText ("Load a reference before opening the large editor.", juce::dontSendNotification);
+            return;
+        }
+        auto* content = new ReferenceEditorDialog (proc);
+        content->setSize (1120, 680);
+        juce::DialogWindow::LaunchOptions options;
+        options.content.setOwned (content);
+        options.dialogTitle = "RM-01  /  LARGE REFERENCE EDITOR";
+        options.dialogBackgroundColour = juce::Colour (0xff070a0c);
+        options.escapeKeyTriggersCloseButton = true;
+        options.useNativeTitleBar = true;
+        options.resizable = true;
+        options.componentToCentreAround = this;
+        if (auto* window = options.launchAsync()) window->setResizeLimits (820, 520, 1600, 1000);
+    };
     referenceRegion.onRegion = [this] (double first, double last, bool commit)
     {
         regionStart.setValue (first, juce::dontSendNotification); regionEnd.setValue (last, juce::dontSendNotification);
@@ -1116,7 +1161,10 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     logoBounds = header.removeFromLeft (62).reduced (3);
     title.setBounds (header.removeFromLeft (230));
     subtitle.setBounds (header.removeFromLeft (juce::jmax (120, header.getWidth() - 490)));
-    const int actionW = juce::jmax (78, header.getWidth() / 5);
+    auto masterArea = header.removeFromLeft (100);
+    masterOutputLabel.setBounds (masterArea.removeFromTop (15));
+    masterOutput.setBounds (masterArea.reduced (2, 1));
+    const int actionW = juce::jmax (72, header.getWidth() / 5);
     lightSwitch.setBounds (header.removeFromRight (actionW).reduced (3, 9));
     keyboardToggle.setBounds (header.removeFromRight (actionW).reduced (3, 9));
     exportPreview.setBounds (header.removeFromRight (actionW).reduced (3, 9));
@@ -1201,10 +1249,11 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     }
 
     auto actionRow = w.removeFromTop (32);
-    const int buttonW = actionRow.getWidth() / 3;
+    const int buttonW = actionRow.getWidth() / 4;
     quick.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     refine.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    aiVariants.setBounds (actionRow.reduced (2, 0));
+    aiVariants.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
+    compareMatch.setBounds (actionRow.reduced (2, 0));
     w.removeFromTop (5);
 
     auto footer = w.removeFromBottom (76);
@@ -1506,6 +1555,22 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessorEditor::createLocalVaria
     seeds[2].referenceWavetableMix = proc.referenceWavetable ? juce::jmax (0.16f, base.referenceWavetableMix * 0.7f) : 0.0f;
 
     auto settings = proc.matchSettings;
+    const int strategy = juce::jlimit (0, 5, (int) paramValue (proc, "resynthStrategy", 0));
+    settings.algorithm = strategy;
+    auto strategyTable = proc.referenceWavetable;
+    if (strategy == 5 && proc.getReferenceFile().existsAsFile())
+        if (auto chopped = ReferenceWavetableExtractor::chop (proc.getReferenceFile(), proc.getAnalysisStartSeconds(), proc.getAnalysisEndSeconds()))
+            strategyTable = std::move (chopped);
+    for (auto& seed : seeds)
+    {
+        seed.referenceWavetable = strategyTable;
+        if (strategyTable)
+        {
+            float target = 0.24f + reference.pitchConfidence * 0.16f + reference.harmonicity * 0.12f;
+            if (strategy == 1) target = 0.76f; else if (strategy == 2) target = 0.05f; else if (strategy == 3) target = 0.14f; else if (strategy == 4) target = 0.42f; else if (strategy == 5) target = 0.68f;
+            seed.referenceWavetableMix = juce::jmax (seed.referenceWavetableMix, juce::jlimit (0.0f, 0.90f, target));
+        }
+    }
     if (! refined)
     {
         settings.iterations = juce::jmin (24, juce::jmax (14, settings.iterations / 7));
@@ -1785,6 +1850,7 @@ void RetroMatchSynthAudioProcessorEditor::timerCallback()
         regionStart.setValue (start, juce::dontSendNotification); regionEnd.setValue (end, juce::dontSendNotification);
         shownRegionStart = start; shownRegionEnd = end;
     }
+    compareMatch.setEnabled (proc.currentFeatures.has_value() && proc.currentCandidateFeatures.has_value());
     const bool canSelect = proc.hasReferenceSample() && ! (worker && worker->isThreadRunning());
     referenceRegion.setEnabled (canSelect); referenceRegion.update (proc.getReferenceFile(), regionStart.getValue(), regionEnd.getValue());
     regionStart.setEnabled (canSelect); regionEnd.setEnabled (canSelect);

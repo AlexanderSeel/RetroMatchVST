@@ -12,6 +12,9 @@ struct MatchSettings
     int populationSize = 6;
     double renderSampleRate = 44100.0;
     float maxRenderSeconds = 12.0f;
+    // 0 balanced hybrid, 1 reference wavetable, 2 subtractive/spectral,
+    // 3 FM/harmonic, 4 layered studio, 5 texture/chopped wavetable.
+    int algorithm = 0;
 
     bool lockPitch = false;
     bool lockOscillators = false;

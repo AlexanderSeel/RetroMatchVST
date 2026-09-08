@@ -114,7 +114,7 @@ required_tokens = {
     'virtual keyboard': ['MidiKeyboardComponent', 'handleNoteOn', 'handleNoteOff', 'KEYS'],
     'reference audition UI': ['BASE NOTE', 'DETECTED', 'REF SOLO', 'auditionReference', 'auditionMix', 'referenceLevel'],
     'reference audition engine': ['ReferenceAuditionMode', 'referencePlayer.render', 'setReferenceBaseMidiNote', 'referenceAuditionLevel'],
-    'reference pitch correction': ['expectedFundamentalHz', 'estimateConfidenceAtFundamental', 'analyzeFile (loadedReferenceFile, expectedHz)'],
+    'reference pitch correction': ['expectedFundamentalHz', 'estimateConfidenceAtFundamental', 'analyzeFile (loadedReferenceFile, expectedHz, start, end)'],
     'reference sample transposition': ['SamplerSound', 'rootNote.load()', 'noteOnFromUi', 'renderNextBlock'],
     'AI provider settings': ['OpenAI', 'Google Gemini', 'OpenAI-compatible / Azure', 'GitHub Copilot bridge', 'SESSION API KEY'],
     'AI local scoring': ['buildPrompt', 'postJson', 'SoundMatcher::evaluateFit', 'generateVariants'],
@@ -228,7 +228,7 @@ print(' - nonlinear 1x/2x/4x oversampling and fixed-latency plumbing present')
 print(' - append-only host automation order remains protected')
 print(' - six-point MSEG engine, modulation graph and beat sync present')
 print(' - arbitrary user wavetable import, embedded state and separate oscillator layer present')
-print(' - layered resynthesis replaces stale racks and supports up to three generated instances')
+print(' - layered resynthesis replaces stale racks and supports up to eight generated instances')
 print(' - manual/DAW clock and 1/32..4/1 divisions are wired through synth and modular FX')
 print(' - whole-synth interactive signal map is present')
 print(' - dedicated MSEG and WAVETABLE editor tabs present')

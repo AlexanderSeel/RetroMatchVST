@@ -46,6 +46,77 @@ float mutateLog (float value, float minValue, float maxValue, float amount, juce
     const float lo = std::log (minValue), hi = std::log (maxValue);
     return std::exp (juce::jlimit (lo, hi, lv + gaussian (r) * (hi - lo) * amount));
 }
+
+void applyAlgorithmProfile (VoiceParameters& p, int algorithm, const SoundFeatures& reference)
+{
+    algorithm = juce::jlimit (0, 5, algorithm);
+    const bool hasReferenceTable = p.referenceWavetable && p.referenceWavetable->valid;
+    const float motion = juce::jlimit (0.0f, 1.0f, reference.spectralMotion * 2.5f);
+
+    switch (algorithm)
+    {
+        case 1: // Reference wavetable / closest cycle fingerprint.
+            if (hasReferenceTable)
+            {
+                p.referenceWavetableMix = juce::jmax (p.referenceWavetableMix, 0.62f + 0.22f * reference.pitchConfidence);
+                p.osc1Mix *= 0.42f; p.osc2Mix *= 0.35f; p.fmMix *= 0.55f;
+                p.wavetableMix *= 0.35f;
+                p.wavetablePosition = juce::jlimit (0.05f, 0.95f, 0.18f + reference.highEnergyRatio * 1.5f + motion * 0.25f);
+                if (reference.spectralMotion > 0.06f)
+                    p.modGraphSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::wavetablePosition,
+                                           juce::jlimit (0.08f, 0.42f, reference.spectralMotion * 1.8f) };
+            }
+            p.cutoff = juce::jmax (p.cutoff, juce::jmin (19000.0f, reference.spectralRolloffHz * 1.25f));
+            break;
+
+        case 2: // Classic hardware subtractive / spectral envelope match.
+            p.referenceWavetableMix *= 0.12f; p.wavetableMix *= 0.20f; p.userWavetableMix *= 0.35f;
+            p.fmMix *= 0.28f; p.fmAmount *= 0.35f; p.wavefold *= 0.35f;
+            p.osc1Mix = juce::jmax (0.52f, p.osc1Mix); p.osc2Mix = juce::jmax (0.08f, p.osc2Mix * 0.8f);
+            p.resonance = juce::jlimit (0.04f, 0.68f, p.resonance);
+            p.cutoff = juce::jlimit (90.0f, 19000.0f, reference.spectralCentroidHz * 2.6f + 180.0f);
+            break;
+
+        case 3: // Six-operator harmonic reconstruction.
+            p.referenceWavetableMix *= 0.22f; p.wavetableMix *= 0.22f; p.supersawMix *= 0.25f;
+            p.osc1Mix *= 0.38f; p.osc2Mix *= 0.30f;
+            p.fmMix = juce::jmax (p.fmMix, juce::jlimit (0.48f, 0.88f, 0.48f + reference.harmonicity * 0.32f));
+            p.fmAmount = juce::jmax (p.fmAmount, juce::jlimit (0.05f, 0.30f, reference.highEnergyRatio * 0.75f));
+            p.fmFeedback = juce::jmax (p.fmFeedback, juce::jlimit (0.0f, 0.30f, reference.inharmonicity * 0.55f));
+            p.fmAlgorithm = reference.oddHarmonicRatio < 0.42f ? 2 : (reference.inharmonicity > 0.18f ? 4 : 1);
+            p.fmOpRatio = {{ 1.0f, 2.0f, 3.0f, 4.0f, 1.5f, 6.0f }};
+            break;
+
+        case 4: // Studio layered hybrid: wide, animated, but still reference-led.
+            if (hasReferenceTable) p.referenceWavetableMix = juce::jmax (p.referenceWavetableMix, 0.34f);
+            p.supersawMix = juce::jmax (p.supersawMix, juce::jlimit (0.08f, 0.42f, reference.stereoWidth * 0.34f));
+            p.unisonSpread = juce::jmax (p.unisonSpread, 0.55f);
+            p.chorusMix = juce::jmax (p.chorusMix, juce::jlimit (0.04f, 0.24f, reference.stereoWidth * 0.22f));
+            if (reference.spectralMotion > 0.05f)
+                p.modGraphSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::wavetablePosition,
+                                       juce::jlimit (0.06f, 0.32f, reference.spectralMotion * 1.25f) };
+            break;
+
+        case 5: // Texture / chopped-table reconstruction.
+            if (hasReferenceTable) p.referenceWavetableMix = juce::jmax (p.referenceWavetableMix, 0.58f);
+            p.wavetableMix = juce::jmax (p.wavetableMix, 0.18f + motion * 0.28f);
+            p.wavefold = juce::jmax (p.wavefold, juce::jlimit (0.03f, 0.32f, reference.highEnergyRatio * 0.55f));
+            p.noiseMix = juce::jmax (p.noiseMix, juce::jlimit (0.0f, 0.18f, reference.spectralFlatness * 0.22f));
+            p.modGraphSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::wavetablePosition,
+                                   juce::jlimit (0.12f, 0.52f, 0.16f + motion * 0.38f) };
+            p.extraLfoRate[0] = juce::jlimit (0.05f, 1.8f, 0.10f + reference.spectralMotion * 2.4f);
+            break;
+
+        default: // Balanced hybrid: use a reference table whenever it is meaningful.
+            if (hasReferenceTable)
+            {
+                const float tableWeight = juce::jlimit (0.16f, 0.58f,
+                    0.14f + reference.pitchConfidence * 0.20f + reference.harmonicity * 0.14f + motion * 0.22f);
+                p.referenceWavetableMix = juce::jmax (p.referenceWavetableMix, tableWeight);
+            }
+            break;
+    }
+}
 }
 
 MatchResult SoundMatcher::initialFit (const SoundFeatures& f)
@@ -397,7 +468,9 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
         if ((int) elite.size() > juce::jmax (2, settings.populationSize)) elite.resize ((size_t) settings.populationSize);
     };
 
-    insertElite (evaluateFit (reference, seed, settings));
+    auto profiledSeed = seed;
+    applyAlgorithmProfile (profiledSeed, settings.algorithm, reference);
+    insertElite (evaluateFit (reference, profiledSeed, settings));
     int evaluated = 1;
     const int total = juce::jmax (1, 1 + settings.topologyTrials + settings.iterations);
     auto report = [&] { if (progress) progress (juce::jlimit (0.0f, 1.0f, evaluated / (float) total)); };
@@ -406,7 +479,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
     for (int i = 0; i < settings.topologyTrials; ++i)
     {
         if (cancel && cancel()) break;
-        auto candidate = seed;
+        auto candidate = profiledSeed;
         if (i < 5)
         {
             // Explicit sparse topologies can reach exact zero mixes, which a
@@ -434,6 +507,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
             if (random.nextFloat() < 0.25f) candidate.fmOpFixedMode[(size_t) random.nextInt (VoiceParameters::fmOperatorCount)] = 1;
             candidate = mutate (candidate, random, 0.13f, false);
         }
+        applyAlgorithmProfile (candidate, settings.algorithm, reference);
         applyLocks (candidate, seed, settings);
         insertElite (evaluateFit (reference, candidate, settings));
         ++evaluated;
@@ -470,6 +544,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
             candidate.modSlots = mutated.modSlots; candidate.modGraphSlots = mutated.modGraphSlots; candidate.moduleModSlots = mutated.moduleModSlots;
             candidate.extraLfoRate = mutated.extraLfoRate; candidate.extraLfoShape = mutated.extraLfoShape; candidate.mseg = mutated.mseg; candidate.fxModules = mutated.fxModules;
         }
+        applyAlgorithmProfile (candidate, settings.algorithm, reference);
         applyLocks (candidate, seed, settings);
 
         // Lightweight crossover between good candidates helps escape local minima without
@@ -485,6 +560,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
             if (random.nextBool()) { candidate.chorusMix = donor.chorusMix; candidate.reverbMix = donor.reverbMix; candidate.stereoWidth = donor.stereoWidth; }
         }
 
+        applyAlgorithmProfile (candidate, settings.algorithm, reference);
         applyLocks (candidate, seed, settings);
         insertElite (evaluateFit (reference, candidate, settings));
         ++evaluated;
