@@ -122,6 +122,80 @@ private:
         RetroMatchSynthAudioProcessor& proc;
     };
 
+    class CompactMasterMeter final : public juce::Component
+    {
+    public:
+        explicit CompactMasterMeter (RetroMatchSynthAudioProcessor& p) : proc (p)
+        {
+            setInterceptsMouseClicks (false, false);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+            if (bounds.getWidth() < 30.0f || bounds.getHeight() < 22.0f) return;
+
+            const auto mint = findColour (RetroLookAndFeel::primaryLed);
+            const auto amber = findColour (RetroLookAndFeel::secondaryLed);
+            g.setColour (juce::Colours::black.withAlpha (0.72f));
+            g.fillRoundedRectangle (bounds.translated (0.0f, 1.5f), 4.0f);
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xff11191b), bounds.getTopLeft(),
+                                                     juce::Colour (0xff070c0e), bounds.getBottomLeft(), false));
+            g.fillRoundedRectangle (bounds, 4.0f);
+            g.setColour (juce::Colour (0xff4a5b5e));
+            g.drawRoundedRectangle (bounds, 4.0f, 1.0f);
+
+            auto content = bounds.reduced (5.0f, 4.0f);
+            const std::array<float, 2> peaks { proc.getOutputPeakLeft(), proc.getOutputPeakRight() };
+            constexpr int segments = 12;
+            const float labelW = 10.0f;
+            const float dbW = 27.0f;
+            const float rowGap = 3.0f;
+            const float rowH = (content.getHeight() - rowGap) * 0.5f;
+
+            for (int channel = 0; channel < 2; ++channel)
+            {
+                auto row = juce::Rectangle<float> (content.getX(), content.getY() + channel * (rowH + rowGap),
+                                                   content.getWidth(), rowH);
+                auto label = row.removeFromLeft (labelW);
+                auto dbArea = row.removeFromRight (dbW);
+                auto bar = row.reduced (2.0f, juce::jmax (0.0f, (row.getHeight() - 7.0f) * 0.5f));
+                const float db = juce::jlimit (-60.0f, 3.0f,
+                                               20.0f * std::log10 (juce::jmax (0.0001f, peaks[(size_t) channel])));
+                const float norm = juce::jlimit (0.0f, 1.0f, juce::jmap (db, -48.0f, 0.0f, 0.0f, 1.0f));
+                const int lit = (int) std::ceil (norm * segments);
+                const float gap = 1.25f;
+                const float segmentW = (bar.getWidth() - gap * (segments - 1)) / segments;
+
+                g.setColour (juce::Colour (0xffaab9b5));
+                g.setFont (juce::Font (juce::FontOptions (7.5f, juce::Font::bold)));
+                g.drawText (channel == 0 ? "L" : "R", label, juce::Justification::centredLeft);
+
+                for (int i = 0; i < segments; ++i)
+                {
+                    auto seg = juce::Rectangle<float> (bar.getX() + i * (segmentW + gap), bar.getY(), segmentW, bar.getHeight());
+                    auto colour = i >= 11 ? juce::Colour (0xffff6b5f)
+                                          : (i >= 9 ? amber : mint);
+                    if (i >= lit) colour = juce::Colour (0xff253134);
+                    else
+                    {
+                        g.setColour (colour.withAlpha (0.14f));
+                        g.fillRoundedRectangle (seg.expanded (1.0f), 1.0f);
+                    }
+                    g.setColour (colour);
+                    g.fillRoundedRectangle (seg, 0.8f);
+                }
+
+                g.setColour (db > -1.0f ? juce::Colour (0xffff8b73) : juce::Colour (0xffb9c8c3));
+                g.setFont (juce::Font (juce::FontOptions (7.2f, juce::Font::bold)));
+                g.drawText (db <= -59.5f ? "-∞" : juce::String (db, 0), dbArea, juce::Justification::centredRight);
+            }
+        }
+
+    private:
+        RetroMatchSynthAudioProcessor& proc;
+    };
+
     class VariantThread final : public juce::Thread
     {
     public:
@@ -139,6 +213,7 @@ private:
     EnvelopeGraph envelopeGraph;
     LfoScope lfoScope;
     StereoMeter outputMeter;
+    CompactMasterMeter masterMeter;
 
     juce::Label title, subtitle, status, instanceContext;
     juce::ComboBox instanceChoice, keyboardOctave;

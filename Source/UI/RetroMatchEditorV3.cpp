@@ -388,7 +388,7 @@ void RetroMatchSynthAudioProcessorEditor::VariantThread::run()
 
 //==============================================================================
 RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroMatchSynthAudioProcessor& p)
-    : AudioProcessorEditor (&p), proc (p), filterGraph (p), envelopeGraph (p), lfoScope (p), outputMeter (p), aiSettings (AISettings::load())
+    : AudioProcessorEditor (&p), proc (p), filterGraph (p), envelopeGraph (p), lfoScope (p), outputMeter (p), masterMeter (p), aiSettings (AISettings::load())
 {
     setLookAndFeel (&laf);
 
@@ -426,17 +426,17 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     };
     for (auto* button : { &savePatch, &loadPatch, &exportPreview, &keyboardToggle }) addAndMakeVisible (*button);
 
-    masterOutputLabel.setText ("MASTER", juce::dontSendNotification);
+    masterOutputLabel.setText ("MASTER OUT", juce::dontSendNotification);
     masterOutputLabel.setJustificationType (juce::Justification::centred);
     masterOutputLabel.setColour (juce::Label::textColourId, goldColour (*this));
     masterOutputLabel.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
     masterOutput.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    masterOutput.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 18);
+    masterOutput.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 16);
     masterOutput.setTextValueSuffix (" dB");
     masterOutput.setNumDecimalPlacesToDisplay (1);
     masterOutput.setTooltip ("Global master output trim. This is independent from each patch OUTPUT and stays unchanged while browsing presets.");
     masterOutputAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "masterOutputGain", masterOutput);
-    addAndMakeVisible (masterOutputLabel); addAndMakeVisible (masterOutput);
+    addAndMakeVisible (masterOutputLabel); addAndMakeVisible (masterOutput); addAndMakeVisible (masterMeter);
 
     load.onClick = [this] { chooseFile(); };
     quick.onClick = [this] { startVariantSearch (WorkMode::quick); };
@@ -1157,19 +1157,29 @@ void RetroMatchSynthAudioProcessorEditor::resized()
 {
     const int cheek = juce::jlimit (36, 58, (int) std::lround ((float) getWidth() * 0.037f));
     auto outer = getLocalBounds().withTrimmedLeft (cheek + 10).withTrimmedRight (cheek + 10).reduced (0, 14);
-    auto header = outer.removeFromTop (58);
-    logoBounds = header.removeFromLeft (62).reduced (3);
+    auto header = outer.removeFromTop (72);
+    logoBounds = header.removeFromLeft (62).reduced (3, 8);
     title.setBounds (header.removeFromLeft (230));
-    subtitle.setBounds (header.removeFromLeft (juce::jmax (120, header.getWidth() - 490)));
-    auto masterArea = header.removeFromLeft (100);
-    masterOutputLabel.setBounds (masterArea.removeFromTop (15));
-    masterOutput.setBounds (masterArea.reduced (2, 1));
-    const int actionW = juce::jmax (72, header.getWidth() / 5);
-    lightSwitch.setBounds (header.removeFromRight (actionW).reduced (3, 9));
-    keyboardToggle.setBounds (header.removeFromRight (actionW).reduced (3, 9));
-    exportPreview.setBounds (header.removeFromRight (actionW).reduced (3, 9));
-    savePatch.setBounds (header.removeFromRight (actionW).reduced (3, 9));
-    loadPatch.setBounds (header.reduced (3, 9));
+
+    // Keep file/session actions grouped on the far right and mount MASTER OUT
+    // as a dedicated channel strip immediately before them. This avoids the
+    // old tiny rotary floating between the product subtitle and the buttons.
+    const int actionW = juce::jlimit (78, 102, getWidth() / 15);
+    lightSwitch.setBounds (header.removeFromRight (actionW).reduced (3, 15));
+    keyboardToggle.setBounds (header.removeFromRight (actionW).reduced (3, 15));
+    exportPreview.setBounds (header.removeFromRight (actionW).reduced (3, 15));
+    savePatch.setBounds (header.removeFromRight (actionW).reduced (3, 15));
+    loadPatch.setBounds (header.removeFromRight (actionW).reduced (3, 15));
+    header.removeFromRight (6);
+
+    auto masterArea = header.removeFromRight (172).reduced (3, 5);
+    masterOutputLabel.setBounds (masterArea.removeFromTop (14));
+    auto masterBody = masterArea.reduced (1, 0);
+    masterOutput.setBounds (masterBody.removeFromLeft (76).reduced (2, 0));
+    masterBody.removeFromLeft (4);
+    masterMeter.setBounds (masterBody.reduced (1, 3));
+    header.removeFromRight (8);
+    subtitle.setBounds (header.reduced (8, 0));
     outer.removeFromTop (10);
 
     if (keyboardVisible)
@@ -1450,7 +1460,7 @@ void RetroMatchSynthAudioProcessorEditor::paint (juce::Graphics& g)
 
     // Raised/recessed top control deck.
     auto headerFrame = juce::Rectangle<float> ((float) cheek + 9.0f, 8.0f,
-                                               (float) getWidth() - ((float) cheek + 9.0f) * 2.0f, 64.0f);
+                                               (float) getWidth() - ((float) cheek + 9.0f) * 2.0f, 78.0f);
     RetroHardware3D::drawRecessedPanel (g, headerFrame, palette, 8.0f);
     auto headerFace = headerFrame.reduced (5.0f);
     g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2d3638), headerFace.getTopLeft(),
@@ -1864,6 +1874,7 @@ void RetroMatchSynthAudioProcessorEditor::timerCallback()
     envelopeGraph.repaint();
     lfoScope.repaint();
     outputMeter.repaint();
+    masterMeter.repaint();
 }
 
 void RetroMatchSynthAudioProcessorEditor::updateLightPalette()
