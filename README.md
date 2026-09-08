@@ -1,407 +1,229 @@
 # RetroMatch Synth
 
-**Sample-to-synth reconstruction as an editable VST3/AU instrument.**
+<p align="center">
+  <img src="Assets/retromatch-mark.svg" width="92" alt="RetroMatch logo" />
+</p>
 
-RetroMatch Synth is a C++20/JUCE hybrid synthesizer whose primary goal is to take a short reference sound, analyze its acoustic and spectral character, and recreate that sound as closely as possible with a **real, editable synthesis patch**.
+<p align="center"><strong>Sample-to-synth reconstruction as an editable VST3/AU instrument.</strong></p>
 
-Instead of turning the reference into a static sampler preset, RetroMatch combines subtractive, wavetable, additive, unison, phase-modulation and six-operator FM synthesis with filtering, modulation and effects. A closed-loop matcher renders candidate patches offline, compares them with the reference, and iteratively searches for better parameter combinations.
+RetroMatch is a C++20/JUCE hybrid synthesizer that analyzes reference audio and reconstructs it as a **real editable synthesis patch**. It combines virtual analog, wavetable, reference-derived wavetable, additive, unison, phase modulation, six-operator FM, modulation, filtering and effects with a closed-loop renderer/analyzer/matcher.
 
-The result remains a normal synthesizer sound: every oscillator, FM operator, envelope, filter, modulation route and effect can be adjusted, automated, saved and reused after matching.
+The result is not a hidden sampler preset: oscillator topology, FM operators, envelopes, filters, modulation, layers, effects and the extracted wavetable material remain available for editing, automation and further sound design.
 
-> **Version:** 1.0.0 — first complete source milestone  
+<p align="center">
+  <img src="Assets/screenshots/retromatch-hardware-overview.svg" width="100%" alt="RetroMatch RM-01 hardware-style synthesizer interface" />
+</p>
+
 > **Formats:** VST3, Audio Unit (macOS), Standalone  
 > **Framework:** JUCE 9.0.1 / C++20 / CMake  
-> **Platforms:** Windows and macOS
+> **Platforms:** Windows 10/11 and macOS  
+> **Development plan:** [`plan.md`](plan.md)
 
 ---
 
-## Why RetroMatch exists
+## What makes RetroMatch different
 
-Recreating a synth sound by ear often involves a long cycle of guessing oscillator types, envelopes, filters, FM relationships, modulation and effects. A spectrum analyzer helps, but it still leaves the user translating measurements into synthesis decisions manually.
-
-RetroMatch automates much of that process:
+A normal spectrum analyzer tells you what is present; RetroMatch attempts to turn those measurements into a reusable instrument patch.
 
 ```text
-Reference sample
+Reference audio
       ↓
-Audio analysis
+Region selection / cleanup
       ↓
-Feature-derived seed patch
+Pitch + spectral + temporal + timbre analysis
       ↓
-Offline resynthesis
+Feature-derived seed + reference wavetable extraction
+      ↓
+Offline synth rendering
       ↓
 Perceptual comparison
       ↓
-Population optimization
+Evolution / topology-biased refinement
       ↓
-Editable synth patch
+Editable synth + layered patch
 ```
 
-The matcher does **not** merely copy the sample and does not require a neural black-box generator. It searches the parameters of the same synth engine that is used for live playback, so a successful match produces a patch you can understand and continue editing.
+The matcher renders the **same SynthEngine used for live playback**, analyzes that render with the same feature path used for the source, scores the difference, and searches for a better candidate.
 
 ---
 
-## Main workflow
+## Current highlights
 
-1. **Load a reference** WAV, AIFF or FLAC file, or drag it onto the plug-in.
-2. **Quick Match** analyzes the source and creates an initial synthesis patch.
-3. **Refine Match** renders candidate sounds in the background and evolves the parameters against a perceptual similarity score.
-4. **Build A/B/C** generates three alternative reconstruction strategies with different synthesis biases.
-5. Select **A**, **B** or **C**, or continuously **morph** between them.
-6. Use **Match Locks** to preserve parts of the sound while refining other areas.
-7. Edit any synth parameter manually or automate it from the DAW.
-8. **Save Patch** as `.rmsynth` or **Export WAV** as a 24-bit preview.
+### Reference editor for short sounds and full tracks
 
-Reference-derived wavetable data is stored inside the patch/session state, so the original reference audio does not need to remain available after extraction.
+The reference workflow supports more than a tiny one-shot waveform. A large reference editor is available for:
+
+- zoom and pan
+- draggable start/end range
+- move the selected region
+- preview the selection
+- normalize
+- fade in / fade out
+- cut the selection into a new reference
+- choose a focused region for resynthesis
+- choose a separate region for MIDI analysis
+
+Long recordings can therefore be treated as source material rather than forcing the matcher to analyze an entire song as one timbre.
+
+### Professional resynthesis modes
+
+The current engine exposes strategy and complexity controls for deeper matching:
+
+- **Balanced Hybrid**
+- **Reference Wavetable**
+- **Spectral Subtractive**
+- **FM / Harmonic**
+- **Layered Studio**
+- **Texture / Chop**
+
+Complexity can scale from the legacy compact patch to **4, 6 or 8 synthesis instances**, allowing complementary roles such as body, sub/foundation, air, motion, harmonic colour, width and texture instead of simply duplicating one sound.
+
+### Reference-derived wavetable synthesis
+
+RetroMatch extracts phase-stabilized periodic material from the selected reference region into morphable 2048-sample frames. The matcher can deliberately favor that source when it improves the match, and Texture/Chop-style workflows can derive more animated timbral material from the selected audio.
+
+### Visual comparison
+
+The large compare view can inspect reference vs resynthesis across waveform/envelope and spectral fingerprints, with score dimensions for spectrum, timbre, temporal behavior, harmonics, envelope, pitch and stereo image.
+
+### Master gain staging
+
+A dedicated **MASTER OUTPUT** control sits after the complete synth/reference mix so patches with very different internal gain structures can be auditioned and mixed consistently without destroying the patch's own output-gain design.
+
+---
+
+## Signal Lab and patch map
+
+Signal Lab combines live output scope, spectrum, stereo field and a whole-synth patch map.
+
+<p align="center">
+  <img src="Assets/screenshots/retromatch-patch-map.svg" width="100%" alt="RetroMatch Signal Lab interactive patch map" />
+</p>
+
+The patch map is being expanded into a safe semi-modular playground. The current canvas foundation supports node navigation, pan/zoom, node dragging, snap-to-grid, auto arrange and fit/zoom controls. The next implementation stages add typed ports, editable cables and a validated DSP routing compiler so changing a connection changes the actual sound.
+
+See [`plan.md`](plan.md) for the implementation order and safety/compatibility rules.
 
 ---
 
 ## Hybrid synthesis engine
 
-RetroMatch 1.0 uses a deliberately broad synthesis architecture because many sounds cannot be represented well by one synthesis method alone.
+RetroMatch deliberately uses several synthesis methods because a single architecture is not enough to reconstruct a broad set of sounds.
 
-### Virtual-analog oscillators
-
-- sine
-- triangle
-- anti-aliased BLEP saw
-- anti-aliased BLEP square/pulse
-- variable pulse width
-- two primary oscillators
-- master tuning/detuning
-- sub oscillator
-- white noise
-- ring modulation
-
-### Additive synthesis
-
-A 12-partial harmonic layer provides additional spectral shaping for sounds whose overtone balance is difficult to reproduce with standard oscillators alone.
-
-### Factory wavetable engine
-
-- five morphable wavetable frames
-- 2048 samples per table
-- continuous frame interpolation
-- phase warp
-- independent wavetable mix
-- modulation-matrix control of wavetable position
-
-### Reference-derived wavetable
-
-RetroMatch can extract periodic cycle snapshots from the uploaded reference sound:
-
-```text
-Reference audio
-   ├─ snapshot 1 → phase-stabilized cycle
-   ├─ snapshot 2 → phase-stabilized cycle
-   ├─ snapshot 3 → phase-stabilized cycle
-   ├─ snapshot 4 → phase-stabilized cycle
-   └─ snapshot 5 → phase-stabilized cycle
-                         ↓
-              morphing reference bank
-```
-
-The extracted five-frame bank is normalized, stored as synth data and blended through the **Reference WT** control. It is serialized into `.rmsynth` presets and DAW state.
-
-### Supersaw / unison
-
-- seven oscillator voices
-- symmetric detune distribution
-- stereo spread
-- constant-power panning
-- independent unison mix
-
-This gives the matcher a practical way to reproduce wide pads, trance leads and modern detuned textures.
-
-### Phase modulation
-
-A lightweight phase-modulation path remains available for simple FM/PM tones and as another search dimension.
-
-### Six-operator FM
-
-The deeper FM engine provides:
-
-- six sine operators
-- six routing algorithms
-- operator feedback
-- global FM mix
-- ratio mode
-- fixed-frequency mode
-- ratio range from 0.125× to 16×
-- fixed frequencies from approximately 10 Hz to 16 kHz
-- individual operator level
-- individual ADSR per operator
-- velocity sensitivity
-- key scaling
-
-This allows harmonic and inharmonic structures such as bells, electric-piano transients, metallic percussion, digital basses and evolving FM pads.
-
-### Wavefolder
-
-A pre-filter wavefolder adds controllable nonlinear harmonic generation and is available as a modulation destination and optimizer dimension.
-
----
-
-## Filter, modulation and effects
-
-### Filter
-
+- two virtual-analog oscillators: sine, triangle, BLEP saw, square/pulse
+- variable pulse width, sub oscillator, noise and ring modulation
+- 12-partial additive layer
+- factory wavetable engine with continuous frame interpolation and warp
+- reference-derived wavetable bank
+- seven-voice supersaw/unison with stereo spread
+- phase modulation
+- six-operator FM with multiple algorithms, ratio/fixed modes, per-operator ADSR, key scale and velocity
+- wavefolder / nonlinear harmonic shaping
 - multimode state-variable filter
-- low-pass
-- high-pass
-- band-pass
-- cutoff
-- resonance
-
-### Amp and modulation
-
 - polyphonic amp ADSR
-- LFO
-- four-slot modulation matrix
-
-Modulation sources:
-
-- LFO 1
-- velocity
-- key tracking
-- random-per-note
-- amp envelope
-
-Modulation destinations:
-
-- pitch
-- filter cutoff
-- amplitude
-- pulse width
-- phase-modulation amount
-- six-operator FM mix
-- wavetable position
-- wavefold amount
-
-Each modulation slot has a bipolar amount.
-
-### Effects
-
-The global effects chain currently includes:
-
-- nonlinear drive
-- stereo chorus
-- feedback delay
-- algorithmic reverb
-- stereo-width processing
-- output gain
-
-Effects are part of the matching space because a reference sound's identity often depends heavily on chorus, ambience, delay and nonlinear processing rather than oscillator choice alone.
+- LFO, MSEG and modulation graph
+- modular + built-in effects
+- multi-instance layered synthesis
 
 ---
 
-## Reference analysis
+## Main workflow
 
-The analyzer extracts a compact feature representation that can be calculated for both the reference and the generated candidates.
+1. **Load Reference** — WAV, AIFF or FLAC, or drag a file onto the plug-in.
+2. Open the large reference editor when the source needs a precise region or cleanup.
+3. **Quick x3** builds three initial reconstruction candidates.
+4. **Refine x3** runs closed-loop render/analyze/score optimization.
+5. **AI x3** can request structured seed ideas from the configured provider and still score them locally.
+6. Compare/select **A / B / C** or morph between the alternatives.
+7. Edit synthesis, layers, modulation, FX and wavetable controls manually.
+8. Save a self-contained `.rmsynth` patch or export audio/MIDI.
 
-### Pitch and harmonic information
+Reference-derived wavetable data is embedded in patch/session state so the original source file is not required for normal synth playback after extraction.
 
-- fundamental frequency (F0)
-- pitch confidence
-- harmonicity
-- inharmonicity
-- odd/even harmonic balance
-- zero-crossing rate
+---
 
-### Spectral information
+## Melody / MIDI extraction
 
-- 32 logarithmic spectral bands
-- spectral centroid
-- 85% spectral rolloff
-- spectral bandwidth
-- spectral flatness
-- low-frequency energy
-- high-frequency energy
+Reference audio can also be analyzed into editable timed notes. Long-track transcription is chunked instead of silently stopping at the original short-analysis limit.
 
-### Temporal information
+- predominant-melody mode
+- experimental layered-note mode
+- interactive piano roll
+- replay through the current RetroMatch patch
+- standard MIDI export with tempo metadata
+- separate selection for MIDI vs timbre resynthesis
 
-- attack estimate
-- decay estimate
-- sustain estimate
-- release estimate
-- transient strength
-- eight temporal analysis frames
-- 16 logarithmic spectral bands per temporal frame
-- normalized RMS contour
-- spectral-motion descriptor
-
-### Timbre and stereo information
-
-- 12 cepstral/DCT timbre coefficients
-- stereo width derived from the original L/R signal
-- compact waveform preview used by the UI
-
-The same analysis path is used for uploaded audio and candidate renders, reducing mismatches between the measurement domains.
+Mixed/mastered material is inherently ambiguous: drums, vocals, overlapping harmonics and effects can create missed or additional notes. MIDI extraction is therefore an editable estimate, not source separation.
 
 ---
 
 ## Closed-loop matching
 
-Quick Match is only the seed stage. The deeper matcher works by rendering the actual synth engine and evaluating the result.
+The deeper matcher uses derivative-free population search because the patch contains both continuous values and discrete topology decisions.
 
-```text
-Candidate parameters
-       ↓
-OfflineRenderer
-       ↓
-SynthEngine
-       ↓
-Generated audio
-       ↓
-SampleAnalyzer
-       ↓
-SimilarityScorer
-       ↓
-score / rank / mutate / crossover
-       ↺
-```
+It evaluates combinations of:
 
-The current weighted similarity model combines approximately:
+- global spectral shape
+- temporal spectrum / RMS contour
+- cepstral timbre descriptors
+- brightness, bandwidth and flatness
+- envelope and transient behavior
+- harmonic / inharmonic character
+- pitch
+- stereo image
 
-| Feature group | Weight |
-|---|---:|
-| Global spectral shape | 25% |
-| Temporal spectrum / energy | 18% |
-| Cepstral timbre | 12% |
-| Brightness / bandwidth / flatness | 14% |
-| Envelope / transient behavior | 14% |
-| Harmonic / inharmonic character | 10% |
-| Pitch | 4% |
-| Stereo image | 3% |
-
-Raw loudness is intentionally not allowed to dominate the score.
-
-### Population optimizer
-
-Refine Match uses a derivative-free evolutionary search rather than gradient descent because the parameter space contains discrete oscillator/filter/FM topology decisions as well as continuous values.
-
-The optimizer:
-
-- retains the feature-derived seed
-- tests different oscillator/filter/FM topologies
-- ranks an elite population by perceptual score
-- selects stronger parents more frequently
-- applies coarse-to-fine mutation
-- crosses over parameter groups between candidates
-- increases exploration after stagnation
-- clamps parameters to valid ranges
-- applies Match Locks after topology changes, mutation and crossover
-- always retains the best/seed candidate so refinement cannot intentionally return a lower-scoring result
+The optimizer retains strong candidates, mutates coarse-to-fine, crosses over parameter groups and respects Match Locks so already-convincing parts of a patch can be frozen while other groups continue evolving.
 
 ---
 
-## A/B/C alternatives and morphing
+## Hardware-style UI
 
-One reference sound may have several convincing synthesis explanations. RetroMatch therefore keeps three deliberately biased solutions:
+The custom JUCE interface follows an original RM-01 hardware language: dark machined metal, walnut cheeks, recessed panels/displays, illuminated controls and dense but direct instrument ergonomics. It is inspired by the workflow of professional hardware synthesizers without copying a specific manufacturer's protected panel design.
 
-- **A — Reference-oriented:** favors the extracted reference wavetable and direct timbral reconstruction.
-- **B — FM-oriented:** favors six-operator FM/inharmonic structures.
-- **C — Hybrid-oriented:** favors wavetable, unison and broader hybrid synthesis.
+The interface includes dedicated pages for:
 
-The candidate morph control maps continuously from A → B → C. Continuous parameters are interpolated; discrete topology choices switch at appropriate boundaries. The resulting intermediate sound is still a normal editable patch.
-
----
-
-## Match Locks
-
-The following synthesis groups can be locked during refinement:
-
-- Pitch
-- Oscillators
+- Layers / Presets
+- Synth
 - FM
-- Envelope
-- Filter
-- Modulation
-- Effects
-
-Example: once the oscillator/FM structure is convincing, lock those groups and allow only filter and effects parameters to continue evolving.
-
----
-
-## Presets and state
-
-RetroMatch uses `juce::AudioProcessorValueTreeState` for its host-visible parameter model.
-
-The v1.0 plug-in exposes **122 DAW-automatable parameters**:
-
-- 104 continuous parameters
-- 18 choice parameters
-
-`.rmsynth` patches and DAW session state include the synth settings and the extracted reference wavetable data. This allows a matched patch to remain self-contained after the original sample has been moved or deleted.
-
----
-
-## User interface
-
-The custom JUCE UI is inspired by the functional language of late-1980s/1990s professional Japanese hardware synthesizers without copying any specific manufacturer's protected panel design.
-
-Design goals include:
-
-- dark graphite/chassis surfaces
-- machined retro-style rotary controls
-- hardware-like panel grouping
-- green/cyan analyzer display character
-- waveform/spectrum feedback
-- clear dedicated matching controls
-- dynamic six-operator detail editing
-- scalable editor layout
-- practical access to the large parameter surface without presenting every FM parameter simultaneously
-
-The interface is intended to feel like a modern instrument with classic hardware ergonomics rather than a generic web-style plug-in panel.
-
----
-
-## Supported plug-in formats
-
-| Platform | VST3 | AU | Standalone |
-|---|:---:|:---:|:---:|
-| Windows 10/11 | ✓ | — | ✓ |
-| macOS | ✓ | ✓ | ✓ |
-
-Audio Units require macOS/Xcode and cannot be built natively on Windows or Linux.
+- Filter + Amp
+- Modulation / MSEG
+- FX
+- Wavetable
+- Settings / AI Log
+- Signal Lab
+- Melody / MIDI
 
 ---
 
 ## Building
 
-Full setup, local-JUCE and CI instructions are in [`docs/BUILD.md`](docs/BUILD.md).
+Full setup and CI details are in [`docs/BUILD.md`](docs/BUILD.md).
 
-### Windows quick start
-
-On a clean Windows development machine:
+### Windows
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\setup-windows.ps1
-```
-
-Open a new PowerShell after installation/restart, then:
-
-```powershell
+# reopen PowerShell if setup changed the toolchain
 .\scripts\check-tools.ps1
 .\scripts\build-windows.ps1 -RunTests
 ```
 
-Expected release artifacts:
+Expected artifacts:
 
 ```text
 build-windows/RetroMatchSynth_artefacts/Release/VST3/RetroMatch Synth.vst3
 build-windows/RetroMatchSynth_artefacts/Release/Standalone/RetroMatch Synth.exe
 ```
 
-### macOS quick start
+### macOS
 
 ```bash
 chmod +x scripts/build-macos.sh
 RUN_TESTS=1 ./scripts/build-macos.sh
 ```
 
-Expected release artifacts:
+Expected artifacts:
 
 ```text
 build-macos/RetroMatchSynth_artefacts/Release/VST3/RetroMatch Synth.vst3
@@ -409,189 +231,61 @@ build-macos/RetroMatchSynth_artefacts/Release/AU/RetroMatch Synth.component
 build-macos/RetroMatchSynth_artefacts/Release/Standalone/RetroMatch Synth.app
 ```
 
-### Existing local JUCE checkout
-
-To avoid any network fetch, point CMake at JUCE 9.0.1:
-
-```powershell
-.\scripts\build-windows.ps1 -JuceDir C:\dev\JUCE -RunTests
-```
-
-or configure manually with:
-
-```text
--DRETROMATCH_JUCE_DIR=/path/to/JUCE
-```
-
-JUCE provides the VST3 SDK integration required by this project; a separate Steinberg SDK checkout is not required for the normal JUCE build.
+For an existing JUCE checkout, pass `-JuceDir C:\dev\JUCE` on Windows or configure with `-DRETROMATCH_JUCE_DIR=/path/to/JUCE`.
 
 ---
 
-## GitHub Actions builds
+## Verification
 
-`.github/workflows/ci-build.yml` contains native Windows and macOS jobs. The workflow runs the static source gate and DSP/matcher smoke tests before publishing build artifacts.
-
-Expected CI artifacts:
-
-- `RetroMatchSynth-Windows-x64` — VST3 + Standalone EXE
-- `RetroMatchSynth-macOS-Universal` — VST3 + AU + Standalone app
-
-This is the recommended clean-machine build path until signed installers are introduced.
-
----
-
-## Tests and verification
-
-Run the dependency-free integrity check first:
+Run the dependency-free source contract first:
 
 ```bash
-python3 scripts/static-check.py
+python scripts/static-check.py
 ```
 
-When JUCE and a native toolchain are available, enable the CTest smoke suite using the supplied platform scripts.
+Then build with `RETROMATCH_BUILD_TESTS=ON` / the platform scripts and run the DSP smoke tests. Release validation should also include pluginval, at least two VST3 hosts, DAW automation/session recall and `auval` on macOS.
 
-The smoke tests exercise key first-version behavior including:
+Relevant documents:
 
-- synth rendering
-- non-silent output
-- stereo unison behavior
-- six-operator FM
-- fixed-frequency FM operators
-- operator envelopes
-- wavetable motion
-- wavefolding
-- modulation routing
-- reference analysis
-- temporal/cepstral descriptors
-- Quick Match
-- Refine Match
-- best-score non-regression
-- reference-wavetable serialization round trip
-
-Before distributing binaries, also validate with `pluginval`, at least two VST3 hosts, DAW automation/session recall, and `auval` on macOS. See [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
-
-### Current source verification status
-
-The v1.0 source tree passes the included static integrity checks. During generation, the available Linux container successfully reached the JUCE dependency-fetch stage with both C and C++ compilers configured, but outbound DNS to GitHub was blocked before JUCE could be downloaded. Consequently the repository deliberately does **not** claim that the generated source has been natively compiled in that container; native CI/local builds are the release gate.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/BUILD.md`](docs/BUILD.md)
+- [`docs/VERIFICATION.md`](docs/VERIFICATION.md)
+- [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- [`plan.md`](plan.md) — active implementation plan
 
 ---
 
-## Project structure
+## Core design principles
+
+1. **No expensive work on the real-time audio thread.**
+2. **The matcher renders the same synth engine used for playback.**
+3. **Matching produces editable synthesis, not a hidden sampler.**
+4. **Discrete topology and continuous parameter search are treated differently.**
+5. **Reference synthesis data required for playback is embedded in state.**
+6. **Similarity is temporal and perceptual, not just one static FFT snapshot.**
+7. **New automation parameters are append-only for host/session compatibility.**
+8. **The semi-modular graph must reject unsafe or meaningless routing before it reaches DSP.**
+
+---
+
+## Project layout
 
 ```text
 RetroMatchVST/
-├─ CMakeLists.txt
-├─ README.md
-├─ CHANGELOG.md
+├─ Assets/
+│  └─ screenshots/
 ├─ Source/
 │  ├─ Analysis/
-│  │  ├─ SampleAnalyzer.h
-│  │  └─ SampleAnalyzer.cpp
 │  ├─ Engine/
-│  │  ├─ SynthEngine.h
-│  │  ├─ SynthEngine.cpp
-│  │  ├─ ReferenceWavetable.h
-│  │  └─ ReferenceWavetable.cpp
 │  ├─ Matching/
-│  │  ├─ OfflineRenderer.*
-│  │  ├─ SimilarityScorer.*
-│  │  └─ SoundMatcher.*
+│  ├─ Reference/
 │  ├─ UI/
-│  │  └─ RetroLookAndFeel.h
-│  ├─ PluginProcessor.*
-│  └─ PluginEditor.*
+│  └─ PluginProcessor.*
 ├─ Tests/
-│  └─ SmokeTests.cpp
 ├─ docs/
-│  ├─ ARCHITECTURE.md
-│  ├─ BUILD.md
-│  ├─ ROADMAP.md
-│  └─ VERIFICATION.md
 ├─ scripts/
-│  ├─ setup-windows.ps1
-│  ├─ check-tools.ps1
-│  ├─ build-windows.ps1
-│  ├─ package-windows.ps1
-│  ├─ build-macos.sh
-│  └─ static-check.py
-└─ .github/workflows/
-   └─ ci-build.yml
+├─ plan.md
+└─ CMakeLists.txt
 ```
 
----
-
-## Technical design principles
-
-RetroMatch follows a few important rules:
-
-1. **No expensive analysis on the real-time audio thread.** File I/O, FFT extraction and optimization stay outside the callback.
-2. **The matcher renders the same synth engine used for playback.** There is no simplified proxy synthesizer that can drift away from the actual plug-in sound.
-3. **Matching produces editable synthesis.** Reference audio can assist reconstruction, but the goal is not a hidden sampler.
-4. **Discrete topology and continuous parameter search are treated differently.** The search is derivative-free and can explore oscillator/FM/filter choices.
-5. **Session reproducibility matters.** Extracted reference synthesis data is embedded in state rather than depending on external files.
-6. **Similarity is perceptual and temporal, not only one static FFT snapshot.**
-
-More implementation detail is available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
----
-
-## Limitations of the first version
-
-RetroMatch 1.0 is a complete first source milestone, but it is not expected to perfectly reverse-engineer every commercial preset or processed recording.
-
-Current limitations include:
-
-- the matcher is feature/evolution based rather than a learned perceptual embedding model
-- only four modulation-matrix slots are currently exposed
-- no MSEG or full modulation graph yet
-- no MPE/poly-aftertouch routing yet
-- no arbitrary user wavetable import beyond reference extraction
-- no granular or physical-model/resonator engine yet
-- no convolution reverb/IR matching
-- optimizer execution is CPU-oriented and not GPU accelerated
-- release signing/notarization and installers are not yet part of v1.0
-
-A heavily processed sample, chord, drum loop or sound containing multiple simultaneous notes may not map cleanly to a single-note synthesizer topology. Short, isolated notes with a clear fundamental generally provide a better reconstruction target.
-
----
-
-## Roadmap
-
-Post-1.0 candidates include:
-
-- multistage MSEG/modulation graph
-- oversampling/quality modes
-- arbitrary user wavetable imports
-- MPE and poly-aftertouch
-- convolution/IR effect matching
-- granular/resonator synthesis engines
-- optional neural perceptual embedding scorer
-- parallel/GPU-assisted optimizer acceleration
-- preset browser, tags and searchable patch library
-- signed/notarized installers and release packaging
-
-See [`docs/ROADMAP.md`](docs/ROADMAP.md).
-
----
-
-## Reference audio and rights
-
-RetroMatch is a synthesis/reconstruction tool. Users are responsible for having the rights or permission required for any reference audio they analyze or distribute. Matching a timbre does not automatically grant rights to redistribute copyrighted recordings or other protected audio material.
-
----
-
-## JUCE licensing
-
-This repository uses JUCE as a build dependency. JUCE's licensing terms may depend on how a plug-in is distributed or monetized. Review the current JUCE licence before publishing commercial binaries.
-
-No third-party JUCE binary or VST3 SDK is committed into this repository; the build can use an existing local JUCE checkout or fetch the configured JUCE version.
-
----
-
-## Status
-
-**RetroMatch Synth 1.0.0 is the first complete source release.**
-
-It contains the full reference-analysis → synthesis → render → compare → optimize workflow, a broad hybrid synth architecture, editable A/B/C alternatives, persistent reference-derived wavetable data, presets, WAV preview export, automated smoke tests and native Windows/macOS build automation.
-
-The next development phase can therefore focus on improving match quality, synthesis breadth and release polish rather than filling missing core architecture.
+RetroMatch is an evolving source project. The active roadmap favors **better resynthesis, better reference handling, richer sound-design presets and a safe semi-modular patch map** while preserving real-time stability and session compatibility.
