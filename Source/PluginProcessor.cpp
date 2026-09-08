@@ -116,6 +116,8 @@ VoiceParameters makeResynthCompanion (const VoiceParameters& source, int role, i
     return p;
 }
 
+void seedGoldWholeInstrumentRack (VoiceParameters& rack, const SoundFeatures& reference, int strategy);
+
 VoiceParameters makeEmbeddedResynthRack (const MatchResult& mainResult, const SoundFeatures& reference,
                                          int complexity, int strategy,
                                          const std::shared_ptr<const ReferenceWavetableData>& table)
