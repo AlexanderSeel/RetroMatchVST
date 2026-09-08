@@ -128,6 +128,27 @@ public:
     bool exportReferenceSelection (const juce::File& destination, float startSeconds, float endSeconds,
                                    bool normalize, float fadeInSeconds, float fadeOutSeconds);
 
+    bool previewReferenceRegionEdited (float startSeconds, float endSeconds, bool normalize,
+                                       float fadeInSeconds, float fadeOutSeconds,
+                                       const ReferenceSamplePlayer::EditTone& tone)
+    {
+        if (! loadedReferenceFile.existsAsFile()) return false;
+        setReferenceAuditionMode (ReferenceAuditionMode::referenceOnly);
+        return referencePlayer.previewRegion (loadedReferenceFile, referenceBaseMidiNote.load(),
+                                              startSeconds, endSeconds, normalize,
+                                              fadeInSeconds, fadeOutSeconds, tone);
+    }
+
+    bool exportReferenceSelectionEdited (const juce::File& destination, float startSeconds, float endSeconds,
+                                         bool normalize, float fadeInSeconds, float fadeOutSeconds,
+                                         const ReferenceSamplePlayer::EditTone& tone)
+    {
+        if (! loadedReferenceFile.existsAsFile()) return false;
+        return ReferenceSamplePlayer::writeProcessedRegion (loadedReferenceFile, destination,
+                                                            startSeconds, endSeconds, normalize,
+                                                            fadeInSeconds, fadeOutSeconds, tone);
+    }
+
     float getOutputPeakLeft() const noexcept { return outputPeakLeft.load (std::memory_order_relaxed); }
     float getOutputPeakRight() const noexcept { return outputPeakRight.load (std::memory_order_relaxed); }
 
