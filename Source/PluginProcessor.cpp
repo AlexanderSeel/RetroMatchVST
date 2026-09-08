@@ -48,7 +48,7 @@ VoiceParameters makeResynthCompanion (const VoiceParameters& source, int role, i
                                       const std::shared_ptr<const ReferenceWavetableData>& table)
 {
     auto p = source;
-    p.layers.fill (nullptr); p.mainLayerGain = 1.0f;
+    p.layers.fill (nullptr); p.mainLayerGain = 1.0f; p.globalFxModules = {};
     p.referenceWavetable = table;
     p.outputGainDb = juce::jlimit (-12.0f, -4.0f, source.outputGainDb - 1.5f);
     p.delayMix *= 0.65f; p.reverbMix *= 0.75f;
@@ -116,7 +116,8 @@ VoiceParameters makeResynthCompanion (const VoiceParameters& source, int role, i
     return p;
 }
 
-VoiceParameters makeEmbeddedResynthRack (const MatchResult& mainResult, int complexity, int strategy,
+VoiceParameters makeEmbeddedResynthRack (const MatchResult& mainResult, const SoundFeatures& reference,
+                                         int complexity, int strategy,
                                          const std::shared_ptr<const ReferenceWavetableData>& table)
 {
     auto rack = mainResult.params;
@@ -134,6 +135,8 @@ VoiceParameters makeEmbeddedResynthRack (const MatchResult& mainResult, int comp
     static const float rolePan[]  { -0.10f, 0.34f, 0.0f, -0.30f, 0.18f, 0.42f, -0.42f };
     static const float roleTune[] { 0.0f, 12.0f, -12.0f, 0.0f, 7.0f, 0.0f, 12.0f };
 
+    seedGoldWholeInstrumentRack (rack, reference, strategy);
+
     const int wantedLayers = juce::jmin (VoiceParameters::extraLayerCount, totalInstances - 1);
     for (int layer = 0; layer < wantedLayers; ++layer)
     {
@@ -148,6 +151,205 @@ VoiceParameters makeEmbeddedResynthRack (const MatchResult& mainResult, int comp
         rack.layerAmount[(size_t) layer] = 0.78f;
     }
     return rack;
+}
+
+float goldGaussian (juce::Random& random)
+{
+    const float u1 = juce::jmax (1.0e-6f, random.nextFloat());
+    const float u2 = random.nextFloat();
+    return std::sqrt (-2.0f * std::log (u1)) * std::cos (juce::MathConstants<float>::twoPi * u2);
+}
+
+float goldMutateLinear (float value, float lo, float hi, float amount, juce::Random& random)
+{
+    return juce::jlimit (lo, hi, value + goldGaussian (random) * (hi - lo) * amount);
+}
+
+float goldMutateLog (float value, float lo, float hi, float amount, juce::Random& random)
+{
+    const float lv = std::log (juce::jlimit (lo, hi, value));
+    const float llo = std::log (lo), lhi = std::log (hi);
+    return std::exp (juce::jlimit (llo, lhi, lv + goldGaussian (random) * (lhi - llo) * amount));
+}
+
+float moduleAmountForCutoff (float hz)
+{
+    return juce::jlimit (0.0f, 1.0f,
+                         std::log (juce::jlimit (30.0f, 18000.0f, hz) / 30.0f) / std::log (600.0f));
+}
+
+void seedGoldWholeInstrumentRack (VoiceParameters& rack, const SoundFeatures& reference, int strategy)
+{
+    rack.globalFxModules = {};
+    int slot = 0;
+    auto add = [&] (int type, int stage, float amount, float rate, float feedback, float mix)
+    {
+        if (slot >= FxModuleParameters::slotCount) return;
+        auto& m = rack.globalFxModules[(size_t) slot++];
+        m.type = type; m.stage = stage; m.bypass = false;
+        m.amount = juce::jlimit (0.0f, 1.0f, amount);
+        m.rate = juce::jlimit (0.0f, 1.0f, rate);
+        m.feedback = juce::jlimit (0.0f, 1.0f, feedback);
+        m.mix = juce::jlimit (0.0f, 1.0f, mix);
+    };
+
+    // Remove rumble only when the reference itself has little deep-low energy.
+    if (reference.lowEnergyRatio < 0.12f)
+    {
+        const float hp = juce::jlimit (35.0f, 160.0f, 45.0f + (0.12f - reference.lowEnergyRatio) * 650.0f);
+        add (2, 0, moduleAmountForCutoff (hp), 0.0f, 0.05f, 0.62f);
+    }
+
+    // A post-sum LPF is especially useful as speaker/cabinet colour for guitar,
+    // but it can also remove synthetic excess from other layered reconstructions.
+    if (reference.spectralRolloffHz > 500.0f && reference.spectralRolloffHz < 15000.0f)
+    {
+        const float target = juce::jlimit (1800.0f, 15000.0f,
+                                           reference.spectralRolloffHz * (strategy == 6 ? 0.88f : 1.04f));
+        add (1, 0, moduleAmountForCutoff (target), 0.0f, 0.04f, strategy == 6 ? 0.78f : 0.48f);
+    }
+
+    // Glue, width and tail are conservative seeds; rack evolution can remove them
+    // by driving their mix to zero if the musical reference score rejects them.
+    if (reference.transientScore < 0.72f || reference.sustainLevel > 0.48f)
+        add (13, 0, juce::jlimit (0.10f, 0.42f, 0.18f + reference.sustainLevel * 0.22f),
+             juce::jlimit (0.03f, 0.22f, 0.04f + reference.transientScore * 0.14f), 0.32f, 0.28f);
+
+    if (reference.stereoWidth > 0.18f || reference.spectralMotion > 0.07f)
+        add (6, 1, juce::jlimit (0.06f, 0.34f, reference.stereoWidth * 0.22f + reference.spectralMotion * 0.55f),
+             juce::jlimit (0.04f, 0.32f, 0.08f + reference.spectralMotion * 1.2f), 0.06f,
+             juce::jlimit (0.04f, 0.24f, reference.stereoWidth * 0.16f));
+
+    const float tailNeed = juce::jlimit (0.0f, 1.0f,
+        reference.releaseSeconds / juce::jmax (0.12f, juce::jmin (2.5f, reference.duration + 0.15f)) * 1.8f);
+    if (tailNeed > 0.15f)
+    {
+        if (strategy == 6 || reference.spectralMotion > 0.10f)
+            add (8, 1, juce::jlimit (0.05f, 0.48f, 0.10f + tailNeed * 0.26f), 0.56f,
+                 juce::jlimit (0.08f, 0.45f, tailNeed * 0.32f), juce::jlimit (0.04f, 0.22f, tailNeed * 0.16f));
+        add (9, 1, juce::jlimit (0.12f, 0.72f, 0.20f + tailNeed * 0.46f),
+             juce::jlimit (0.18f, 0.78f, 0.52f - reference.highEnergyRatio * 0.32f),
+             juce::jlimit (0.25f, 0.92f, 0.46f + reference.stereoWidth * 0.28f),
+             juce::jlimit (0.04f, 0.30f, 0.06f + tailNeed * 0.22f));
+    }
+}
+
+VoiceParameters mutateGoldRack (const VoiceParameters& source, const SoundFeatures& reference,
+                                int strategy, juce::Random& random, float amount)
+{
+    auto rack = source;
+    rack.mainLayerGain = goldMutateLinear (rack.mainLayerGain, 0.42f, 1.0f, amount * 0.55f, random);
+
+    for (int layer = 0; layer < VoiceParameters::extraLayerCount; ++layer)
+    {
+        if (! rack.layers[(size_t) layer]) continue;
+        rack.layerGain[(size_t) layer] = goldMutateLinear (rack.layerGain[(size_t) layer], 0.0f, 0.72f, amount, random);
+        rack.layerAmount[(size_t) layer] = goldMutateLinear (rack.layerAmount[(size_t) layer], 0.28f, 1.0f, amount * 0.72f, random);
+        rack.layerPan[(size_t) layer] = goldMutateLinear (rack.layerPan[(size_t) layer], -0.72f, 0.72f, amount * 0.55f, random);
+        rack.layerTune[(size_t) layer] = goldMutateLinear (rack.layerTune[(size_t) layer], -24.0f, 24.0f, amount * 0.16f, random);
+
+        if (random.nextFloat() < 0.50f)
+        {
+            auto voice = std::make_shared<VoiceParameters> (*rack.layers[(size_t) layer]);
+            voice->layers.fill (nullptr); voice->mainLayerGain = 1.0f; voice->globalFxModules = {};
+            voice->outputGainDb = goldMutateLinear (voice->outputGainDb, -16.0f, 2.0f, amount * 0.45f, random);
+            voice->referenceWavetableMix = goldMutateLinear (voice->referenceWavetableMix, 0.0f, 1.0f, amount * 0.55f, random);
+            voice->wavetableMix = goldMutateLinear (voice->wavetableMix, 0.0f, 1.0f, amount * 0.45f, random);
+            voice->wavetablePosition = goldMutateLinear (voice->wavetablePosition, 0.0f, 1.0f, amount * 0.42f, random);
+            voice->fmMix = goldMutateLinear (voice->fmMix, 0.0f, 1.0f, amount * 0.42f, random);
+            voice->fmAmount = goldMutateLinear (voice->fmAmount, 0.0f, 0.65f, amount * 0.38f, random);
+            voice->noiseMix = goldMutateLinear (voice->noiseMix, 0.0f, 0.38f, amount * 0.28f, random);
+            voice->cutoff = goldMutateLog (voice->cutoff, 60.0f, 19500.0f, amount * 0.38f, random);
+            voice->resonance = goldMutateLinear (voice->resonance, 0.01f, 0.88f, amount * 0.28f, random);
+            voice->stereoWidth = goldMutateLinear (voice->stereoWidth, 0.4f, 1.8f, amount * 0.32f, random);
+            if (voice->mseg.enabled)
+            {
+                voice->msegDepth = goldMutateLinear (voice->msegDepth, -1.0f, 1.0f, amount * 0.40f, random);
+                for (auto& level : voice->mseg.levels)
+                    level = goldMutateLinear (level, 0.0f, 1.0f, amount * 0.20f, random);
+                for (auto& time : voice->mseg.times)
+                    time = goldMutateLog (time, 0.001f, 5.0f, amount * 0.18f, random);
+            }
+            rack.layers[(size_t) layer] = std::move (voice);
+        }
+    }
+
+    // The whole-instrument rack is part of the inverse problem. Mutate its
+    // parameters much more often than its topology so Gold converges rather than
+    // endlessly replacing useful filters/delays.
+    for (auto& module : rack.globalFxModules)
+    {
+        if (module.type == 0) continue;
+        module.amount = goldMutateLinear (module.amount, 0.0f, 1.0f, amount * 0.65f, random);
+        module.rate = goldMutateLinear (module.rate, 0.0f, 1.0f, amount * 0.48f, random);
+        module.feedback = goldMutateLinear (module.feedback, 0.0f, 1.0f, amount * 0.52f, random);
+        module.mix = goldMutateLinear (module.mix, 0.0f, 1.0f, amount * 0.70f, random);
+    }
+
+    if (random.nextFloat() < 0.10f)
+    {
+        const int slot = random.nextInt (FxModuleParameters::slotCount);
+        auto& module = rack.globalFxModules[(size_t) slot];
+        static const int sensibleTypes[] { 0, 1, 2, 3, 6, 8, 9, 13 };
+        module.type = sensibleTypes[random.nextInt ((int) std::size (sensibleTypes))];
+        module.stage = random.nextBool() ? 1 : 0;
+        module.bypass = false;
+        module.amount = random.nextFloat(); module.rate = random.nextFloat();
+        module.feedback = random.nextFloat() * 0.65f; module.mix = random.nextFloat() * 0.45f;
+    }
+
+    // Avoid uncontrolled layer-operation chaos. A rare crossfade/subtractive test
+    // is useful, while multiply/divide remain manual Patch Map sound-design tools.
+    if (random.nextFloat() < 0.06f)
+    {
+        const int layer = random.nextInt (VoiceParameters::extraLayerCount);
+        if (rack.layers[(size_t) layer]) rack.layerOperation[(size_t) layer] = random.nextInt (3);
+    }
+
+    if (strategy == 6 && reference.transientScore > 0.35f)
+    {
+        // Keep the pick contour important while still allowing Gold to tune it.
+        rack.mseg.enabled = true;
+        rack.msegDepth = goldMutateLinear (rack.msegDepth, 0.35f, 1.0f, amount * 0.28f, random);
+    }
+    return rack;
+}
+
+MatchResult evolveGoldRack (const SoundFeatures& reference, MatchResult seed, const MatchSettings& settings,
+                            int iterations, int64 randomSeed,
+                            SoundMatcher::ProgressCallback progress = {}, SoundMatcher::CancelCallback cancel = {})
+{
+    seed.fullRackScore = true;
+    auto best = seed;
+    juce::Random random (randomSeed);
+    int evaluated = 0;
+    int stagnant = 0;
+
+    for (int i = 0; i < iterations; ++i)
+    {
+        if (cancel && cancel()) break;
+        const float phase = (float) i / (float) juce::jmax (1, iterations - 1);
+        float amount = juce::jmap (phase, 0.0f, 1.0f, 0.105f, 0.012f);
+        if (stagnant > 10) amount = juce::jmax (amount, 0.050f);
+
+        const auto mutated = mutateGoldRack (best.params, reference, best.algorithm, random, amount);
+        auto candidate = SoundMatcher::evaluateFit (reference, mutated, settings);
+        candidate.algorithm = best.algorithm;
+        candidate.complexity = best.complexity;
+        candidate.fullRackScore = true;
+        candidate.evaluatedCandidates += best.evaluatedCandidates + evaluated + 1;
+        if (candidate.similarity.total > best.similarity.total)
+        {
+            best = std::move (candidate);
+            stagnant = 0;
+        }
+        else ++stagnant;
+        ++evaluated;
+        if (progress) progress ((float) (i + 1) / (float) juce::jmax (1, iterations));
+    }
+
+    best.explanation = "GOLD rack-level evolution: after method and depth selection, the complete instrument was re-rendered while optimizing main/layer balance, pan, tune, role timbre, MSEG motion and a whole-instrument filter/FX bus. " + best.explanation;
+    return best;
 }
 
 class OversamplingQualityEditor final : public RetroMatchSynthAudioProcessorEditor
@@ -1179,6 +1381,28 @@ void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainR
     for (const auto& layer : mainResult.params.layers) hasEmbeddedRack |= layer != nullptr;
     if (hasEmbeddedRack)
     {
+        if (mainResult.fullRackScore)
+        {
+            auto setGlobal = [this] (const juce::String& id, float value)
+            {
+                if (auto* parameter = apvts.getParameter (id))
+                    parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+            };
+            for (int i = 0; i < FxModuleParameters::slotCount; ++i)
+            {
+                const auto prefix = "globalFxModule" + juce::String (i + 1);
+                const auto& module = mainResult.params.globalFxModules[(size_t) i];
+                setGlobal (prefix + "Type", (float) module.type);
+                setGlobal (prefix + "Stage", (float) module.stage);
+                setGlobal (prefix + "Bypass", module.bypass ? 1.0f : 0.0f);
+                setGlobal (prefix + "Amount", module.amount);
+                setGlobal (prefix + "Rate", module.rate);
+                setGlobal (prefix + "Feedback", module.feedback);
+                setGlobal (prefix + "Mix", module.mix);
+                setGlobal (prefix + "TempoSync", module.tempoSync ? 1.0f : 0.0f);
+                setGlobal (prefix + "Division", (float) module.tempoDivision);
+            }
+        }
         if (auto* mainGain = apvts.getParameter ("mainLayerGain"))
             mainGain->setValueNotifyingHost (mainGain->convertTo0to1 (mainResult.params.mainLayerGain));
 
@@ -1807,7 +2031,7 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildGoldCandidateBank
         for (int complexity = 0; complexity < 4; ++complexity)
         {
             if (cancel && cancel()) return {};
-            auto rack = makeEmbeddedResynthRack (deep, complexity, method, deep.params.referenceWavetable);
+            auto rack = makeEmbeddedResynthRack (deep, reference, complexity, method, deep.params.referenceWavetable);
             auto scoreSettings = matchSettings;
             scoreSettings.algorithm = method;
             auto full = SoundMatcher::evaluateFit (reference, rack, scoreSettings);
@@ -1821,8 +2045,18 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildGoldCandidateBank
             if (full.similarity.total > bestFull.similarity.total) bestFull = std::move (full);
 
             const float rackProgress = ((float) index * 4.0f + (float) complexity + 1.0f) / 12.0f;
-            if (progress) progress (0.75f + rackProgress * 0.25f);
+            if (progress) progress (0.75f + rackProgress * 0.12f);
         }
+        // Stage 3: evolve the complete chosen rack, not only the main voice.
+        // This is deliberately bounded: Gold is exhaustive, but still needs a predictable ceiling.
+        auto rackSettings = matchSettings; rackSettings.algorithm = method;
+        const int rackIterations = 28;
+        const float rackBase = 0.87f + (float) index * (0.13f / 3.0f);
+        const float rackSpan = 0.13f / 3.0f;
+        bestFull = evolveGoldRack (reference, std::move (bestFull), rackSettings, rackIterations,
+                                   (int64) 0x474f4c445241434b + (int64) method * 4099,
+                                   [progress, rackBase, rackSpan] (float p)
+                                   { if (progress) progress (rackBase + rackSpan * p); }, cancel);
         finals.push_back (std::move (bestFull));
     }
 
