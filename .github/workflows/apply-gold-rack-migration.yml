@@ -16,21 +16,54 @@ jobs:
         with:
           ref: validation/gold-rack-evolution-20260908
           fetch-depth: 0
-      - name: Tighten render-tail migration anchor
+      - name: Tighten migration anchors
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('scripts/apply-gold-rack-evolution-20260908.py')
-          text = path.read_text(encoding='utf-8')
+
+          migration = Path('scripts/apply-gold-rack-evolution-20260908.py')
+          text = migration.read_text(encoding='utf-8')
           old = '    "        }\\n    }\\n}\\n",\n    "        }\\n    }\\n\\n"'
           new = '    "                output[n] = a + amount * (combined - a);\\n            }\\n        }\\n    }\\n}\\n",\n    "                output[n] = a + amount * (combined - a);\\n            }\\n        }\\n    }\\n\\n"'
           if text.count(old) != 1:
               raise SystemExit(f'expected one ambiguous render-tail migration marker, got {text.count(old)}')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          migration.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          processor = Path('Source/PluginProcessor.cpp')
+          source = processor.read_text(encoding='utf-8')
+          marker = '    const int wantedLayers = juce::jmin (VoiceParameters::extraLayerCount, totalInstances - 1);'
+          fn = source.find('VoiceParameters makeEmbeddedResynthRack')
+          if fn < 0:
+              raise SystemExit('makeEmbeddedResynthRack not found')
+          target = source.find(marker, fn)
+          positions = []
+          pos = source.find(marker)
+          while pos >= 0:
+              positions.append(pos)
+              pos = source.find(marker, pos + 1)
+          if len(positions) != 2 or target not in positions:
+              raise SystemExit(f'unexpected wantedLayers markers: positions={positions}, target={target}')
+          guard = marker + ' // GOLD_MIGRATION_GUARD'
+          for pos in reversed(positions):
+              if pos != target:
+                  source = source[:pos] + guard + source[pos + len(marker):]
+          processor.write_text(source, encoding='utf-8')
           PY
       - name: Apply staged migration
         run: python3 scripts/apply-gold-rack-evolution-20260908.py
+      - name: Remove temporary source guard
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('Source/PluginProcessor.cpp')
+          text = path.read_text(encoding='utf-8')
+          guard = ' // GOLD_MIGRATION_GUARD'
+          if text.count(guard) != 1:
+              raise SystemExit(f'expected one migration guard, got {text.count(guard)}')
+          path.write_text(text.replace(guard, '', 1), encoding='utf-8')
+          PY
       - name: Static source integrity
         run: python3 scripts/static-check.py
       - name: Remove migration scaffolding and commit generated source
