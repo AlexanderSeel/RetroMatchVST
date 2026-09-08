@@ -13,7 +13,8 @@ struct MatchSettings
     double renderSampleRate = 44100.0;
     float maxRenderSeconds = 12.0f;
     // 0 balanced hybrid, 1 reference wavetable, 2 subtractive/spectral,
-    // 3 FM/harmonic, 4 layered studio, 5 texture/chopped wavetable.
+    // 3 FM/harmonic, 4 layered studio, 5 texture/chopped wavetable,
+    // 6 FX/guitar chain with diagnostic excitation scoring.
     int algorithm = 0;
 
     bool lockPitch = false;
@@ -32,6 +33,7 @@ struct MatchResult
     SimilarityBreakdown similarity;
     float confidence = 0.0f;
     int evaluatedCandidates = 0;
+    float effectProbeSimilarity = -1.0f;
     juce::String explanation;
 };
 

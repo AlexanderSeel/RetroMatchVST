@@ -5,6 +5,8 @@
 #include "../Source/Engine/PresetLibrary.h"
 #include "../Source/Matching/OfflineRenderer.h"
 #include "../Source/Matching/SoundMatcher.h"
+#include "../Source/Matching/EffectChainProbe.h"
+#include "../Source/Matching/ResynthesisAdvisor.h"
 #include <cmath>
 #include <iostream>
 
@@ -51,6 +53,23 @@ bool runMelodyTests();
 int main (int argc, char** argv)
 {
     if (! runMelodyTests()) return 1;
+    {
+        SoundFeatures guitar;
+        guitar.duration = 1.8f; guitar.fundamentalHz = 110.0f; guitar.pitchConfidence = 0.84f;
+        guitar.harmonicity = 0.68f; guitar.inharmonicity = 0.16f; guitar.transientScore = 0.72f;
+        guitar.spectralFlatness = 0.12f; guitar.spectralCentroidHz = 1850.0f; guitar.spectralRolloffHz = 6200.0f;
+        guitar.lowEnergyRatio = 0.20f; guitar.highEnergyRatio = 0.16f; guitar.zeroCrossingRate = 0.08f;
+        guitar.attackSeconds = 0.004f; guitar.decaySeconds = 0.34f; guitar.sustainLevel = 0.46f; guitar.releaseSeconds = 0.52f;
+        guitar.stereoWidth = 0.34f; guitar.spectralMotion = 0.08f;
+        const auto advice = ResynthesisAdvisor::advise (guitar);
+        if (advice.method != 6 || advice.complexity < 1) return fail ("guitar-like reference was not routed to FX / Guitar Chain");
+        auto seed = SoundMatcher::initialFit (guitar).params;
+        MatchSettings fxSettings; fxSettings.algorithm = 6; fxSettings.iterations = 0; fxSettings.topologyTrials = 0;
+        fxSettings.populationSize = 2; fxSettings.renderSampleRate = 12000.0; fxSettings.maxRenderSeconds = 0.5f;
+        const auto fxMatch = SoundMatcher::refineFit (guitar, seed, fxSettings);
+        if (! std::isfinite (fxMatch.effectProbeSimilarity) || fxMatch.effectProbeSimilarity < 0.0f || fxMatch.effectProbeSimilarity > 1.0f)
+            return fail ("FX / Guitar Chain diagnostic probe score invalid");
+    }
     {
         VoiceParameters tone; tone.osc1Wave = 1; tone.osc2Mix = 0; tone.release = 0.02f;
         const auto dry = OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220);

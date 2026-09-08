@@ -167,7 +167,7 @@ public:
                     286, 11, getWidth() - 308, 24, juce::Justification::centredRight, true);
 
         const juce::StringArray methods { "Balanced Hybrid", "Reference Wavetable", "Spectral Subtractive",
-                                           "FM / Harmonic", "Layered Studio", "Texture / Chop" };
+                                           "FM / Harmonic", "Layered Studio", "Texture / Chop", "FX / Guitar Chain" };
         const juce::StringArray depths { "Classic / 1-3", "Studio / 4", "Deep / 6", "Maximum / 8" };
         const int methodIndex = juce::jlimit (0, methods.size() - 1, (int) std::lround (proc.apvts.getRawParameterValue ("resynthStrategy")->load()));
         const int depthIndex = juce::jlimit (0, depths.size() - 1, (int) std::lround (proc.apvts.getRawParameterValue ("resynthComplexity")->load()));

@@ -44,9 +44,9 @@ public:
         addAndMakeVisible (resynthInstances); resynthInstances.addItemList ({ "1 / SINGLE", "2 / LAYERED", "3 / DEEP LAYERED" }, 1);
         resynthAttachment = std::make_unique<ComboAttachment> (proc.apvts, "resynthInstances", resynthInstances);
         addAndMakeVisible (strategyLabel); strategyLabel.setText ("RESYNTH METHOD", juce::dontSendNotification); strategyLabel.setJustificationType (juce::Justification::centredRight);
-        addAndMakeVisible (strategy); strategy.addItemList ({ "BALANCED HYBRID", "REFERENCE WAVETABLE", "SPECTRAL SUBTRACTIVE", "FM / HARMONIC", "LAYERED STUDIO", "TEXTURE / CHOP" }, 1);
+        addAndMakeVisible (strategy); strategy.addItemList ({ "BALANCED HYBRID", "REFERENCE WAVETABLE", "SPECTRAL SUBTRACTIVE", "FM / HARMONIC", "LAYERED STUDIO", "TEXTURE / CHOP", "FX / GUITAR CHAIN" }, 1);
         strategyAttachment = std::make_unique<ComboAttachment> (proc.apvts, "resynthStrategy", strategy);
-        strategy.setTooltip ("Changes the search topology. Reference Wavetable and Texture/Chop deliberately lean on cycles extracted from the selected sample region.");
+        strategy.setTooltip ("Changes the search topology. Reference Wavetable and Texture/Chop lean on extracted cycles; FX/Guitar Chain rebuilds an inspectable ordered pedal/amp-style rack and uses diagnostic excitation scoring.");
         addAndMakeVisible (complexityLabel); complexityLabel.setText ("STACK DEPTH", juce::dontSendNotification); complexityLabel.setJustificationType (juce::Justification::centredRight);
         addAndMakeVisible (complexity); complexity.addItemList ({ "CLASSIC / 1-3", "STUDIO / 4", "DEEP / 6", "MAXIMUM / 8" }, 1);
         complexityAttachment = std::make_unique<ComboAttachment> (proc.apvts, "resynthComplexity", complexity);

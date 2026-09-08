@@ -5,6 +5,7 @@
 #include "ReferenceRegion.h"
 #include "../AI/AISettings.h"
 #include "../AI/AISeedProvider.h"
+#include "../Matching/ResynthesisAdvisor.h"
 #include <array>
 #include <atomic>
 #include <tuple>
@@ -227,7 +228,7 @@ private:
     juce::Slider masterOutput;
     juce::Label masterOutputLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterOutputAttachment;
-    juce::Label resynthStrategyLabel, resynthComplexityLabel;
+    juce::Label resynthStrategyLabel, resynthComplexityLabel, resynthAdvice;
     juce::ComboBox resynthStrategyChoice, resynthComplexityChoice;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> resynthStrategyAttachment, resynthComplexityAttachment;
     int displayedPalette = -1;

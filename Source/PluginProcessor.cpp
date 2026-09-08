@@ -38,6 +38,7 @@ float referenceTableWeight (const SoundFeatures& f, int strategy)
     if (strategy == 3) weight *= 0.28f;
     if (strategy == 4) weight = juce::jmax (0.36f, weight);
     if (strategy == 5) weight = juce::jmax (0.62f, weight);
+    if (strategy == 6) weight = juce::jmax (0.34f, weight * 0.78f);
     return juce::jlimit (0.0f, 0.92f, weight);
 }
 
@@ -49,6 +50,15 @@ VoiceParameters makeResynthCompanion (const VoiceParameters& source, int role, i
     p.referenceWavetable = table;
     p.outputGainDb = juce::jlimit (-12.0f, -4.0f, source.outputGainDb - 1.5f);
     p.delayMix *= 0.65f; p.reverbMix *= 0.75f;
+    if (strategy == 6)
+    {
+        // The main guitar-like voice owns the audible pedal/amp chain. Companion
+        // layers contribute body/air/foundation without multiplying every tail.
+        for (auto& module : p.fxModules)
+            if (module.type == 6 || module.type == 7 || module.type == 8 || module.type == 9) module.mix *= 0.32f;
+            else module.mix *= 0.68f;
+        p.chorusMix = p.delayMix = p.reverbMix = 0.0f;
+    }
 
     switch (role % 7)
     {
@@ -1127,7 +1137,7 @@ void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainR
     const int legacyInstances = juce::jlimit (1, 3, 1 + (int) apvts.getRawParameterValue ("resynthInstances")->load());
     const int complexity = juce::jlimit (0, 3, (int) apvts.getRawParameterValue ("resynthComplexity")->load());
     const int totalInstances = complexity == 0 ? legacyInstances : (complexity == 1 ? 4 : complexity == 2 ? 6 : 8);
-    const int strategy = juce::jlimit (0, 5, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
+    const int strategy = juce::jlimit (0, 6, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
 
     std::array<int, 2> complement {{ -1, -1 }};
     int complementCount = 0;
@@ -1183,7 +1193,7 @@ MatchResult RetroMatchSynthAudioProcessor::fitReference()
     if (! currentFeatures) return {};
     auto seed = SoundMatcher::initialFit (*currentFeatures);
     const auto authored = getMainVoiceParameters();
-    const int strategy = juce::jlimit (0, 5, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
+    const int strategy = juce::jlimit (0, 6, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
     auto strategyTable = referenceWavetable;
     if (strategy == 5 && loadedReferenceFile.existsAsFile())
         if (auto chopped = ReferenceWavetableExtractor::chop (loadedReferenceFile, analysisStartSeconds.load(), analysisEndSeconds.load()))
@@ -1204,7 +1214,7 @@ MatchResult RetroMatchSynthAudioProcessor::refineReference (SoundMatcher::Progre
 {
     if (! currentFeatures) return {};
     auto settings = matchSettings;
-    const int strategy = juce::jlimit (0, 5, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
+    const int strategy = juce::jlimit (0, 6, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
     settings.algorithm = strategy;
     const auto reference = *currentFeatures;
     const auto authored = getMainVoiceParameters();
@@ -1420,7 +1430,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
     // Append-only professional resynthesis / master section. Existing automation indices stay intact.
     l.add (std::make_unique<C> ("resynthStrategy", "Resynthesis Strategy",
         juce::StringArray { "Balanced Hybrid", "Reference Wavetable", "Spectral Subtractive",
-                            "FM / Harmonic", "Layered Studio", "Texture / Chop" }, 0));
+                            "FM / Harmonic", "Layered Studio", "Texture / Chop", "FX / Guitar Chain" }, 0));
     l.add (std::make_unique<C> ("resynthComplexity", "Resynthesis Complexity",
         juce::StringArray { "Classic / legacy 1-3", "Studio / 4 instances", "Deep / 6 instances", "Maximum / 8 instances" }, 0));
     l.add (std::make_unique<P> ("masterOutputGain", "Master Output",

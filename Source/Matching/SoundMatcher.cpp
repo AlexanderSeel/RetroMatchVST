@@ -1,5 +1,6 @@
 #include "SoundMatcher.h"
 #include "OfflineRenderer.h"
+#include "EffectChainProbe.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -49,7 +50,7 @@ float mutateLog (float value, float minValue, float maxValue, float amount, juce
 
 void applyAlgorithmProfile (VoiceParameters& p, int algorithm, const SoundFeatures& reference)
 {
-    algorithm = juce::jlimit (0, 5, algorithm);
+    algorithm = juce::jlimit (0, 6, algorithm);
     const bool hasReferenceTable = p.referenceWavetable && p.referenceWavetable->valid;
     const float motion = juce::jlimit (0.0f, 1.0f, reference.spectralMotion * 2.5f);
 
@@ -117,6 +118,110 @@ void applyAlgorithmProfile (VoiceParameters& p, int algorithm, const SoundFeatur
                                    juce::jlimit (0.10f, 0.42f, 0.12f + motion * 0.30f) };
             p.extraLfoRate[0] = juce::jlimit (0.05f, 1.8f, 0.10f + reference.spectralMotion * 2.4f);
             break;
+
+
+        case 6: // FX / guitar chain: rebuild body first, then an ordered pedal/amp-style chain.
+        {
+            if (hasReferenceTable)
+                p.referenceWavetableMix = juce::jmax (p.referenceWavetableMix,
+                    juce::jlimit (0.28f, 0.56f, 0.28f + reference.pitchConfidence * 0.22f + reference.harmonicity * 0.08f));
+            p.supersawMix *= 0.35f;
+            p.fmMix *= 0.58f;
+            p.noiseMix = juce::jmin (0.12f, p.noiseMix);
+            p.outputGainDb = juce::jmin (p.outputGainDb, -4.5f);
+
+            if (reference.transientScore > 0.24f)
+            {
+                p.mseg.enabled = true;
+                p.mseg.loopEnabled = false;
+                p.msegTarget = (int) ModDestination::amplitude;
+                p.msegDepth = juce::jlimit (0.55f, 0.95f, 0.58f + reference.transientScore * 0.34f);
+                p.mseg.levels = {{ 0.0f, 1.0f, 0.72f, 0.56f, juce::jlimit (0.18f, 0.72f, reference.sustainLevel), 0.0f }};
+                p.mseg.times = {{ juce::jlimit (0.002f, 0.060f, reference.attackSeconds),
+                                  juce::jlimit (0.018f, 0.24f, reference.decaySeconds * 0.30f),
+                                  juce::jlimit (0.030f, 0.45f, reference.decaySeconds * 0.72f),
+                                  juce::jlimit (0.08f, 1.2f, reference.duration * 0.18f),
+                                  juce::jlimit (0.04f, 1.8f, reference.releaseSeconds) }};
+                p.mseg.curves = {{ -0.42f, 0.18f, -0.08f, 0.06f, -0.24f }};
+            }
+
+            auto prime = [] (FxModuleParameters& module, int type, int stage,
+                             float amount, float rate, float feedback, float mix)
+            {
+                if (module.type != type)
+                {
+                    module = {};
+                    module.type = type;
+                    module.amount = amount; module.rate = rate; module.feedback = feedback; module.mix = mix;
+                }
+                else
+                {
+                    module.amount = juce::jlimit (0.0f, 1.0f, module.amount * 0.78f + amount * 0.22f);
+                    module.rate = juce::jlimit (0.0f, 1.0f, module.rate * 0.82f + rate * 0.18f);
+                    module.feedback = juce::jlimit (0.0f, 1.0f, module.feedback * 0.82f + feedback * 0.18f);
+                    module.mix = juce::jlimit (0.0f, 1.0f, module.mix * 0.82f + mix * 0.18f);
+                }
+                module.stage = stage;
+                module.bypass = false;
+            };
+
+            auto amountForCutoff = [] (float hz)
+            {
+                return juce::jlimit (0.0f, 1.0f, std::log (juce::jlimit (30.0f, 18000.0f, hz) / 30.0f) / std::log (600.0f));
+            };
+
+            const float hpHz = juce::jlimit (45.0f, 180.0f, 55.0f + juce::jmax (0.0f, 0.18f - reference.lowEnergyRatio) * 620.0f);
+            const float cabHz = juce::jlimit (2600.0f, 10500.0f,
+                                              reference.spectralRolloffHz > 800.0f ? reference.spectralRolloffHz * 0.82f
+                                                                                  : reference.spectralCentroidHz * 2.6f + 1900.0f);
+            const float compression = juce::jlimit (0.18f, 0.62f, 0.46f - reference.transientScore * 0.18f + reference.sustainLevel * 0.18f);
+            const int driveType = reference.inharmonicity > 0.24f && reference.highEnergyRatio > 0.10f ? 4 : 3;
+            const float driveAmount = juce::jlimit (0.08f, 0.68f,
+                                                    0.08f + reference.inharmonicity * 1.25f
+                                                          + juce::jmax (0.0f, reference.highEnergyRatio - 0.08f) * 1.10f);
+
+            prime (p.fxModules[0], 2, 0, amountForCutoff (hpHz), 0.0f, 0.06f, 1.0f);                    // HPF
+            prime (p.fxModules[1], 13, 0, compression, 0.05f + reference.transientScore * 0.10f,
+                   0.20f + reference.sustainLevel * 0.24f, 0.72f);                                      // compressor
+            prime (p.fxModules[2], driveType, 0, driveAmount,
+                   juce::jlimit (0.18f, 0.86f, 0.60f - reference.highEnergyRatio * 0.55f), 0.50f,
+                   juce::jlimit (0.32f, 0.92f, 0.38f + driveAmount * 0.72f));                            // drive
+            prime (p.fxModules[3], 1, 0, amountForCutoff (cabHz), 0.0f, 0.05f, 1.0f);                    // cab / speaker LPF
+
+            const bool wantsModulation = reference.stereoWidth > 0.16f || reference.spectralMotion > 0.055f;
+            if (wantsModulation)
+                prime (p.fxModules[4], 6, 1,
+                       juce::jlimit (0.08f, 0.42f, 0.08f + reference.stereoWidth * 0.26f),
+                       juce::jlimit (0.04f, 0.35f, 0.08f + reference.spectralMotion * 1.5f), 0.08f,
+                       juce::jlimit (0.06f, 0.28f, 0.06f + reference.stereoWidth * 0.18f));
+            else p.fxModules[4] = {};
+
+            const bool wantsDelay = reference.releaseSeconds > 0.20f && (reference.stereoWidth > 0.10f || reference.duration > 0.70f);
+            if (wantsDelay)
+            {
+                const float delaySeconds = juce::jlimit (0.09f, 0.52f, 0.11f + reference.releaseSeconds * 0.22f + reference.spectralMotion * 0.70f);
+                prime (p.fxModules[5], 8, 1, (delaySeconds - 0.01f) / 1.99f, 0.58f,
+                       juce::jlimit (0.10f, 0.58f, 0.12f + reference.releaseSeconds * 0.26f),
+                       juce::jlimit (0.06f, 0.34f, 0.07f + reference.stereoWidth * 0.14f + reference.releaseSeconds * 0.10f));
+            }
+            else p.fxModules[5] = {};
+
+            const bool wantsReverb = reference.releaseSeconds > 0.16f || reference.stereoWidth > 0.16f;
+            if (wantsReverb)
+                prime (p.fxModules[6], 9, 1,
+                       juce::jlimit (0.14f, 0.72f, 0.18f + reference.releaseSeconds * 0.30f),
+                       juce::jlimit (0.18f, 0.82f, 0.62f - reference.highEnergyRatio * 0.55f),
+                       juce::jlimit (0.18f, 0.92f, 0.30f + reference.stereoWidth * 0.48f),
+                       juce::jlimit (0.06f, 0.38f, 0.08f + reference.releaseSeconds * 0.13f + reference.stereoWidth * 0.12f));
+            else p.fxModules[6] = {};
+            p.fxModules[7] = {};
+
+            // Keep this strategy's effects in one inspectable modular chain so the
+            // white-noise/impulse probe measures the same chain the user sees in FX RACK.
+            p.drive = 0.0f; p.chorusMix = 0.0f; p.delayMix = 0.0f; p.reverbMix = 0.0f;
+            p.stereoWidth = juce::jmax (1.0f, p.stereoWidth);
+            break;
+        }
 
         default: // Balanced hybrid: use a reference table whenever it is meaningful.
             if (hasReferenceTable)
@@ -273,6 +378,13 @@ MatchResult SoundMatcher::evaluateFit (const SoundFeatures& reference, const Voi
     result.candidateFeatures = SampleAnalyzer::analyzeBuffer (audio, settings.renderSampleRate, reference.fundamentalHz);
 
     result.similarity = SimilarityScorer::compare (reference, result.candidateFeatures);
+    if (settings.algorithm == 6)
+    {
+        result.effectProbeSimilarity = EffectChainProbe::score (reference, params);
+        // The musical render remains dominant. The probe only separates effect-chain
+        // colour/tail candidates that can look similar from one played note.
+        result.similarity.total = juce::jlimit (0.0f, 1.0f, result.similarity.total * 0.86f + result.effectProbeSimilarity * 0.14f);
+    }
     result.confidence = result.similarity.total;
     result.evaluatedCandidates = 1;
     return result;
@@ -614,6 +726,8 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
     best.evaluatedCandidates = evaluated;
     best.confidence = best.similarity.total;
     best.explanation = "Population closed-loop match: candidate patches are rendered, re-analysed, ranked and evolved across VA, wavetable, supersaw/unison, wavefolding, additive and six-operator FM (including operator envelopes/fixed modes) plus modulation-route topology, independent LFOs, MSEG shapes and modular pre/post effects against global spectrum, time-varying spectrum, cepstral timbre, envelope, harmonic, pitch and stereo descriptors.";
+    if (settings.algorithm == 6)
+        best.explanation += " FX / Guitar Chain additionally compares deterministic white-noise transfer colour and impulse-tail behaviour, while keeping that diagnostic score secondary to the rendered musical match.";
     if (progress) progress (1.0f);
     return best;
 }

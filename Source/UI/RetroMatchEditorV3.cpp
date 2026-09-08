@@ -443,14 +443,21 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     resynthStrategyLabel.setColour (juce::Label::textColourId, goldColour (*this));
     resynthComplexityLabel.setColour (juce::Label::textColourId, goldColour (*this));
     resynthStrategyChoice.addItemList ({ "Balanced Hybrid", "Reference Wavetable", "Spectral Subtractive",
-                                         "FM / Harmonic", "Layered Studio", "Texture / Chop" }, 1);
+                                         "FM / Harmonic", "Layered Studio", "Texture / Chop", "FX / Guitar Chain" }, 1);
     resynthComplexityChoice.addItemList ({ "Classic / 1-3", "Studio / 4", "Deep / 6", "Maximum / 8" }, 1);
-    resynthStrategyChoice.setTooltip ("Resynthesis / matching topology used by Quick and Refine. Reference Wavetable and Texture / Chop deliberately use more of the loaded sample.");
+    resynthStrategyChoice.setTooltip ("Resynthesis / matching topology used by Quick and Refine. Reference Wavetable and Texture / Chop use the sample directly; FX / Guitar Chain searches an ordered compressor/drive/cab/mod/delay/reverb rack and adds white-noise/impulse diagnostic scoring.");
     resynthComplexityChoice.setTooltip ("How many complementary synth instances the resynthesis may build: legacy 1-3, 4, 6 or 8 layers.");
     resynthStrategyAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "resynthStrategy", resynthStrategyChoice);
     resynthComplexityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "resynthComplexity", resynthComplexityChoice);
     for (auto* c : std::array<juce::Component*, 4> { &resynthStrategyLabel, &resynthStrategyChoice, &resynthComplexityLabel, &resynthComplexityChoice })
         addAndMakeVisible (*c);
+    resynthAdvice.setText ("ADVISOR  load a reference", juce::dontSendNotification);
+    resynthAdvice.setJustificationType (juce::Justification::centredLeft);
+    resynthAdvice.setColour (juce::Label::textColourId, tealColour (*this));
+    resynthAdvice.setColour (juce::Label::backgroundColourId, juce::Colour (0xff0b1416));
+    resynthAdvice.setFont (juce::Font (juce::FontOptions (8.8f, juce::Font::bold)));
+    resynthAdvice.setMinimumHorizontalScale (0.66f);
+    addAndMakeVisible (resynthAdvice);
 
     load.onClick = [this] { chooseFile(); };
     quick.onClick = [this] { startVariantSearch (WorkMode::quick); };
@@ -1235,7 +1242,9 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     auto depthRow = w.removeFromTop (28);
     resynthComplexityLabel.setBounds (depthRow.removeFromLeft (62));
     resynthComplexityChoice.setBounds (depthRow.reduced (2, 1));
-    w.removeFromTop (5);
+    w.removeFromTop (3);
+    resynthAdvice.setBounds (w.removeFromTop (24).reduced (2, 1));
+    w.removeFromTop (4);
 
     referencePitchInfo.setBounds (w.removeFromTop (18));
     auto pitchRow = w.removeFromTop (28);
@@ -1588,7 +1597,7 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessorEditor::createLocalVaria
     seeds[2].referenceWavetableMix = proc.referenceWavetable ? juce::jmax (0.16f, base.referenceWavetableMix * 0.7f) : 0.0f;
 
     auto settings = proc.matchSettings;
-    const int strategy = juce::jlimit (0, 5, (int) paramValue (proc, "resynthStrategy", 0));
+    const int strategy = juce::jlimit (0, 6, (int) paramValue (proc, "resynthStrategy", 0));
     settings.algorithm = strategy;
     auto strategyTable = proc.referenceWavetable;
     if (strategy == 5 && proc.getReferenceFile().existsAsFile())
@@ -1600,7 +1609,7 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessorEditor::createLocalVaria
         if (strategyTable)
         {
             float target = 0.24f + reference.pitchConfidence * 0.16f + reference.harmonicity * 0.12f;
-            if (strategy == 1) target = 0.76f; else if (strategy == 2) target = 0.05f; else if (strategy == 3) target = 0.14f; else if (strategy == 4) target = 0.42f; else if (strategy == 5) target = 0.68f;
+            if (strategy == 1) target = 0.76f; else if (strategy == 2) target = 0.05f; else if (strategy == 3) target = 0.14f; else if (strategy == 4) target = 0.42f; else if (strategy == 5) target = 0.68f; else if (strategy == 6) target = 0.36f;
             seed.referenceWavetableMix = juce::jmax (seed.referenceWavetableMix, juce::jlimit (0.0f, 0.90f, target));
         }
     }
@@ -1859,6 +1868,20 @@ void RetroMatchSynthAudioProcessorEditor::timerCallback()
 {
     updateLightPalette();
     updateTypingKeyboard(); proc.refreshEditingLayer();
+    if (proc.currentFeatures)
+    {
+        const auto advice = ResynthesisAdvisor::advise (*proc.currentFeatures);
+        static const juce::StringArray depths { "CLASSIC 1-3", "STUDIO 4", "DEEP 6", "MAX 8" };
+        resynthAdvice.setText ("ADVISOR  " + advice.methodName().toUpperCase() + "  •  "
+                               + depths[juce::jlimit (0, depths.size() - 1, advice.complexity)] + "  •  "
+                               + juce::String (advice.matchability * 100.0f, 0) + "%", juce::dontSendNotification);
+        resynthAdvice.setTooltip (advice.sourceFamily + " — " + advice.reason);
+    }
+    else
+    {
+        resynthAdvice.setText ("ADVISOR  load a reference", juce::dontSendNotification);
+        resynthAdvice.setTooltip ("RetroMatch ranks synthesis topology and stack depth from the measured reference features.");
+    }
     const int selected = proc.getEditingLayer();
     const juce::uint32 colours[] { 0xff73d8ff, 0xffffbd65, 0xffc9a0ff, 0xff78f1c4, 0xffff91b8, 0xffa6cf75, 0xff94aaff, 0xffff9673 };
     const auto accent = juce::Colour (colours[juce::jlimit (0, 7, selected + 1)]);

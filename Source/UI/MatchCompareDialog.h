@@ -91,7 +91,7 @@ public:
                     juce::Justification::centredLeft);
 
         const juce::StringArray methods { "Balanced Hybrid", "Reference Wavetable", "Spectral Subtractive",
-                                           "FM / Harmonic", "Layered Studio", "Texture / Chop" };
+                                           "FM / Harmonic", "Layered Studio", "Texture / Chop", "FX / Guitar Chain" };
         const juce::StringArray depths { "Classic / 1-3", "Studio / 4", "Deep / 6", "Maximum / 8" };
         const int methodIndex = juce::jlimit (0, methods.size() - 1, (int) std::lround (proc.apvts.getRawParameterValue ("resynthStrategy")->load()));
         const int depthIndex = juce::jlimit (0, depths.size() - 1, (int) std::lround (proc.apvts.getRawParameterValue ("resynthComplexity")->load()));
@@ -262,9 +262,11 @@ private:
     void drawMetrics (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour led, juce::Colour gold)
     {
         const auto& s = proc.lastMatch.similarity;
+        const bool hasFxProbe = proc.lastMatch.effectProbeSimilarity >= 0.0f;
         const std::array<std::pair<const char*, float>, 8> values {{
             { "TOTAL", s.total }, { "SPECTRUM", s.spectrum }, { "TIMBRE", s.timbre }, { "TEMPORAL", s.temporal },
-            { "HARMONIC", s.harmonic }, { "ENVELOPE", s.envelope }, { "PITCH", s.pitch }, { "STEREO", s.stereo }
+            { "HARMONIC", s.harmonic }, { "ENVELOPE", s.envelope }, { "STEREO", s.stereo },
+            { hasFxProbe ? "FX PROBE" : "PITCH", hasFxProbe ? proc.lastMatch.effectProbeSimilarity : s.pitch }
         }};
 
         const int columns = 4;
