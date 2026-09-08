@@ -12,7 +12,9 @@ void processFilter (juce::AudioBuffer<float>& audio,
         juce::dsp::IIR::Filter<float> filter;
         filter.coefficients = coefficients;
         filter.reset();
-        filter.processSamples (audio.getWritePointer (ch), audio.getNumSamples());
+        auto* samples = audio.getWritePointer (ch);
+        for (int i = 0; i < audio.getNumSamples(); ++i)
+            samples[i] = filter.processSample (samples[i]);
     }
 }
 
