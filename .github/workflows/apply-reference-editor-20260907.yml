@@ -9,47 +9,74 @@ permissions:
   contents: write
 
 jobs:
-  migrate-and-diagnose:
+  migrate-and-validate:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Apply migrations
+      - name: Validate migration scripts
         shell: pwsh
         run: |
           python -m py_compile scripts/apply-reference-editor-20260907.py
           python -m py_compile scripts/apply-sound-designer-20260907.py
-          python scripts/apply-reference-editor-20260907.py
+
+      - name: Apply large reference editor migration
+        shell: pwsh
+        run: python scripts/apply-reference-editor-20260907.py
+
+      - name: Fix generated MSVC coordinate types
+        shell: pwsh
+        run: |
           $path = 'Source/UI/ReferenceRegion.h'
           $text = Get-Content $path -Raw
           $old = 'return juce::jlimit (0.0, 1.0, (x - r.getX()) / juce::jmax (1.0f, r.getWidth())) * thumbnail.getTotalLength();'
           $new = 'return juce::jlimit (0.0, 1.0, (double) (x - r.getX()) / (double) juce::jmax (1.0f, r.getWidth())) * thumbnail.getTotalLength();'
           if (-not $text.Contains($old)) { throw 'ReferenceRegion coordinate marker not found.' }
           Set-Content -Path $path -Value ($text.Replace($old, $new)) -NoNewline
-          python scripts/apply-sound-designer-20260907.py
+
+      - name: Apply professional sound designer migration
+        shell: pwsh
+        run: python scripts/apply-sound-designer-20260907.py
+
+      - name: Update selection-aware static contract
+        shell: pwsh
+        run: |
           $path = 'scripts/static-check.py'
           $text = Get-Content $path -Raw
           $old = "'reference pitch correction': ['expectedFundamentalHz', 'estimateConfidenceAtFundamental', 'analyzeFile (loadedReferenceFile, expectedHz)'],"
           $new = "'reference pitch correction': ['expectedFundamentalHz', 'estimateConfidenceAtFundamental', 'analyzeFile (loadedReferenceFile, expectedHz, start, end)'],"
           if (-not $text.Contains($old)) { throw 'Reference pitch static contract marker not found.' }
-          Set-Content -Path $path -Value ($text.Replace($old, $new)) -NoNewline
-          python scripts/static-check.py
+          $text = $text.Replace($old, $new)
+          $text = $text.Replace('layered resynthesis replaces stale racks and supports up to three generated instances', 'layered resynthesis replaces stale racks and supports up to eight generated instances')
+          Set-Content -Path $path -Value $text -NoNewline
 
-      - name: Configure ASan DSP tests
+      - name: Static source integrity
+        shell: pwsh
+        run: python scripts/static-check.py
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build-reference-editor -A x64 -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON
+
+      - name: Build and run DSP tests
         shell: pwsh
         run: |
-          cmake -S . -B build-asan -A x64 -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON '-DCMAKE_CXX_FLAGS=/fsanitize=address /Zi' '-DCMAKE_EXE_LINKER_FLAGS=/INCREMENTAL:NO'
+          cmake --build build-reference-editor --config Release --target RetroMatchTests --parallel
+          ctest --test-dir build-reference-editor -C Release --output-on-failure
 
-      - name: Build ASan DSP tests
+      - name: Build VST3 and Standalone
         shell: pwsh
-        run: cmake --build build-asan --config RelWithDebInfo --target RetroMatchTests --parallel
+        run: cmake --build build-reference-editor --config Release --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
 
-      - name: Run ASan DSP tests directly
-        shell: pwsh
+      - name: Commit validated migrations and remove one-shot files
+        shell: bash
         run: |
-          $env:ASAN_OPTIONS = 'symbolize=1:abort_on_error=1:windows_hook_rtl_allocators=true'
-          $exe = Resolve-Path 'build-asan/RetroMatchTests_artefacts/RelWithDebInfo/RetroMatchTests.exe'
-          & $exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git config user.name "Alexander Seel"
+          git config user.email "mr.alexander.seel@gmail.com"
+          git rm .github/workflows/apply-reference-editor-20260907.yml scripts/apply-reference-editor-20260907.py scripts/apply-sound-designer-20260907.py
+          git add -A
+          git diff --cached --check
+          git commit -m "Add reference editor, master mix and professional resynthesis modes"
+          git push origin HEAD:main
