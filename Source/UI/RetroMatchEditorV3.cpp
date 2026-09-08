@@ -119,7 +119,16 @@ void RetroMatchSynthAudioProcessorEditor::CandidateButton::paintButton (juce::Gr
     g.drawText (code, 27, 4, 28, 26, juce::Justification::centredLeft);
     g.setColour (juce::Colour (0xffb9c6c1));
     g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
-    g.drawText (family, 56, 6, getWidth() - 135, 18, juce::Justification::centredLeft, true);
+    juce::String familyText = family;
+    if (hasResult && result.algorithm >= 0)
+    {
+        const juce::StringArray methods { "Balanced Hybrid", "Reference Wavetable", "Spectral Subtractive",
+                                           "FM / Harmonic", "Layered Studio", "Texture / Chop", "FX / Guitar Chain" };
+        const juce::StringArray depths { "Classic / 1-3", "Studio / 4", "Deep / 6", "Maximum / 8" };
+        familyText = methods[juce::jlimit (0, methods.size() - 1, result.algorithm)];
+        if (result.fullRackScore && result.complexity >= 0) familyText << " / " << depths[juce::jlimit (0, 3, result.complexity)] << " / FULL RACK";
+    }
+    g.drawText (familyText, 56, 6, getWidth() - 135, 18, juce::Justification::centredLeft, true);
 
     g.setColour (hasResult ? goldColour (*this) : juce::Colour (0xff60706c));
     g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
@@ -130,7 +139,7 @@ void RetroMatchSynthAudioProcessorEditor::CandidateButton::paintButton (juce::Gr
     {
         g.setColour (juce::Colour (0xff657672));
         g.setFont (juce::Font (juce::FontOptions (10.0f)));
-        g.drawText ("Run Quick, Refine or AI", 28, 29, getWidth() - 40, getHeight() - 34, juce::Justification::centredLeft);
+        g.drawText ("Run Quick, Refine, Gold or AI", 28, 29, getWidth() - 40, getHeight() - 34, juce::Justification::centredLeft);
         return;
     }
 
@@ -377,7 +386,7 @@ void RetroMatchSynthAudioProcessorEditor::StereoMeter::paint (juce::Graphics& g)
 
 //==============================================================================
 RetroMatchSynthAudioProcessorEditor::VariantThread::VariantThread (RetroMatchSynthAudioProcessorEditor& ownerIn, WorkMode modeIn)
-    : juce::Thread (modeIn == WorkMode::ai ? "RetroMatch AI variants" : "RetroMatch local variants"), owner (ownerIn), mode (modeIn)
+    : juce::Thread (modeIn == WorkMode::ai ? "RetroMatch AI variants" : (modeIn == WorkMode::gold ? "RetroMatch Gold full-rack match" : "RetroMatch local variants")), owner (ownerIn), mode (modeIn)
 {
 }
 
@@ -462,8 +471,10 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     load.onClick = [this] { chooseFile(); };
     quick.onClick = [this] { startVariantSearch (WorkMode::quick); };
     refine.onClick = [this] { startVariantSearch (WorkMode::refine); };
+    goldMatch.onClick = [this] { startVariantSearch (WorkMode::gold); };
+    goldMatch.setTooltip ("Exhaustive heterogeneous search. Tries every resynthesis method, deeply optimizes the strongest three, tests all rack depths, then scores the completed multi-instance instrument.");
     aiVariants.onClick = [this] { startVariantSearch (WorkMode::ai); };
-    for (auto* button : { &load, &quick, &refine, &aiVariants }) addAndMakeVisible (*button);
+    for (auto* button : { &load, &quick, &refine, &goldMatch, &aiVariants }) addAndMakeVisible (*button);
 
     candidateA.onClick = [this] { selectCandidate (0); };
     candidateB.onClick = [this] { selectCandidate (1); };
@@ -1291,9 +1302,10 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     }
 
     auto actionRow = w.removeFromTop (32);
-    const int buttonW = actionRow.getWidth() / 4;
+    const int buttonW = actionRow.getWidth() / 5;
     quick.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     refine.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
+    goldMatch.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     aiVariants.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     compareMatch.setBounds (actionRow.reduced (2, 0));
     w.removeFromTop (5);
@@ -1563,10 +1575,11 @@ void RetroMatchSynthAudioProcessorEditor::startVariantSearch (WorkMode mode)
     matchProgress.store (0.0f);
     progressDisplay = 0.0;
     progressBar.setVisible (true);
-    for (auto* b : { &load, &quick, &refine, &aiVariants }) b->setEnabled (false);
+    for (auto* b : { &load, &quick, &refine, &goldMatch, &aiVariants }) b->setEnabled (false);
     status.setText (mode == WorkMode::quick ? "Quick matching: rendering three distinct local variants..."
                    : mode == WorkMode::refine ? "Refining three variant families with the closed-loop optimizer..."
-                                              : "AI is proposing three seeds; RetroMatch will render and score them locally...",
+                   : mode == WorkMode::gold ? "GOLD: sweeping all methods, deep-refining the strongest three and scoring every completed rack depth..."
+                                            : "AI is proposing three seeds; RetroMatch will render and score them locally...",
                     juce::dontSendNotification);
     worker = std::make_unique<VariantThread> (*this, mode);
     worker->startThread();
@@ -1640,6 +1653,20 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessorEditor::createLocalVaria
 
 void RetroMatchSynthAudioProcessorEditor::runVariantSearch (WorkMode mode, VariantThread& thread)
 {
+    if (mode == WorkMode::gold)
+    {
+        auto results = proc.buildGoldCandidateBank (
+            [this] (float p) { matchProgress.store (juce::jlimit (0.0f, 1.0f, p)); },
+            [&thread] { return thread.threadShouldExit(); });
+        if (thread.threadShouldExit()) return;
+        juce::Component::SafePointer<RetroMatchSynthAudioProcessorEditor> safe (this);
+        juce::MessageManager::callAsync ([safe, results = std::move (results)] () mutable
+        {
+            if (safe != nullptr) safe->finishVariantSearch (std::move (results), "GOLD / FULL RACK");
+        });
+        return;
+    }
+
     if (mode == WorkMode::ai)
     {
         const auto settingsCopy = aiSettings;
@@ -1675,7 +1702,7 @@ void RetroMatchSynthAudioProcessorEditor::finishVariantSearch (std::array<MatchR
                                                                const juce::String& error,
                                                                const juce::String& diagnostics)
 {
-    for (auto* b : { &load, &quick, &refine, &aiVariants }) b->setEnabled (true);
+    for (auto* b : { &load, &quick, &refine, &goldMatch, &aiVariants }) b->setEnabled (true);
     progressDisplay = error.isEmpty() ? 1.0 : 0.0;
     progressBar.setVisible (false);
 

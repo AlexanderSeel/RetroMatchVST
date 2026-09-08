@@ -156,6 +156,8 @@ public:
     MatchResult refineReference (SoundMatcher::ProgressCallback progress = {}, SoundMatcher::CancelCallback cancel = {});
     void applyMatchResult (const MatchResult&);
     std::array<MatchResult, 3> buildCandidateBank();
+    std::array<MatchResult, 3> buildGoldCandidateBank (SoundMatcher::ProgressCallback progress = {},
+                                                       SoundMatcher::CancelCallback cancel = {});
     bool selectCandidate (int index);
     void morphCandidates (int a, int b, float amount);
     VoiceParameters getCurrentVoiceParameters() const { return readParams(); }

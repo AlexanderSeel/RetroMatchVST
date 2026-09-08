@@ -27,7 +27,7 @@ public:
     void filesDropped (const juce::StringArray&, int, int) override;
 
 private:
-    enum class WorkMode { quick, refine, ai };
+    enum class WorkMode { quick, refine, gold, ai };
 
     class MidiLearnSlider final : public juce::Slider
     {
@@ -239,7 +239,7 @@ private:
     void updateLightPalette();
 
     // Persistent reference -> match -> audition workspace.
-    juce::TextButton load { "LOAD REFERENCE" }, quick { "QUICK x3" }, refine { "REFINE x3" }, aiVariants { "AI x3" }, compareMatch { "COMPARE" };
+    juce::TextButton load { "LOAD REFERENCE" }, quick { "QUICK x3" }, refine { "REFINE x3" }, goldMatch { "GOLD" }, aiVariants { "AI x3" }, compareMatch { "COMPARE" };
     CandidateButton candidateA { "A", "NATURAL" }, candidateB { "B", "FM / HARMONIC" }, candidateC { "C", "WT / TEXTURE" };
     juce::Slider candidateMorph;
     juce::Label candidateMorphLabel;

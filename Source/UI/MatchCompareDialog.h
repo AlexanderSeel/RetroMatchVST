@@ -97,7 +97,8 @@ public:
         const int depthIndex = juce::jlimit (0, depths.size() - 1, (int) std::lround (proc.apvts.getRawParameterValue ("resynthComplexity")->load()));
         g.setColour (juce::Colour (0xffc9d6d1));
         g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
-        g.drawText ("METHOD  " + methods[methodIndex] + "    /    DEPTH  " + depths[depthIndex],
+        const juce::String rackTag = proc.lastMatch.fullRackScore ? "    /    GOLD FULL-RACK SCORE" : juce::String {};
+        g.drawText ("METHOD  " + methods[methodIndex] + "    /    DEPTH  " + depths[depthIndex] + rackTag,
                     24, 38, getWidth() - 360, 16, juce::Justification::centredLeft, true);
 
         auto legend = juce::Rectangle<float> ((float) getWidth() - 300.0f, 18.0f, 270.0f, 22.0f);

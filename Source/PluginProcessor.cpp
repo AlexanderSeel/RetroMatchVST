@@ -8,8 +8,10 @@
 #include "UI/ModulatorsPage.h"
 #include "Engine/PresetLibrary.h"
 #include "UI/PresetsPage.h"
+#include "Matching/ResynthesisAdvisor.h"
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace
 {
@@ -43,7 +45,7 @@ float referenceTableWeight (const SoundFeatures& f, int strategy)
 }
 
 VoiceParameters makeResynthCompanion (const VoiceParameters& source, int role, int strategy,
-                                      const std::shared_ptr<ReferenceWavetableData>& table)
+                                      const std::shared_ptr<const ReferenceWavetableData>& table)
 {
     auto p = source;
     p.layers.fill (nullptr); p.mainLayerGain = 1.0f;
@@ -112,6 +114,40 @@ VoiceParameters makeResynthCompanion (const VoiceParameters& source, int role, i
             break;
     }
     return p;
+}
+
+VoiceParameters makeEmbeddedResynthRack (const MatchResult& mainResult, int complexity, int strategy,
+                                         const std::shared_ptr<const ReferenceWavetableData>& table)
+{
+    auto rack = mainResult.params;
+    rack.layers.fill (nullptr);
+    complexity = juce::jlimit (0, 3, complexity);
+    strategy = juce::jlimit (0, 6, strategy);
+
+    // Gold evaluates the actual completed instrument. Classic intentionally uses
+    // a strong three-instance rack (the upper end of the legacy 1-3 range), while
+    // the other choices map directly to 4 / 6 / 8 total instances.
+    const int totalInstances = complexity == 0 ? 3 : (complexity == 1 ? 4 : (complexity == 2 ? 6 : 8));
+    rack.mainLayerGain = totalInstances >= 8 ? 0.64f : (totalInstances >= 6 ? 0.70f : 0.78f);
+
+    static const float roleGain[] { 0.30f, 0.18f, 0.24f, 0.20f, 0.17f, 0.16f, 0.13f };
+    static const float rolePan[]  { -0.10f, 0.34f, 0.0f, -0.30f, 0.18f, 0.42f, -0.42f };
+    static const float roleTune[] { 0.0f, 12.0f, -12.0f, 0.0f, 7.0f, 0.0f, 12.0f };
+
+    const int wantedLayers = juce::jmin (VoiceParameters::extraLayerCount, totalInstances - 1);
+    for (int layer = 0; layer < wantedLayers; ++layer)
+    {
+        auto companion = makeResynthCompanion (mainResult.params, layer, strategy, table);
+        companion.layers.fill (nullptr);
+        companion.mainLayerGain = 1.0f;
+        rack.layers[(size_t) layer] = std::make_shared<VoiceParameters> (std::move (companion));
+        rack.layerGain[(size_t) layer] = roleGain[layer];
+        rack.layerPan[(size_t) layer] = rolePan[layer];
+        rack.layerTune[(size_t) layer] = roleTune[layer];
+        rack.layerOperation[(size_t) layer] = 0;
+        rack.layerAmount[(size_t) layer] = 0.78f;
+    }
+    return rack;
 }
 
 class OversamplingQualityEditor final : public RetroMatchSynthAudioProcessorEditor
@@ -1133,11 +1169,59 @@ void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainR
     allEditorNotesOff();
     for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) clearLayer (i);
 
+    const int strategy = mainResult.algorithm >= 0
+                       ? juce::jlimit (0, 6, mainResult.algorithm)
+                       : juce::jlimit (0, 6, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
+    const int currentComplexity = juce::jlimit (0, 3, (int) apvts.getRawParameterValue ("resynthComplexity")->load());
+    const int complexity = mainResult.complexity >= 0 ? juce::jlimit (0, 3, mainResult.complexity) : currentComplexity;
+
+    bool hasEmbeddedRack = false;
+    for (const auto& layer : mainResult.params.layers) hasEmbeddedRack |= layer != nullptr;
+    if (hasEmbeddedRack)
+    {
+        if (auto* mainGain = apvts.getParameter ("mainLayerGain"))
+            mainGain->setValueNotifyingHost (mainGain->convertTo0to1 (mainResult.params.mainLayerGain));
+
+        MatchResult mainOnly = mainResult;
+        mainOnly.params.layers.fill (nullptr);
+        applyMatchResult (mainOnly);
+
+        static const char* roleNames[] { "BODY", "AIR", "FOUNDATION", "MOTION", "HARMONIC", "WIDTH", "TEXTURE" };
+        for (int layer = 0; layer < VoiceParameters::extraLayerCount; ++layer)
+        {
+            const auto& storedLayer = mainResult.params.layers[(size_t) layer];
+            if (! storedLayer) continue;
+            MatchResult layerResult; layerResult.params = *storedLayer;
+            applyMatchResult (layerResult);
+            captureLayer (layer);
+
+            auto bank = apvts.state.getChildWithName ("SYNTH_LAYERS");
+            auto stored = bank.getChildWithProperty ("index", layer);
+            if (stored.isValid()) stored.setProperty ("name", "GOLD / " + juce::String (roleNames[layer]), nullptr);
+
+            const auto prefix = "layer" + juce::String (layer + 1);
+            auto setLayer = [this, &prefix] (const char* suffix, float value)
+            {
+                if (auto* parameter = apvts.getParameter (prefix + suffix))
+                    parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+            };
+            setLayer ("Gain", mainResult.params.layerGain[(size_t) layer]);
+            setLayer ("Pan", mainResult.params.layerPan[(size_t) layer]);
+            setLayer ("Tune", mainResult.params.layerTune[(size_t) layer]);
+            setLayer ("Operation", (float) mainResult.params.layerOperation[(size_t) layer]);
+            setLayer ("Amount", mainResult.params.layerAmount[(size_t) layer]);
+        }
+
+        // Restore the exact measured main voice and its full-rack similarity metadata.
+        applyMatchResult (mainResult);
+        return;
+    }
+
+    if (auto* mainGain = apvts.getParameter ("mainLayerGain"))
+        mainGain->setValueNotifyingHost (mainGain->convertTo0to1 (1.0f));
     applyMatchResult (mainResult);
     const int legacyInstances = juce::jlimit (1, 3, 1 + (int) apvts.getRawParameterValue ("resynthInstances")->load());
-    const int complexity = juce::jlimit (0, 3, (int) apvts.getRawParameterValue ("resynthComplexity")->load());
     const int totalInstances = complexity == 0 ? legacyInstances : (complexity == 1 ? 4 : complexity == 2 ? 6 : 8);
-    const int strategy = juce::jlimit (0, 6, (int) apvts.getRawParameterValue ("resynthStrategy")->load());
 
     std::array<int, 2> complement {{ -1, -1 }};
     int complementCount = 0;
@@ -1157,6 +1241,7 @@ void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainR
     {
         VoiceParameters source = mainResult.params;
         if (layer < complementCount) source = candidateBank[(size_t) complement[(size_t) layer]].params;
+        source.layers.fill (nullptr);
         auto companion = makeResynthCompanion (source, layer, strategy, referenceWavetable);
         MatchResult layerResult; layerResult.params = companion;
         applyMatchResult (layerResult);
@@ -1179,7 +1264,6 @@ void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainR
         setLayer ("Amount", 0.78f);
     }
 
-    // Restore the selected main voice after temporary layer captures.
     applyMatchResult (mainResult);
 }
 
@@ -1643,11 +1727,127 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildCandidateBank()
     return candidateBank;
 }
 
+std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildGoldCandidateBank (SoundMatcher::ProgressCallback progress,
+                                                                                 SoundMatcher::CancelCallback cancel)
+{
+    std::array<MatchResult, 3> result {};
+    if (! currentFeatures) return result;
+
+    const auto reference = *currentFeatures;
+    const auto advice = ResynthesisAdvisor::advise (reference);
+    const auto authored = getMainVoiceParameters();
+
+    std::vector<int> methods;
+    methods.reserve (7);
+    methods.push_back (juce::jlimit (0, 6, advice.method));
+    for (int method = 0; method <= 6; ++method)
+        if (std::find (methods.begin(), methods.end(), method) == methods.end()) methods.push_back (method);
+
+    std::vector<MatchResult> coarse;
+    coarse.reserve (methods.size());
+    for (size_t index = 0; index < methods.size(); ++index)
+    {
+        if (cancel && cancel()) return {};
+        const int method = methods[index];
+        auto seed = SoundMatcher::initialFit (reference).params;
+
+        std::shared_ptr<const ReferenceWavetableData> table = referenceWavetable;
+        if (method == 5 && loadedReferenceFile.existsAsFile())
+            if (auto chopped = ReferenceWavetableExtractor::chop (loadedReferenceFile, analysisStartSeconds.load(), analysisEndSeconds.load()))
+                table = std::move (chopped);
+
+        seed.referenceWavetable = table;
+        seed.referenceWavetableMix = table ? referenceTableWeight (reference, method) : 0.0f;
+        seed.userWavetable = userWavetable;
+        seed.userWavetableMix = authored.userWavetableMix;
+        seed.distortionMode = authored.distortionMode;
+        seed.distortionMix = authored.distortionMix;
+        seed.layers.fill (nullptr);
+        seed.mainLayerGain = 1.0f;
+
+        auto settings = matchSettings;
+        settings.algorithm = method;
+        settings.iterations = juce::jlimit (18, 42, juce::jmax (18, matchSettings.iterations / 4));
+        settings.topologyTrials = juce::jlimit (6, 12, juce::jmax (6, matchSettings.topologyTrials / 2));
+        settings.populationSize = juce::jlimit (4, 6, matchSettings.populationSize);
+        auto candidate = SoundMatcher::refineFit (reference, seed, settings, {}, cancel);
+        candidate.algorithm = method;
+        candidate.complexity = advice.complexity;
+        candidate.explanation = "GOLD coarse method sweep / " + ResynthesisAdvice { method, advice.complexity, 0.0f, {}, {} }.methodName()
+                              + ". " + candidate.explanation;
+        coarse.push_back (std::move (candidate));
+        if (progress) progress (0.25f * (float) (index + 1) / (float) methods.size());
+    }
+
+    std::sort (coarse.begin(), coarse.end(), [] (const MatchResult& a, const MatchResult& b)
+    {
+        return a.similarity.total > b.similarity.total;
+    });
+    if (coarse.size() > 3) coarse.resize (3);
+
+    std::vector<MatchResult> finals;
+    finals.reserve (coarse.size());
+    for (size_t index = 0; index < coarse.size(); ++index)
+    {
+        if (cancel && cancel()) return {};
+        const int method = coarse[index].algorithm;
+        auto deepSettings = matchSettings;
+        deepSettings.algorithm = method;
+        deepSettings.iterations = juce::jmax (84, matchSettings.iterations);
+        deepSettings.topologyTrials = juce::jmax (16, matchSettings.topologyTrials);
+        deepSettings.populationSize = juce::jmax (6, matchSettings.populationSize);
+        const float base = 0.25f + (float) index * (0.50f / 3.0f);
+        const float span = 0.50f / 3.0f;
+        auto deep = SoundMatcher::refineFit (reference, coarse[index].params, deepSettings,
+            [progress, base, span] (float p) { if (progress) progress (base + span * p); }, cancel);
+        deep.algorithm = method;
+
+        MatchResult bestFull;
+        bestFull.similarity.total = -1.0f;
+        for (int complexity = 0; complexity < 4; ++complexity)
+        {
+            if (cancel && cancel()) return {};
+            auto rack = makeEmbeddedResynthRack (deep, complexity, method, deep.params.referenceWavetable);
+            auto scoreSettings = matchSettings;
+            scoreSettings.algorithm = method;
+            auto full = SoundMatcher::evaluateFit (reference, rack, scoreSettings);
+            full.algorithm = method;
+            full.complexity = complexity;
+            full.fullRackScore = true;
+            full.evaluatedCandidates += deep.evaluatedCandidates;
+            full.explanation = "GOLD full-rack verification: the completed "
+                             + juce::String (complexity == 0 ? 3 : (complexity == 1 ? 4 : complexity == 2 ? 6 : 8))
+                             + "-instance instrument was rendered and scored after layering. " + deep.explanation;
+            if (full.similarity.total > bestFull.similarity.total) bestFull = std::move (full);
+
+            const float rackProgress = ((float) index * 4.0f + (float) complexity + 1.0f) / 12.0f;
+            if (progress) progress (0.75f + rackProgress * 0.25f);
+        }
+        finals.push_back (std::move (bestFull));
+    }
+
+    std::sort (finals.begin(), finals.end(), [] (const MatchResult& a, const MatchResult& b)
+    {
+        return a.similarity.total > b.similarity.total;
+    });
+    for (size_t i = 0; i < result.size() && i < finals.size(); ++i) result[i] = std::move (finals[i]);
+    if (progress) progress (1.0f);
+    return result;
+}
+
 bool RetroMatchSynthAudioProcessor::selectCandidate (int index)
 {
     if (! juce::isPositiveAndBelow (index, 3) || candidateBank[(size_t) index].confidence <= 0.0f) return false;
     selectedCandidate = index;
-    applyGeneratedRack (candidateBank[(size_t) index], index);
+    const auto& selected = candidateBank[(size_t) index];
+    auto setChoice = [this] (const char* id, int value)
+    {
+        if (auto* parameter = apvts.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 ((float) value));
+    };
+    if (selected.algorithm >= 0) setChoice ("resynthStrategy", juce::jlimit (0, 6, selected.algorithm));
+    if (selected.complexity >= 0) setChoice ("resynthComplexity", juce::jlimit (0, 3, selected.complexity));
+    applyGeneratedRack (selected, index);
     return true;
 }
 

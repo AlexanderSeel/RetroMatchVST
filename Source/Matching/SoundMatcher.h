@@ -34,6 +34,9 @@ struct MatchResult
     float confidence = 0.0f;
     int evaluatedCandidates = 0;
     float effectProbeSimilarity = -1.0f;
+    int algorithm = -1;      // selected resynthesis strategy when the result owns one
+    int complexity = -1;     // selected 1-3 / 4 / 6 / 8 rack depth when the result owns one
+    bool fullRackScore = false; // similarity was measured after all embedded layers rendered
     juce::String explanation;
 };
 

@@ -167,3 +167,14 @@ A user can rearrange the patch visually, create/reconnect/remove only valid cabl
 7. **Resynthesis topology search**.
 
 The implementation should favor a small number of musically useful, deterministic routing primitives over a fully unrestricted modular environment. RetroMatch should remain fast enough for live use and understandable enough that a matched patch can still be edited like an instrument rather than debugged like a graph program.
+
+
+## Gold Match full-rack resynthesis
+
+- Add a dedicated GOLD search mode after the fast Quick/Refine paths.
+- Sweep all supported synthesis explanations, with the Resynthesis Advisor recommendation evaluated first.
+- Deep-refine the strongest heterogeneous methods rather than producing three variants of one topology.
+- For each finalist, build and render the complete 3 / 4 / 6 / 8-instance rack and choose depth by measured reference similarity.
+- Store the exact embedded rack in the winning candidate so selecting A/B/C reproduces what was measured.
+- Keep FX white-noise/impulse probing secondary to the musical reference score; never inflate the displayed similarity to meet a target.
+- Show method, depth and FULL RACK status in candidate cards and Compare.
