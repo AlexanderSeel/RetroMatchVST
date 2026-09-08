@@ -344,12 +344,12 @@ private:
         g.setColour (led.withAlpha (snapToGrid ? 0.07f : 0.035f));
         for (float x = x0; x <= bottomRight.x + step; x += step)
         {
-            const float sx = toScreen ({ x, 0.0f }).x;
+            const float sx = toScreen (juce::Point<float> { x, 0.0f }).x;
             g.drawVerticalLine ((int) sx, graphViewport.getY(), graphViewport.getBottom());
         }
         for (float y = y0; y <= bottomRight.y + step; y += step)
         {
-            const float sy = toScreen ({ 0.0f, y }).y;
+            const float sy = toScreen (juce::Point<float> { 0.0f, y }).y;
             g.drawHorizontalLine ((int) sy, graphViewport.getX(), graphViewport.getRight());
         }
     }
@@ -362,23 +362,23 @@ private:
         juce::Point<float> a, b;
         if (edge.kind == EdgeKind::modulation)
         {
-            a = toScreen ({ from.worldBounds.getCentreX(), from.worldBounds.getY() });
-            b = toScreen ({ to.worldBounds.getCentreX(), to.worldBounds.getBottom() });
+            a = toScreen (juce::Point<float> { from.worldBounds.getCentreX(), from.worldBounds.getY() });
+            b = toScreen (juce::Point<float> { to.worldBounds.getCentreX(), to.worldBounds.getBottom() });
         }
         else if (edge.kind == EdgeKind::clock)
         {
-            a = toScreen ({ from.worldBounds.getX(), from.worldBounds.getCentreY() });
-            b = toScreen ({ to.worldBounds.getCentreX(), to.worldBounds.getBottom() });
+            a = toScreen (juce::Point<float> { from.worldBounds.getX(), from.worldBounds.getCentreY() });
+            b = toScreen (juce::Point<float> { to.worldBounds.getCentreX(), to.worldBounds.getBottom() });
         }
         else
         {
-            a = toScreen ({ from.worldBounds.getRight(), from.worldBounds.getCentreY() });
-            b = toScreen ({ to.worldBounds.getX(), to.worldBounds.getCentreY() });
+            a = toScreen (juce::Point<float> { from.worldBounds.getRight(), from.worldBounds.getCentreY() });
+            b = toScreen (juce::Point<float> { to.worldBounds.getX(), to.worldBounds.getCentreY() });
         }
         const float bend = juce::jmax (24.0f, std::abs (b.x - a.x) * 0.42f);
         juce::Path wire;
         wire.startNewSubPath (a);
-        wire.cubicTo ({ a.x + bend, a.y }, { b.x - bend, b.y }, b);
+        wire.cubicTo (juce::Point<float> { a.x + bend, a.y }, juce::Point<float> { b.x - bend, b.y }, b);
         if (edge.kind == EdgeKind::audio)
             glow (g, wire, from.colour.interpolatedWith (to.colour, 0.45f).withAlpha (0.7f), juce::jmax (0.9f, graphZoom));
         else
@@ -455,7 +455,7 @@ private:
         const float rowGap = 112.0f, nodeW = 104.0f, nodeH = 42.0f;
         const std::array<float, 6> xs {{ 0, 122, 244, 366, 488, 610 }};
         const juce::String stages[] { "INSTANCE", "OSC / WT", "6-OP FM", "FILTER / AMP", "FX", "COMBINE" };
-        const juce::String tabs[] { "SYNTH", "SYNTH", "FM", "FILTER + AMP", "FX", "LAYERS" };
+        const juce::String tabs[] { "SYNTH", "SYNTH", "FM", "FILTER", "FX", "LAYERS" };
         const juce::uint32 colours[] { 0xff54f5d1, 0xffffbd65, 0xffc9a0ff, 0xff78f1c4, 0xffff91b8, 0xffa6cf75, 0xff94aaff, 0xffff9673 };
         std::vector<int> combineNodes, modNodes;
 
