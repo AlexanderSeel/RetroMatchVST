@@ -438,6 +438,20 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     masterOutputAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "masterOutputGain", masterOutput);
     addAndMakeVisible (masterOutputLabel); addAndMakeVisible (masterOutput); addAndMakeVisible (masterMeter);
 
+    styleTextLabel (resynthStrategyLabel, "METHOD");
+    styleTextLabel (resynthComplexityLabel, "DEPTH");
+    resynthStrategyLabel.setColour (juce::Label::textColourId, goldColour (*this));
+    resynthComplexityLabel.setColour (juce::Label::textColourId, goldColour (*this));
+    resynthStrategyChoice.addItemList ({ "Balanced Hybrid", "Reference Wavetable", "Spectral Subtractive",
+                                         "FM / Harmonic", "Layered Studio", "Texture / Chop" }, 1);
+    resynthComplexityChoice.addItemList ({ "Classic / 1-3", "Studio / 4", "Deep / 6", "Maximum / 8" }, 1);
+    resynthStrategyChoice.setTooltip ("Resynthesis / matching topology used by Quick and Refine. Reference Wavetable and Texture / Chop deliberately use more of the loaded sample.");
+    resynthComplexityChoice.setTooltip ("How many complementary synth instances the resynthesis may build: legacy 1-3, 4, 6 or 8 layers.");
+    resynthStrategyAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "resynthStrategy", resynthStrategyChoice);
+    resynthComplexityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "resynthComplexity", resynthComplexityChoice);
+    for (auto* c : std::array<juce::Component*, 4> { &resynthStrategyLabel, &resynthStrategyChoice, &resynthComplexityLabel, &resynthComplexityChoice })
+        addAndMakeVisible (*c);
+
     load.onClick = [this] { chooseFile(); };
     quick.onClick = [this] { startVariantSearch (WorkMode::quick); };
     refine.onClick = [this] { startVariantSearch (WorkMode::refine); };
@@ -1212,6 +1226,15 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     auto w = workspaceBounds.reduced (12);
     w.removeFromTop (10);
     load.setBounds (w.removeFromTop (34));
+    w.removeFromTop (5);
+
+    auto methodRow = w.removeFromTop (28);
+    resynthStrategyLabel.setBounds (methodRow.removeFromLeft (62));
+    resynthStrategyChoice.setBounds (methodRow.reduced (2, 1));
+    w.removeFromTop (3);
+    auto depthRow = w.removeFromTop (28);
+    resynthComplexityLabel.setBounds (depthRow.removeFromLeft (62));
+    resynthComplexityChoice.setBounds (depthRow.reduced (2, 1));
     w.removeFromTop (5);
 
     referencePitchInfo.setBounds (w.removeFromTop (18));

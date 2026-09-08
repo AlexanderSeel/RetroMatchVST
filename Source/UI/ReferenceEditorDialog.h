@@ -166,6 +166,16 @@ public:
         g.drawText (proc.getReferenceFile().getFileName() + "  /  " + juce::String (duration, 2) + " s",
                     286, 11, getWidth() - 308, 24, juce::Justification::centredRight, true);
 
+        const juce::StringArray methods { "Balanced Hybrid", "Reference Wavetable", "Spectral Subtractive",
+                                           "FM / Harmonic", "Layered Studio", "Texture / Chop" };
+        const juce::StringArray depths { "Classic / 1-3", "Studio / 4", "Deep / 6", "Maximum / 8" };
+        const int methodIndex = juce::jlimit (0, methods.size() - 1, (int) std::lround (proc.apvts.getRawParameterValue ("resynthStrategy")->load()));
+        const int depthIndex = juce::jlimit (0, depths.size() - 1, (int) std::lround (proc.apvts.getRawParameterValue ("resynthComplexity")->load()));
+        g.setColour (p.primary);
+        g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
+        g.drawText ("RESYNTH METHOD  " + methods[methodIndex] + "    /    DEPTH  " + depths[depthIndex],
+                    22, 35, getWidth() - 44, 16, juce::Justification::centredLeft, true);
+
         drawSection (g, editSectionBounds, "SELECTION + VIEW");
         drawSection (g, toneSectionBounds, "REFERENCE TONE + FADES");
         drawSection (g, actionSectionBounds, "REFERENCE ACTIONS");
@@ -174,7 +184,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (18);
-        area.removeFromTop (32);
+        area.removeFromTop (50);
         const int waveH = juce::jlimit (245, 350, (int) std::round (area.getHeight() * 0.44));
         waveform.setBounds (area.removeFromTop (waveH).reduced (1));
         area.removeFromTop (8);

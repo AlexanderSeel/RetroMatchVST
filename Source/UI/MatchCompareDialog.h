@@ -87,8 +87,18 @@ public:
 
         g.setColour (gold);
         g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
-        g.drawText ("REFERENCE  ↔  RESYNTH VISUAL COMPARE", 24, 16, getWidth() - 48, 26,
+        g.drawText ("REFERENCE  VS  RESYNTH VISUAL COMPARE", 24, 14, getWidth() - 48, 24,
                     juce::Justification::centredLeft);
+
+        const juce::StringArray methods { "Balanced Hybrid", "Reference Wavetable", "Spectral Subtractive",
+                                           "FM / Harmonic", "Layered Studio", "Texture / Chop" };
+        const juce::StringArray depths { "Classic / 1-3", "Studio / 4", "Deep / 6", "Maximum / 8" };
+        const int methodIndex = juce::jlimit (0, methods.size() - 1, (int) std::lround (proc.apvts.getRawParameterValue ("resynthStrategy")->load()));
+        const int depthIndex = juce::jlimit (0, depths.size() - 1, (int) std::lround (proc.apvts.getRawParameterValue ("resynthComplexity")->load()));
+        g.setColour (juce::Colour (0xffc9d6d1));
+        g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
+        g.drawText ("METHOD  " + methods[methodIndex] + "    /    DEPTH  " + depths[depthIndex],
+                    24, 38, getWidth() - 360, 16, juce::Justification::centredLeft, true);
 
         auto legend = juce::Rectangle<float> ((float) getWidth() - 300.0f, 18.0f, 270.0f, 22.0f);
         drawLegend (g, legend.removeFromLeft (125.0f), led, "REFERENCE");
@@ -272,18 +282,19 @@ private:
             g.setColour (juce::Colour (0xff53666a));
             g.drawRoundedRectangle (cell, 5.0f, 1.0f);
 
-            auto titleArea = cell.removeFromTop (18.0f);
+            auto content = cell.reduced (10.0f, 6.0f);
+            auto titleArea = content.removeFromTop (18.0f);
             g.setColour (juce::Colour (0xffd4dfdb));
             g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
             g.drawText (values[(size_t) i].first, titleArea, juce::Justification::centredLeft);
 
-            auto valueArea = cell.removeFromTop (juce::jmax (16.0f, cell.getHeight() - 12.0f));
+            auto bar = content.removeFromBottom (8.0f);
+            auto valueArea = content;
             g.setColour (accent);
             g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
             g.drawText (juce::String (values[(size_t) i].second * 100.0f, 1) + "%", valueArea,
                         juce::Justification::centredRight);
 
-            auto bar = cell.removeFromBottom (8.0f);
             g.setColour (juce::Colour (0xff0b1214));
             g.fillRoundedRectangle (bar, 3.0f);
             g.setColour (accent);

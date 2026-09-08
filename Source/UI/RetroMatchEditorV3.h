@@ -227,6 +227,9 @@ private:
     juce::Slider masterOutput;
     juce::Label masterOutputLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterOutputAttachment;
+    juce::Label resynthStrategyLabel, resynthComplexityLabel;
+    juce::ComboBox resynthStrategyChoice, resynthComplexityChoice;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> resynthStrategyAttachment, resynthComplexityAttachment;
     int displayedPalette = -1;
     std::unique_ptr<juce::Drawable> logo;
     juce::Rectangle<int> logoBounds;
