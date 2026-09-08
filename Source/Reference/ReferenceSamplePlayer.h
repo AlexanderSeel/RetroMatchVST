@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include <atomic>
+#include <cmath>
 
 // Polyphonic playback of the loaded reference sample for A/B auditioning.
 // The sample is mapped across MIDI notes using the detected/manual root note.
