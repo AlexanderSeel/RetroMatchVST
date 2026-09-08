@@ -75,6 +75,13 @@ int main (int argc, char** argv)
         if (std::abs (detailedSum - 1.0f) > 0.02f) return fail ("detailed FX transfer fingerprint was not normalized");
         if (drivenSignature.nonlinear <= drySignature.nonlinear)
             return fail ("two-tone FX probe did not detect added saturation");
+
+        VoiceParameters probeGlobal;
+        const auto globalDrySignature = EffectChainProbe::probe (probeGlobal);
+        probeGlobal.globalFxModules[0] = { 3, 0, false, 0.72f, 0.45f, 0.50f, 1.0f };
+        const auto globalDrivenSignature = EffectChainProbe::probe (probeGlobal);
+        if (globalDrivenSignature.nonlinear <= globalDrySignature.nonlinear)
+            return fail ("two-tone FX probe ignored post-sum global saturation");
     }
     {
         SoundFeatures guitar;

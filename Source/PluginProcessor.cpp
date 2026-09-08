@@ -271,6 +271,18 @@ VoiceParameters mutateGoldRack (const VoiceParameters& source, const SoundFeatur
                     level = goldMutateLinear (level, 0.0f, 1.0f, amount * 0.20f, random);
                 for (auto& time : voice->mseg.times)
                     time = goldMutateLog (time, 0.001f, 5.0f, amount * 0.18f, random);
+                for (auto& curve : voice->mseg.curves)
+                    curve = goldMutateLinear (curve, -1.0f, 1.0f, amount * 0.18f, random);
+                if (random.nextFloat() < 0.08f)
+                {
+                    static const int usefulMsegTargets[] {
+                        (int) ModDestination::amplitude,
+                        (int) ModDestination::cutoff,
+                        (int) ModDestination::wavetablePosition,
+                        (int) ModDestination::wavefold
+                    };
+                    voice->msegTarget = usefulMsegTargets[random.nextInt ((int) std::size (usefulMsegTargets))];
+                }
             }
             rack.layers[(size_t) layer] = std::move (voice);
         }
@@ -292,7 +304,7 @@ VoiceParameters mutateGoldRack (const VoiceParameters& source, const SoundFeatur
     {
         const int slot = random.nextInt (FxModuleParameters::slotCount);
         auto& module = rack.globalFxModules[(size_t) slot];
-        static const int sensibleTypes[] { 0, 1, 2, 3, 6, 8, 9, 13 };
+        static const int sensibleTypes[] { 0, 1, 2, 3, 6, 7, 8, 9, 13 };
         module.type = sensibleTypes[random.nextInt ((int) std::size (sensibleTypes))];
         module.stage = random.nextBool() ? 1 : 0;
         module.bypass = false;
@@ -313,6 +325,26 @@ VoiceParameters mutateGoldRack (const VoiceParameters& source, const SoundFeatur
         // Keep the pick contour important while still allowing Gold to tune it.
         rack.mseg.enabled = true;
         rack.msegDepth = goldMutateLinear (rack.msegDepth, 0.35f, 1.0f, amount * 0.28f, random);
+    }
+    if (rack.mseg.enabled)
+    {
+        rack.msegDepth = goldMutateLinear (rack.msegDepth, -1.0f, 1.0f, amount * 0.30f, random);
+        for (auto& level : rack.mseg.levels)
+            level = goldMutateLinear (level, 0.0f, 1.0f, amount * 0.16f, random);
+        for (auto& time : rack.mseg.times)
+            time = goldMutateLog (time, 0.001f, 5.0f, amount * 0.14f, random);
+        for (auto& curve : rack.mseg.curves)
+            curve = goldMutateLinear (curve, -1.0f, 1.0f, amount * 0.16f, random);
+        if (random.nextFloat() < 0.06f)
+        {
+            static const int usefulMsegTargets[] {
+                (int) ModDestination::amplitude,
+                (int) ModDestination::cutoff,
+                (int) ModDestination::wavetablePosition,
+                (int) ModDestination::wavefold
+            };
+            rack.msegTarget = usefulMsegTargets[random.nextInt ((int) std::size (usefulMsegTargets))];
+        }
     }
     return rack;
 }
@@ -339,7 +371,7 @@ MatchResult evolveGoldRack (const SoundFeatures& reference, MatchResult seed, co
         candidate.algorithm = best.algorithm;
         candidate.complexity = best.complexity;
         candidate.fullRackScore = true;
-        candidate.evaluatedCandidates += best.evaluatedCandidates + evaluated + 1;
+        candidate.evaluatedCandidates = seed.evaluatedCandidates + evaluated + 1;
         if (candidate.similarity.total > best.similarity.total)
         {
             best = std::move (candidate);
