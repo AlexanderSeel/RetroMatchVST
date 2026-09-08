@@ -25,6 +25,13 @@ and physically separated layers. The editor architecture and APVTS parameter wir
 horizontal sliders, toggle buttons, progress bars and popup surfaces. Existing components therefore
 pick up the hardware look without changing parameter IDs or attachments.
 
+The large reference editor and compact reference overview now reuse the same phosphor display, recessed
+panel and hardware control language. The main sound-design workflow is ordered as Presets, Layers, Synth,
+FM, MSEG, Filter, Mod, FX, Wavetable, Signal, MIDI Map, Melody and Settings; AI diagnostics live inside
+Settings instead of consuming a separate top-level tab. MSEG also exposes a dedicated target/depth path so
+enabling it produces an immediately audible result while the modulation graph remains available for extra
+routes.
+
 ## Palette
 
 The current RetroMatch palette switch is preserved:
