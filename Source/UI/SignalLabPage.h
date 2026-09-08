@@ -1,15 +1,21 @@
 #pragma once
 #include "../PluginProcessor.h"
 #include "RetroLookAndFeel.h"
+#include <array>
 #include <cmath>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 class SignalLabPage final : public juce::Component, private juce::Timer
 {
 public:
-    explicit SignalLabPage (RetroMatchSynthAudioProcessor& p) : proc (p) { startTimerHz (30); }
+    explicit SignalLabPage (RetroMatchSynthAudioProcessor& p) : proc (p)
+    {
+        setWantsKeyboardFocus (true);
+        startTimerHz (30);
+    }
 
     void paint (juce::Graphics& g) override
     {
@@ -41,10 +47,47 @@ public:
         }
 
         if (! graphViewport.contains (e.position)) return;
+        grabKeyboardFocus();
+
+        if (e.mods.isRightButtonDown())
+        {
+            if (const int edge = hitTestEdge (e.position); edge >= 0)
+            {
+                selectedEdgeKey = edges[(size_t) edge].key.toStdString();
+                showEdgeMenu (edges[(size_t) edge]);
+                repaint();
+                return;
+            }
+
+            if (const int node = hitTestNode (e.position); node >= 0)
+            {
+                selectedNodeId = nodes[(size_t) node].id.toStdString();
+                if (nodes[(size_t) node].role == NodeRole::modHub) showModHubMenu (nodes[(size_t) node].layer);
+                repaint();
+            }
+            return;
+        }
+
+        if (! e.mods.isMiddleButtonDown())
+        {
+            if (const int output = hitTestModOutput (e.position); output >= 0)
+            {
+                connecting = true;
+                connectionFromId = nodes[(size_t) output].id.toStdString();
+                connectionDragPoint = e.position;
+                hoverTargetId.clear();
+                selectedNodeId = connectionFromId;
+                selectedEdgeKey.clear();
+                repaint();
+                return;
+            }
+        }
+
         const int hit = hitTestNode (e.position);
-        if (hit >= 0 && ! e.mods.isMiddleButtonDown() && ! e.mods.isRightButtonDown())
+        if (hit >= 0 && ! e.mods.isMiddleButtonDown())
         {
             selectedNodeId = nodes[(size_t) hit].id.toStdString();
+            selectedEdgeKey.clear();
             draggingNode = true;
             draggingNodeId = selectedNodeId;
             nodeDragStartWorld = toWorld (e.position);
@@ -54,6 +97,7 @@ public:
         else
         {
             selectedNodeId.clear();
+            selectedEdgeKey.clear();
             panning = true;
             panDragStart = e.position;
             panAtDragStart = graphPan;
@@ -63,6 +107,20 @@ public:
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        if (connecting)
+        {
+            connectionDragPoint = e.position;
+            hoverTargetId.clear();
+            if (const int target = hitTestModInput (e.position); target >= 0)
+            {
+                const int from = findNodeIndex (connectionFromId);
+                if (from >= 0 && canConnect (nodes[(size_t) from], nodes[(size_t) target]))
+                    hoverTargetId = nodes[(size_t) target].id.toStdString();
+            }
+            repaint();
+            return;
+        }
+
         if (draggingNode)
         {
             auto offset = nodeOffsetAtDragStart + (toWorld (e.position) - nodeDragStartWorld);
@@ -82,8 +140,26 @@ public:
         }
     }
 
-    void mouseUp (const juce::MouseEvent&) override
+    void mouseUp (const juce::MouseEvent& e) override
     {
+        if (connecting)
+        {
+            const auto fromId = connectionFromId;
+            const auto targetId = hoverTargetId;
+            connecting = false;
+            connectionFromId.clear();
+            hoverTargetId.clear();
+
+            const int from = findNodeIndex (fromId);
+            const int target = findNodeIndex (targetId);
+            if (from >= 0 && target >= 0 && canConnect (nodes[(size_t) from], nodes[(size_t) target]))
+                showNewRouteMenu (nodes[(size_t) from].layer, nodes[(size_t) target].stage);
+
+            connectionDragPoint = e.position;
+            repaint();
+            return;
+        }
+
         panning = false;
         draggingNode = false;
         draggingNodeId.clear();
@@ -92,6 +168,15 @@ public:
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         if (! graphViewport.contains (e.position)) return;
+
+        if (const int edge = hitTestEdge (e.position); edge >= 0)
+        {
+            selectedEdgeKey = edges[(size_t) edge].key.toStdString();
+            showEdgeMenu (edges[(size_t) edge]);
+            repaint();
+            return;
+        }
+
         const int hit = hitTestNode (e.position);
         if (hit >= 0 && juce::isPositiveAndBelow (hit, (int) nodes.size()))
         {
@@ -112,6 +197,8 @@ public:
 
 private:
     enum class EdgeKind { audio, modulation, clock };
+    enum class EdgeEditKind { none, modulationRoute, layerCombine };
+    enum class NodeRole { stage, modHub, master, clock };
     enum class ToolbarAction { none, autoArrange, fit, zoomOut, zoom100, zoomIn, grid };
 
     struct GraphNode
@@ -122,9 +209,20 @@ private:
         int layer = -2;
         juce::Colour colour;
         bool inputPort = true, outputPort = true;
+        bool modInputPort = false, modOutputPort = false;
+        NodeRole role = NodeRole::stage;
+        int stage = -1;
     };
 
-    struct GraphEdge { int from = -1, to = -1; EdgeKind kind = EdgeKind::audio; };
+    struct GraphEdge
+    {
+        int from = -1, to = -1;
+        EdgeKind kind = EdgeKind::audio;
+        EdgeEditKind editKind = EdgeEditKind::none;
+        int layer = -2, slot = -1;
+        juce::String key, label;
+    };
+
     struct ToolbarButton { juce::Rectangle<float> bounds; juce::String label; ToolbarAction action = ToolbarAction::none; };
 
     RetroMatchSynthAudioProcessor& proc;
@@ -145,14 +243,289 @@ private:
     std::map<std::string, juce::Point<float>> nodeOffsets;
     float graphZoom = 0.82f;
     juce::Point<float> graphPan { 18.0f, 18.0f };
-    bool panning = false, draggingNode = false, snapToGrid = true;
-    juce::Point<float> panDragStart, panAtDragStart, nodeDragStartWorld, nodeOffsetAtDragStart;
-    std::string selectedNodeId, draggingNodeId;
+    bool panning = false, draggingNode = false, snapToGrid = true, connecting = false;
+    juce::Point<float> panDragStart, panAtDragStart, nodeDragStartWorld, nodeOffsetAtDragStart, connectionDragPoint;
+    std::string selectedNodeId, draggingNodeId, selectedEdgeKey, connectionFromId, hoverTargetId;
 
     float parameter (const juce::String& id, float fallback = 0.0f) const
     {
         if (auto* value = proc.apvts.getRawParameterValue (id)) return value->load();
         return fallback;
+    }
+
+    void setParameterValue (const juce::String& id, float value)
+    {
+        if (auto* parameterObject = proc.apvts.getParameter (id))
+        {
+            parameterObject->beginChangeGesture();
+            parameterObject->setValueNotifyingHost (parameterObject->convertTo0to1 (value));
+            parameterObject->endChangeGesture();
+        }
+    }
+
+    VoiceParameters voiceForLayer (int layer) const
+    {
+        if (layer < 0) return proc.getMainVoiceParameters();
+        if (auto saved = proc.getLayerParameters (layer)) return *saved;
+        return {};
+    }
+
+    static juce::String sourceName (int source)
+    {
+        static const juce::StringArray names { "OFF", "LFO 1", "VELOCITY", "KEY TRACK", "RANDOM NOTE", "AMP ENV", "MSEG", "LFO 2", "LFO 3", "LFO 4" };
+        return names[juce::jlimit (0, names.size() - 1, source)];
+    }
+
+    static juce::String destinationName (int destination)
+    {
+        static const juce::StringArray names { "OFF", "PITCH", "CUTOFF", "AMPLITUDE", "PULSE WIDTH", "FM AMOUNT", "6-OP FM MIX", "WAVETABLE POSITION", "WAVEFOLD" };
+        return names[juce::jlimit (0, names.size() - 1, destination)];
+    }
+
+    static int stageForDestination (int destination)
+    {
+        switch ((ModDestination) destination)
+        {
+            case ModDestination::pitch:
+            case ModDestination::pulseWidth:
+            case ModDestination::wavetablePosition:
+            case ModDestination::wavefold: return 1;
+            case ModDestination::fmAmount:
+            case ModDestination::fmMix: return 2;
+            case ModDestination::cutoff:
+            case ModDestination::amplitude: return 3;
+            case ModDestination::none: break;
+        }
+        return -1;
+    }
+
+    static std::vector<int> destinationsForStage (int stage)
+    {
+        std::vector<int> result;
+        for (int destination = (int) ModDestination::pitch; destination <= (int) ModDestination::wavefold; ++destination)
+            if (stage < 0 || stageForDestination (destination) == stage) result.push_back (destination);
+        return result;
+    }
+
+    static juce::String stageName (int stage)
+    {
+        if (stage == 1) return "OSC / WT";
+        if (stage == 2) return "6-OP FM";
+        if (stage == 3) return "FILTER / AMP";
+        return "SUPPORTED DESTINATION";
+    }
+
+    void setRoute (int layer, int slot, int source, int destination, float amount)
+    {
+        if (! juce::isPositiveAndBelow (slot, VoiceParameters::modGraphSlotCount)) return;
+        if (layer >= 0 && ! proc.hasLayer (layer)) return;
+
+        proc.selectEditingLayer (layer);
+        const auto prefix = "moduleMod" + juce::String (slot + 1);
+        setParameterValue (prefix + "Source", (float) source);
+        setParameterValue (prefix + "Dest", (float) destination);
+        setParameterValue (prefix + "Amount", juce::jlimit (-1.0f, 1.0f, amount));
+        if (layer >= 0) proc.refreshEditingLayer();
+        selectedEdgeKey = ("route:" + juce::String (layer) + ":" + juce::String (slot)).toStdString();
+        repaint();
+    }
+
+    void clearRoute (int layer, int slot)
+    {
+        setRoute (layer, slot, (int) ModSource::none, (int) ModDestination::none, 0.0f);
+        selectedEdgeKey.clear();
+    }
+
+    int findFreeRouteSlot (int layer) const
+    {
+        const auto voice = voiceForLayer (layer);
+        for (int i = 0; i < VoiceParameters::modGraphSlotCount; ++i)
+        {
+            const auto& route = voice.moduleModSlots[(size_t) i];
+            if (route.source == (int) ModSource::none || route.destination == (int) ModDestination::none) return i;
+        }
+        return -1;
+    }
+
+    juce::String routeSummary (int layer, int slot) const
+    {
+        const auto voice = voiceForLayer (layer);
+        if (! juce::isPositiveAndBelow (slot, VoiceParameters::modGraphSlotCount)) return "EMPTY";
+        const auto& route = voice.moduleModSlots[(size_t) slot];
+        if (route.source == (int) ModSource::none || route.destination == (int) ModDestination::none) return "EMPTY";
+        return sourceName (route.source) + " > " + destinationName (route.destination) + "  " + juce::String (route.amount, 2);
+    }
+
+    void showCreateRouteMenu (int layer, int slot, int targetStage)
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("ADD MOD ROUTE / " + stageName (targetStage));
+        for (int source = (int) ModSource::lfo1; source <= (int) ModSource::lfo4; ++source)
+        {
+            juce::PopupMenu destinations;
+            for (const int destination : destinationsForStage (targetStage))
+                destinations.addItem (1000 + source * 32 + destination, destinationName (destination));
+            menu.addSubMenu (sourceName (source), destinations);
+        }
+
+        const auto previous = voiceForLayer (layer).moduleModSlots[(size_t) slot];
+        const float previousAmount = std::abs (previous.amount) > 0.001f ? previous.amount : 0.5f;
+        juce::Component::SafePointer<SignalLabPage> safeThis (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+                            [safeThis, layer, slot, previousAmount] (int result)
+        {
+            if (safeThis == nullptr || result < 1000 || result >= 2000) return;
+            const int packed = result - 1000;
+            const int source = packed / 32;
+            const int destination = packed % 32;
+            safeThis->setRoute (layer, slot, source, destination, previousAmount);
+        });
+    }
+
+    void showNewRouteMenu (int layer, int targetStage)
+    {
+        if (targetStage < 1 || targetStage > 3) return;
+        if (const int free = findFreeRouteSlot (layer); free >= 0)
+        {
+            showCreateRouteMenu (layer, free, targetStage);
+            return;
+        }
+
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("ALL 4 ROUTE SLOTS ARE IN USE");
+        for (int slot = 0; slot < VoiceParameters::modGraphSlotCount; ++slot)
+            menu.addItem (5000 + slot, "REPLACE " + juce::String (slot + 1) + " / " + routeSummary (layer, slot));
+
+        juce::Component::SafePointer<SignalLabPage> safeThis (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+                            [safeThis, layer, targetStage] (int result)
+        {
+            if (safeThis == nullptr || result < 5000 || result >= 5000 + VoiceParameters::modGraphSlotCount) return;
+            safeThis->showCreateRouteMenu (layer, result - 5000, targetStage);
+        });
+    }
+
+    void showEditRouteMenu (int layer, int slot)
+    {
+        const auto voice = voiceForLayer (layer);
+        if (! juce::isPositiveAndBelow (slot, VoiceParameters::modGraphSlotCount)) return;
+        const auto route = voice.moduleModSlots[(size_t) slot];
+        if (route.source == (int) ModSource::none || route.destination == (int) ModDestination::none) return;
+
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("EDIT ROUTE " + juce::String (slot + 1) + " / " + routeSummary (layer, slot));
+
+        juce::PopupMenu sourceMenu;
+        for (int source = (int) ModSource::lfo1; source <= (int) ModSource::lfo4; ++source)
+            sourceMenu.addItem (1000 + source, sourceName (source), true, source == route.source);
+        menu.addSubMenu ("SOURCE", sourceMenu);
+
+        juce::PopupMenu destinationMenu;
+        for (int stage = 1; stage <= 3; ++stage)
+        {
+            juce::PopupMenu group;
+            for (const int destination : destinationsForStage (stage))
+                group.addItem (2000 + destination, destinationName (destination), true, destination == route.destination);
+            destinationMenu.addSubMenu (stageName (stage), group);
+        }
+        menu.addSubMenu ("DESTINATION", destinationMenu);
+
+        static constexpr std::array<float, 9> depths {{ -1.0f, -0.75f, -0.5f, -0.25f, 0.0f, 0.25f, 0.5f, 0.75f, 1.0f }};
+        juce::PopupMenu depthMenu;
+        for (size_t i = 0; i < depths.size(); ++i)
+            depthMenu.addItem (3000 + (int) i, juce::String (depths[i], 2), true, std::abs (route.amount - depths[i]) < 0.015f);
+        menu.addSubMenu ("DEPTH", depthMenu);
+        menu.addSeparator();
+        menu.addItem (9000, "REMOVE CONNECTION");
+
+        juce::Component::SafePointer<SignalLabPage> safeThis (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+                            [safeThis, layer, slot, route] (int result)
+        {
+            if (safeThis == nullptr || result == 0) return;
+            if (result >= 1001 && result <= 1000 + (int) ModSource::lfo4)
+                safeThis->setRoute (layer, slot, result - 1000, route.destination, route.amount);
+            else if (result >= 2001 && result <= 2000 + (int) ModDestination::wavefold)
+                safeThis->setRoute (layer, slot, route.source, result - 2000, route.amount);
+            else if (result >= 3000 && result < 3009)
+            {
+                static constexpr std::array<float, 9> values {{ -1.0f, -0.75f, -0.5f, -0.25f, 0.0f, 0.25f, 0.5f, 0.75f, 1.0f }};
+                safeThis->setRoute (layer, slot, route.source, route.destination, values[(size_t) (result - 3000)]);
+            }
+            else if (result == 9000)
+                safeThis->clearRoute (layer, slot);
+        });
+    }
+
+    void showCombineMenu (int layer)
+    {
+        if (layer < 0 || ! proc.hasLayer (layer)) return;
+        const auto prefix = "layer" + juce::String (layer + 1);
+        const int operation = juce::jlimit (0, 4, (int) parameter (prefix + "Operation", 0.0f));
+        const float amount = parameter (prefix + "Amount", 1.0f);
+        static const juce::StringArray operationNames { "ADD", "MIX", "SUBTRACT", "MULTIPLY", "DIVIDE" };
+        static constexpr std::array<float, 5> amounts {{ 0.0f, 0.25f, 0.5f, 0.75f, 1.0f }};
+
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("LAYER COMBINE CONNECTION / DSP TOPOLOGY STAYS VALID");
+        juce::PopupMenu operationMenu;
+        for (int i = 0; i < operationNames.size(); ++i)
+            operationMenu.addItem (100 + i, operationNames[i], true, i == operation);
+        menu.addSubMenu ("COMBINE MODE", operationMenu);
+
+        juce::PopupMenu amountMenu;
+        for (size_t i = 0; i < amounts.size(); ++i)
+            amountMenu.addItem (200 + (int) i, juce::String (amounts[i], 2), true, std::abs (amount - amounts[i]) < 0.015f);
+        menu.addSubMenu ("AMOUNT", amountMenu);
+        menu.addSeparator();
+        menu.addItem (9000, "DISABLE LAYER / REMOVE FROM MIX");
+
+        juce::Component::SafePointer<SignalLabPage> safeThis (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+                            [safeThis, layer, prefix] (int result)
+        {
+            if (safeThis == nullptr || result == 0) return;
+            if (result >= 100 && result < 105)
+                safeThis->setParameterValue (prefix + "Operation", (float) (result - 100));
+            else if (result >= 200 && result < 205)
+            {
+                static constexpr std::array<float, 5> values {{ 0.0f, 0.25f, 0.5f, 0.75f, 1.0f }};
+                safeThis->setParameterValue (prefix + "Amount", values[(size_t) (result - 200)]);
+            }
+            else if (result == 9000)
+                safeThis->setParameterValue (prefix + "Enabled", 0.0f);
+            safeThis->repaint();
+        });
+    }
+
+    void showFixedConnectionMenu()
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("FIXED DSP SIGNAL PATH");
+        menu.addItem (1, "This cable represents required processing order", false, false);
+        menu.addItem (2, "Modulation and layer-combine cables are editable", false, false);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [] (int) {});
+    }
+
+    void showEdgeMenu (const GraphEdge& edge)
+    {
+        if (edge.editKind == EdgeEditKind::modulationRoute) showEditRouteMenu (edge.layer, edge.slot);
+        else if (edge.editKind == EdgeEditKind::layerCombine) showCombineMenu (edge.layer);
+        else showFixedConnectionMenu();
+    }
+
+    void showModHubMenu (int layer)
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("ADD MODULATION CONNECTION");
+        menu.addItem (101, "TO OSC / WAVETABLE");
+        menu.addItem (102, "TO 6-OP FM");
+        menu.addItem (103, "TO FILTER / AMP");
+        juce::Component::SafePointer<SignalLabPage> safeThis (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safeThis, layer] (int result)
+        {
+            if (safeThis != nullptr && result >= 101 && result <= 103) safeThis->showNewRouteMenu (layer, result - 100);
+        });
     }
 
     juce::Point<float> toScreen (juce::Point<float> world) const
@@ -171,12 +544,55 @@ private:
         return (screenPoint - graphViewport.getPosition() - graphPan) / graphZoom;
     }
 
+    int findNodeIndex (const std::string& id) const
+    {
+        if (id.empty()) return -1;
+        for (int i = 0; i < (int) nodes.size(); ++i)
+            if (nodes[(size_t) i].id.toStdString() == id) return i;
+        return -1;
+    }
+
     int hitTestNode (juce::Point<float> screenPoint) const
     {
         const auto world = toWorld (screenPoint);
         for (int i = (int) nodes.size() - 1; i >= 0; --i)
             if (nodes[(size_t) i].worldBounds.contains (world)) return i;
         return -1;
+    }
+
+    juce::Point<float> modOutputPoint (const GraphNode& node) const
+    {
+        const auto r = toScreen (node.worldBounds);
+        return { r.getCentreX(), r.getY() };
+    }
+
+    juce::Point<float> modInputPoint (const GraphNode& node) const
+    {
+        const auto r = toScreen (node.worldBounds);
+        return { r.getCentreX(), r.getBottom() };
+    }
+
+    int hitTestModOutput (juce::Point<float> screenPoint) const
+    {
+        const float radius = juce::jmax (8.0f, 8.0f * graphZoom);
+        for (int i = (int) nodes.size() - 1; i >= 0; --i)
+            if (nodes[(size_t) i].modOutputPort && modOutputPoint (nodes[(size_t) i]).getDistanceFrom (screenPoint) <= radius) return i;
+        return -1;
+    }
+
+    int hitTestModInput (juce::Point<float> screenPoint) const
+    {
+        const float radius = juce::jmax (8.0f, 8.0f * graphZoom);
+        for (int i = (int) nodes.size() - 1; i >= 0; --i)
+            if (nodes[(size_t) i].modInputPort && modInputPoint (nodes[(size_t) i]).getDistanceFrom (screenPoint) <= radius) return i;
+        return -1;
+    }
+
+    bool canConnect (const GraphNode& from, const GraphNode& to) const
+    {
+        return from.role == NodeRole::modHub && from.modOutputPort
+            && to.role == NodeRole::stage && to.modInputPort
+            && from.layer == to.layer && to.stage >= 1 && to.stage <= 3;
     }
 
     ToolbarAction hitToolbar (juce::Point<float> point) const
@@ -320,18 +736,25 @@ private:
 
     int addNode (juce::Rectangle<float> base, const juce::String& id, const juce::String& title,
                  const juce::String& detail, const juce::String& tab, int layer, juce::Colour colour,
-                 bool inputPort = true, bool outputPort = true)
+                 bool inputPort = true, bool outputPort = true, NodeRole role = NodeRole::stage,
+                 int stage = -1, bool modInputPort = false, bool modOutputPort = false)
     {
         auto offset = juce::Point<float>();
         if (const auto it = nodeOffsets.find (id.toStdString()); it != nodeOffsets.end()) offset = it->second;
-        nodes.push_back ({ id, base, base.translated (offset.x, offset.y), title, detail, tab, layer, colour, inputPort, outputPort });
+        GraphNode node;
+        node.id = id; node.baseBounds = base; node.worldBounds = base.translated (offset.x, offset.y);
+        node.title = title; node.detail = detail; node.tab = tab; node.layer = layer; node.colour = colour;
+        node.inputPort = inputPort; node.outputPort = outputPort; node.role = role; node.stage = stage;
+        node.modInputPort = modInputPort; node.modOutputPort = modOutputPort;
+        nodes.push_back (std::move (node));
         return (int) nodes.size() - 1;
     }
 
-    void connect (int from, int to, EdgeKind kind = EdgeKind::audio)
+    void connect (int from, int to, EdgeKind kind = EdgeKind::audio, EdgeEditKind editKind = EdgeEditKind::none,
+                  int layer = -2, int slot = -1, const juce::String& key = {}, const juce::String& label = {})
     {
         if (juce::isPositiveAndBelow (from, (int) nodes.size()) && juce::isPositiveAndBelow (to, (int) nodes.size()))
-            edges.push_back ({ from, to, kind });
+            edges.push_back ({ from, to, kind, editKind, layer, slot, key, label });
     }
 
     void drawGrid (juce::Graphics& g, juce::Colour led)
@@ -354,42 +777,95 @@ private:
         }
     }
 
+    std::pair<juce::Point<float>, juce::Point<float>> edgeEndpoints (const GraphEdge& edge) const
+    {
+        const auto& from = nodes[(size_t) edge.from];
+        const auto& to = nodes[(size_t) edge.to];
+        if (edge.kind == EdgeKind::modulation) return { modOutputPoint (from), modInputPoint (to) };
+        if (edge.kind == EdgeKind::clock)
+        {
+            const auto a = toScreen (from.worldBounds), b = toScreen (to.worldBounds);
+            return { { a.getX(), a.getCentreY() }, { b.getCentreX(), b.getBottom() } };
+        }
+        const auto a = toScreen (from.worldBounds), b = toScreen (to.worldBounds);
+        return { { a.getRight(), a.getCentreY() }, { b.getX(), b.getCentreY() } };
+    }
+
+    juce::Path edgePath (const GraphEdge& edge) const
+    {
+        juce::Path wire;
+        if (! juce::isPositiveAndBelow (edge.from, (int) nodes.size()) || ! juce::isPositiveAndBelow (edge.to, (int) nodes.size())) return wire;
+        const auto [a, b] = edgeEndpoints (edge);
+        wire.startNewSubPath (a);
+        if (edge.kind == EdgeKind::modulation)
+        {
+            const float lift = juce::jmax (18.0f, (22.0f + juce::jmax (0, edge.slot) * 5.0f) * graphZoom);
+            wire.cubicTo ({ a.x, a.y - lift }, { b.x, b.y + lift }, b);
+        }
+        else
+        {
+            const float bend = juce::jmax (24.0f, std::abs (b.x - a.x) * 0.42f);
+            wire.cubicTo ({ a.x + bend, a.y }, { b.x - bend, b.y }, b);
+        }
+        return wire;
+    }
+
+    int hitTestEdge (juce::Point<float> point) const
+    {
+        for (int i = (int) edges.size() - 1; i >= 0; --i)
+        {
+            if (! juce::isPositiveAndBelow (edges[(size_t) i].from, (int) nodes.size())
+                || ! juce::isPositiveAndBelow (edges[(size_t) i].to, (int) nodes.size())) continue;
+            juce::Path hitArea;
+            juce::PathStrokeType (juce::jmax (8.0f, 10.0f * graphZoom)).createStrokedPath (hitArea, edgePath (edges[(size_t) i]));
+            if (hitArea.contains (point.x, point.y)) return i;
+        }
+        return -1;
+    }
+
+    void drawEdgeLabel (juce::Graphics& g, const GraphEdge& edge, juce::Colour colour)
+    {
+        if (edge.label.isEmpty()) return;
+        const auto [a, b] = edgeEndpoints (edge);
+        const auto centre = (a + b) * 0.5f;
+        const float width = juce::jlimit (54.0f, 150.0f, 12.0f + edge.label.length() * 5.1f * juce::jmax (0.75f, graphZoom));
+        auto r = juce::Rectangle<float> (centre.x - width * 0.5f, centre.y - 8.0f, width, 16.0f);
+        g.setColour (juce::Colour (0xe6070d0f)); g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (colour.withAlpha (0.85f)); g.drawRoundedRectangle (r, 3.0f, 0.8f);
+        g.setColour (juce::Colour (0xffd5e2df));
+        g.setFont (juce::Font (juce::FontOptions (juce::jmax (6.5f, 7.5f * graphZoom), juce::Font::bold)));
+        g.drawFittedText (edge.label, r.reduced (4, 0).toNearestInt(), juce::Justification::centred, 1);
+    }
+
     void drawEdge (juce::Graphics& g, const GraphEdge& edge, juce::Colour led, juce::Colour accent)
     {
         if (! juce::isPositiveAndBelow (edge.from, (int) nodes.size()) || ! juce::isPositiveAndBelow (edge.to, (int) nodes.size())) return;
         const auto& from = nodes[(size_t) edge.from];
         const auto& to = nodes[(size_t) edge.to];
-        juce::Point<float> a, b;
-        if (edge.kind == EdgeKind::modulation)
-        {
-            a = toScreen (juce::Point<float> { from.worldBounds.getCentreX(), from.worldBounds.getY() });
-            b = toScreen (juce::Point<float> { to.worldBounds.getCentreX(), to.worldBounds.getBottom() });
-        }
-        else if (edge.kind == EdgeKind::clock)
-        {
-            a = toScreen (juce::Point<float> { from.worldBounds.getX(), from.worldBounds.getCentreY() });
-            b = toScreen (juce::Point<float> { to.worldBounds.getCentreX(), to.worldBounds.getBottom() });
-        }
-        else
-        {
-            a = toScreen (juce::Point<float> { from.worldBounds.getRight(), from.worldBounds.getCentreY() });
-            b = toScreen (juce::Point<float> { to.worldBounds.getX(), to.worldBounds.getCentreY() });
-        }
-        const float bend = juce::jmax (24.0f, std::abs (b.x - a.x) * 0.42f);
-        juce::Path wire;
-        wire.startNewSubPath (a);
-        wire.cubicTo (juce::Point<float> { a.x + bend, a.y }, juce::Point<float> { b.x - bend, b.y }, b);
+        const auto wire = edgePath (edge);
+        const bool selected = edge.key.isNotEmpty() && edge.key.toStdString() == selectedEdgeKey;
+
         if (edge.kind == EdgeKind::audio)
-            glow (g, wire, from.colour.interpolatedWith (to.colour, 0.45f).withAlpha (0.7f), juce::jmax (0.9f, graphZoom));
+        {
+            const auto colour = selected ? accent.brighter (0.2f) : from.colour.interpolatedWith (to.colour, 0.45f).withAlpha (0.7f);
+            glow (g, wire, colour, juce::jmax (0.9f, graphZoom + (selected ? 0.8f : 0.0f)));
+            if (edge.editKind == EdgeEditKind::layerCombine) drawEdgeLabel (g, edge, accent);
+        }
+        else if (edge.kind == EdgeKind::modulation)
+        {
+            const auto colour = selected ? juce::Colours::white : led;
+            g.setColour (colour.withAlpha (selected ? 0.92f : 0.64f));
+            g.strokePath (wire, juce::PathStrokeType (juce::jmax (1.0f, graphZoom * (selected ? 1.8f : 1.25f))));
+            drawEdgeLabel (g, edge, led);
+        }
         else
         {
-            const auto colour = edge.kind == EdgeKind::clock ? accent : led;
-            g.setColour (colour.withAlpha (edge.kind == EdgeKind::clock ? 0.32f : 0.24f));
+            g.setColour (accent.withAlpha (0.32f));
             g.strokePath (wire, juce::PathStrokeType (juce::jmax (0.7f, graphZoom * 0.85f)));
         }
     }
 
-    void drawNode (juce::Graphics& g, const GraphNode& node, juce::Colour accent)
+    void drawNode (juce::Graphics& g, const GraphNode& node, juce::Colour led, juce::Colour accent)
     {
         auto r = toScreen (node.worldBounds);
         const bool selected = node.id.toStdString() == selectedNodeId;
@@ -407,6 +883,66 @@ private:
         g.setColour (node.colour.withAlpha (0.9f));
         if (node.inputPort) g.fillEllipse (r.getX() - portRadius, r.getCentreY() - portRadius, portRadius * 2, portRadius * 2);
         if (node.outputPort) g.fillEllipse (r.getRight() - portRadius, r.getCentreY() - portRadius, portRadius * 2, portRadius * 2);
+
+        if (node.modInputPort)
+        {
+            const auto p = modInputPoint (node);
+            bool valid = false;
+            if (connecting)
+            {
+                const int from = findNodeIndex (connectionFromId);
+                valid = from >= 0 && canConnect (nodes[(size_t) from], node);
+                if (valid)
+                {
+                    const bool hover = node.id.toStdString() == hoverTargetId;
+                    g.setColour (led.withAlpha (hover ? 0.28f : 0.12f));
+                    g.fillEllipse (p.x - portRadius * 3.0f, p.y - portRadius * 3.0f, portRadius * 6.0f, portRadius * 6.0f);
+                }
+            }
+            g.setColour ((valid ? led : accent).withAlpha (valid ? 1.0f : 0.72f));
+            g.fillEllipse (p.x - portRadius, p.y - portRadius, portRadius * 2.0f, portRadius * 2.0f);
+        }
+
+        if (node.modOutputPort)
+        {
+            const auto p = modOutputPoint (node);
+            g.setColour (led.withAlpha (0.18f));
+            g.fillEllipse (p.x - portRadius * 2.3f, p.y - portRadius * 2.3f, portRadius * 4.6f, portRadius * 4.6f);
+            g.setColour (led);
+            g.fillEllipse (p.x - portRadius, p.y - portRadius, portRadius * 2.0f, portRadius * 2.0f);
+        }
+
+        if (node.role == NodeRole::clock)
+        {
+            g.setColour (accent.withAlpha (0.8f));
+            g.fillEllipse (r.getX() - portRadius, r.getCentreY() - portRadius, portRadius * 2.0f, portRadius * 2.0f);
+        }
+        else if (node.role == NodeRole::modHub)
+        {
+            g.setColour (accent.withAlpha (0.65f));
+            g.fillEllipse (r.getCentreX() - portRadius, r.getBottom() - portRadius, portRadius * 2.0f, portRadius * 2.0f);
+        }
+    }
+
+    void drawConnectionPreview (juce::Graphics& g, juce::Colour led, juce::Colour accent)
+    {
+        if (! connecting) return;
+        const int from = findNodeIndex (connectionFromId);
+        if (from < 0) return;
+        const auto start = modOutputPoint (nodes[(size_t) from]);
+        auto end = connectionDragPoint;
+        bool valid = false;
+        if (const int target = findNodeIndex (hoverTargetId); target >= 0)
+        {
+            valid = canConnect (nodes[(size_t) from], nodes[(size_t) target]);
+            if (valid) end = modInputPoint (nodes[(size_t) target]);
+        }
+        juce::Path preview;
+        preview.startNewSubPath (start);
+        const float lift = juce::jmax (22.0f, std::abs (end.y - start.y) * 0.32f);
+        preview.cubicTo ({ start.x, start.y - lift }, { end.x, end.y + lift }, end);
+        const auto colour = valid ? led : accent.withSaturation (0.25f);
+        glow (g, preview, colour.withAlpha (valid ? 0.88f : 0.48f), juce::jmax (1.0f, graphZoom * 1.3f));
     }
 
     void drawToolbar (juce::Graphics& g, juce::Rectangle<float> header, juce::Colour led, juce::Colour accent)
@@ -435,7 +971,7 @@ private:
         auto textArea = header.withTrimmedRight (total + 12.0f).reduced (8, 0);
         g.setColour (led); g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
         const bool daw = parameter ("tempoSource", 1.0f) >= 0.5f;
-        g.drawFittedText ("PATCH MAP / DRAG NODE TO MOVE / EMPTY SPACE TO PAN / WHEEL TO ZOOM / DOUBLE-CLICK TO EDIT    CLOCK: "
+        g.drawFittedText ("PATCH MAP / DRAG MOD JACK > VALID DESTINATION TO ADD / RIGHT-CLICK CABLE TO EDIT / FIXED AUDIO ORDER STAYS SAFE    CLOCK: "
                           + juce::String (proc.getEffectiveBpm(), 1) + " BPM " + (daw ? "DAW" : "MANUAL"),
                           textArea.toNearestInt(), juce::Justification::centredLeft, 1);
     }
@@ -457,7 +993,7 @@ private:
         const juce::String stages[] { "INSTANCE", "OSC / WT", "6-OP FM", "FILTER / AMP", "FX", "COMBINE" };
         const juce::String tabs[] { "SYNTH", "SYNTH", "FM", "FILTER", "FX", "LAYERS" };
         const juce::uint32 colours[] { 0xff54f5d1, 0xffffbd65, 0xffc9a0ff, 0xff78f1c4, 0xffff91b8, 0xffa6cf75, 0xff94aaff, 0xffff9673 };
-        std::vector<int> combineNodes, modNodes;
+        std::vector<int> combineNodes, combineLayers, modNodes;
 
         for (size_t row = 0; row < instances.size(); ++row)
         {
@@ -475,34 +1011,68 @@ private:
             {
                 rowNodes[(size_t) stage] = addNode ({ xs[(size_t) stage], y, nodeW, nodeH }, prefix + ":S" + juce::String (stage),
                     stage == 0 ? (layer < 0 ? "INSTANCE 1 / MAIN" : "INSTANCE " + juce::String (layer + 2)) : stages[stage],
-                    details[stage], tabs[stage], layer, colour, stage != 0, true);
+                    details[stage], tabs[stage], layer, colour, stage != 0, true, NodeRole::stage, stage,
+                    stage >= 1 && stage <= 3, false);
                 if (stage > 0) connect (rowNodes[(size_t) stage - 1], rowNodes[(size_t) stage], EdgeKind::audio);
             }
             combineNodes.push_back (rowNodes.back());
+            combineLayers.push_back (layer);
 
-            const int mod = addNode ({ 305.0f, y + 58.0f, 126.0f, 36.0f }, prefix + ":MOD", "MOD / ROUTES", "LFO / MSEG / matrix", "MOD", layer, accent, false, false);
+            const auto voice = voiceForLayer (layer);
+            int activeRoutes = 0;
+            for (const auto& route : voice.moduleModSlots)
+                if (route.source != (int) ModSource::none && route.destination != (int) ModDestination::none) ++activeRoutes;
+
+            const int mod = addNode ({ 305.0f, y + 58.0f, 126.0f, 36.0f }, prefix + ":MOD", "MOD / ROUTES",
+                                     juce::String (activeRoutes) + " ACTIVE / DRAG JACK", "MOD", layer, accent,
+                                     false, false, NodeRole::modHub, -1, false, true);
             modNodes.push_back (mod);
-            connect (mod, rowNodes[1], EdgeKind::modulation);
-            connect (mod, rowNodes[2], EdgeKind::modulation);
-            connect (mod, rowNodes[3], EdgeKind::modulation);
-            connect (mod, rowNodes[4], EdgeKind::modulation);
+
+            for (int slot = 0; slot < VoiceParameters::modGraphSlotCount; ++slot)
+            {
+                const auto& route = voice.moduleModSlots[(size_t) slot];
+                const int targetStage = stageForDestination (route.destination);
+                if (route.source == (int) ModSource::none || route.destination == (int) ModDestination::none
+                    || targetStage < 1 || targetStage > 3) continue;
+                const auto key = "route:" + juce::String (layer) + ":" + juce::String (slot);
+                const auto label = sourceName (route.source) + " > " + destinationName (route.destination) + " " + juce::String (route.amount, 2);
+                connect (mod, rowNodes[(size_t) targetStage], EdgeKind::modulation, EdgeEditKind::modulationRoute,
+                         layer, slot, key, label);
+            }
         }
 
         const float firstY = nodeH * 0.5f;
         const float lastY = (instances.size() - 1) * rowGap + nodeH * 0.5f;
         const float masterY = (firstY + lastY) * 0.5f;
         const int master = addNode ({ 770.0f, masterY - nodeH * 0.5f, 126.0f, nodeH }, "MASTER", "MASTER OUT",
-                                    juce::String (parameter ("masterOutputGain", 0.0f), 1) + " dB", "FX", -2, led, true, false);
-        for (const auto combine : combineNodes) connect (combine, master, EdgeKind::audio);
+                                    juce::String (parameter ("masterOutputGain", 0.0f), 1) + " dB", "FX", -2, led,
+                                    true, false, NodeRole::master);
+        for (size_t i = 0; i < combineNodes.size(); ++i)
+        {
+            const int layer = combineLayers[i];
+            if (layer < 0)
+                connect (combineNodes[i], master, EdgeKind::audio);
+            else
+            {
+                const auto prefix = "layer" + juce::String (layer + 1);
+                const int operation = juce::jlimit (0, 4, (int) parameter (prefix + "Operation", 0.0f));
+                const juce::String opNames[] { "ADD", "MIX", "SUB", "MULT", "DIV" };
+                connect (combineNodes[i], master, EdgeKind::audio, EdgeEditKind::layerCombine, layer, -1,
+                         "combine:" + juce::String (layer), opNames[operation] + " " + juce::String (parameter (prefix + "Amount", 1.0f), 2));
+            }
+        }
+
         const int clock = addNode ({ 770.0f, masterY + 64.0f, 126.0f, nodeH }, "CLOCK", "TEMPO CLOCK",
-                                   juce::String (proc.getEffectiveBpm(), 1) + " BPM", "MOD", -2, accent, false, true);
+                                   juce::String (proc.getEffectiveBpm(), 1) + " BPM", "MOD", -2, accent,
+                                   false, true, NodeRole::clock);
         for (const auto mod : modNodes) connect (clock, mod, EdgeKind::clock);
 
         drawToolbar (g, header, led, accent);
         g.saveState(); g.reduceClipRegion (graphViewport.toNearestInt());
         drawGrid (g, led);
         for (const auto& edge : edges) drawEdge (g, edge, led, accent);
-        for (const auto& node : nodes) drawNode (g, node, accent);
+        for (const auto& node : nodes) drawNode (g, node, led, accent);
+        drawConnectionPreview (g, led, accent);
         g.restoreState();
     }
 
