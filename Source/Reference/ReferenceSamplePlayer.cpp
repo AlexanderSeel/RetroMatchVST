@@ -3,8 +3,54 @@
 
 namespace
 {
+void processFilter (juce::AudioBuffer<float>& audio,
+                    const juce::dsp::IIR::Coefficients<float>::Ptr& coefficients)
+{
+    if (coefficients == nullptr) return;
+    for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+    {
+        juce::dsp::IIR::Filter<float> filter;
+        filter.coefficients = coefficients;
+        filter.reset();
+        filter.processSamples (audio.getWritePointer (ch), audio.getNumSamples());
+    }
+}
+
+void applyTone (juce::AudioBuffer<float>& audio, double sampleRate,
+                const ReferenceSamplePlayer::EditTone& tone)
+{
+    if (audio.getNumSamples() <= 0 || sampleRate <= 1000.0 || tone.isNeutral()) return;
+
+    const float nyquistSafe = (float) juce::jmax (1000.0, sampleRate * 0.45);
+    const float lowCut = juce::jlimit (10.0f, juce::jmin (1000.0f, nyquistSafe * 0.45f), tone.lowCutHz);
+    const float highCut = juce::jlimit (juce::jmax (1200.0f, lowCut * 1.6f), nyquistSafe, tone.highCutHz);
+    constexpr float q = 0.70710678f;
+
+    if (lowCut > 20.01f)
+        processFilter (audio, juce::dsp::IIR::Coefficients<float>::makeHighPass (sampleRate, lowCut, q));
+
+    if (std::abs (tone.lowGainDb) > 0.001f)
+        processFilter (audio, juce::dsp::IIR::Coefficients<float>::makeLowShelf (
+            sampleRate, juce::jmin (180.0f, highCut * 0.25f), q,
+            juce::Decibels::decibelsToGain (tone.lowGainDb)));
+
+    if (std::abs (tone.midGainDb) > 0.001f)
+        processFilter (audio, juce::dsp::IIR::Coefficients<float>::makePeakFilter (
+            sampleRate, juce::jmin (1200.0f, highCut * 0.42f), 0.82f,
+            juce::Decibels::decibelsToGain (tone.midGainDb)));
+
+    if (std::abs (tone.highGainDb) > 0.001f)
+        processFilter (audio, juce::dsp::IIR::Coefficients<float>::makeHighShelf (
+            sampleRate, juce::jmin (6500.0f, highCut * 0.72f), q,
+            juce::Decibels::decibelsToGain (tone.highGainDb)));
+
+    if (highCut < juce::jmin (19999.0f, nyquistSafe - 1.0f))
+        processFilter (audio, juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, highCut, q));
+}
+
 bool readProcessedRegion (const juce::File& source, double startSeconds, double endSeconds,
                           bool normalize, float fadeInSeconds, float fadeOutSeconds,
+                          const ReferenceSamplePlayer::EditTone& tone,
                           juce::AudioBuffer<float>& audio, double& sampleRate)
 {
     juce::AudioFormatManager formats;
@@ -27,6 +73,11 @@ bool readProcessedRegion (const juce::File& source, double startSeconds, double 
     audio.setSize (channels, count, false, false, true);
     if (! reader->read (&audio, 0, count, firstSample, true, true)) return false;
     sampleRate = reader->sampleRate;
+
+    // Reference tone shaping is intentionally offline: the audio callback never
+    // builds filters or reallocates buffers. Normalize after EQ so -1 dBFS refers
+    // to the sound the user actually hears and exports.
+    applyTone (audio, sampleRate, tone);
 
     float gain = 1.0f;
     if (normalize)
@@ -150,9 +201,18 @@ bool ReferenceSamplePlayer::writeProcessedRegion (const juce::File& source, cons
                                                   double startSeconds, double endSeconds, bool normalize,
                                                   float fadeInSeconds, float fadeOutSeconds)
 {
+    return writeProcessedRegion (source, destination, startSeconds, endSeconds, normalize,
+                                 fadeInSeconds, fadeOutSeconds, EditTone {});
+}
+
+bool ReferenceSamplePlayer::writeProcessedRegion (const juce::File& source, const juce::File& destination,
+                                                  double startSeconds, double endSeconds, bool normalize,
+                                                  float fadeInSeconds, float fadeOutSeconds, const EditTone& tone)
+{
     juce::AudioBuffer<float> audio;
     double sr = 0.0;
-    if (! readProcessedRegion (source, startSeconds, endSeconds, normalize, fadeInSeconds, fadeOutSeconds, audio, sr)) return false;
+    if (! readProcessedRegion (source, startSeconds, endSeconds, normalize, fadeInSeconds, fadeOutSeconds,
+                               tone, audio, sr)) return false;
 
     juce::TemporaryFile temp (destination);
     std::unique_ptr<juce::OutputStream> stream = temp.getFile().createOutputStream();
@@ -172,12 +232,20 @@ bool ReferenceSamplePlayer::previewRegion (const juce::File& file, int rootMidiN
                                            double startSeconds, double endSeconds, bool normalize,
                                            float fadeInSeconds, float fadeOutSeconds)
 {
+    return previewRegion (file, rootMidiNote, startSeconds, endSeconds, normalize,
+                          fadeInSeconds, fadeOutSeconds, EditTone {});
+}
+
+bool ReferenceSamplePlayer::previewRegion (const juce::File& file, int rootMidiNote,
+                                           double startSeconds, double endSeconds, bool normalize,
+                                           float fadeInSeconds, float fadeOutSeconds, const EditTone& tone)
+{
     stopPreview();
     allNotesOff();
     const double previewEnd = juce::jmin (endSeconds, startSeconds + 180.0);
     auto temp = juce::File::getSpecialLocation (juce::File::tempDirectory)
                     .getNonexistentChildFile ("RetroMatch-reference-preview", ".wav", false);
-    if (! writeProcessedRegion (file, temp, startSeconds, previewEnd, normalize, fadeInSeconds, fadeOutSeconds)) return false;
+    if (! writeProcessedRegion (file, temp, startSeconds, previewEnd, normalize, fadeInSeconds, fadeOutSeconds, tone)) return false;
 
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (temp));
     if (reader == nullptr) { temp.deleteFile(); return false; }
