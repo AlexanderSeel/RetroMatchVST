@@ -1,0 +1,34 @@
+name: Apply large signal-map fix
+
+on:
+  push:
+    branches:
+      - plan/big-signal-view-20260909
+    paths:
+      - scripts/apply-big-signal-view-fix.py
+      - .github/workflows/apply-big-signal-view-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: plan/big-signal-view-20260909
+          fetch-depth: 0
+      - name: Apply source patch
+        run: python scripts/apply-big-signal-view-fix.py
+      - name: Static integrity
+        run: python scripts/static-check.py
+      - name: Commit source and remove scaffolding
+        shell: bash
+        run: |
+          rm -f scripts/apply-big-signal-view-fix.py .github/workflows/apply-big-signal-view-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix responsive large patch-map view"
+          git push origin HEAD:plan/big-signal-view-20260909
