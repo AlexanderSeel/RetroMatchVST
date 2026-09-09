@@ -44,13 +44,19 @@ struct Port
     bool modulationSafe = false;
 };
 
+struct Position
+{
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
 struct Node
 {
     juce::String id;
     NodeType type = NodeType::processor;
     juce::String title;
     std::vector<Port> ports;
-    juce::Point<float> position;
+    Position position;
     bool positionValid = false;
     bool locked = false;
 
@@ -75,7 +81,7 @@ struct Edge
 
 struct ViewState
 {
-    juce::Point<float> pan { 18.0f, 18.0f };
+    Position pan { 18.0f, 18.0f };
     float zoom = 0.82f;
     bool snapToGrid = true;
 };

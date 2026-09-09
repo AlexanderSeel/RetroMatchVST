@@ -14,12 +14,12 @@ public:
     explicit SignalLabPage (RetroMatchSynthAudioProcessor& p, bool mapOnly = false) : proc (p), mapOnlyMode (mapOnly)
     {
         const auto restored = proc.getPatchGraphDocument();
-        graphPan = restored.view.pan;
+        graphPan = { restored.view.pan.x, restored.view.pan.y };
         graphZoom = restored.view.zoom;
         snapToGrid = restored.view.snapToGrid;
         lastPersistedGraphFingerprint = restored.fingerprint();
         for (const auto& node : restored.nodes)
-            if (node.positionValid) restoredNodePositions[node.id.toStdString()] = node.position;
+            if (node.positionValid) restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };
         setWantsKeyboardFocus (true);
         startTimerHz (30);
     }
@@ -669,13 +669,13 @@ private:
     void stageGraphStateForPersistence()
     {
         if (graphModel.nodes.empty()) return;
-        graphModel.view.pan = graphPan;
+        graphModel.view.pan = { graphPan.x, graphPan.y };
         graphModel.view.zoom = graphZoom;
         graphModel.view.snapToGrid = snapToGrid;
         for (const auto& node : nodes)
             if (auto* stored = graphModel.findNode (node.id))
             {
-                stored->position = node.worldBounds.getPosition();
+                stored->position = { node.worldBounds.getX(), node.worldBounds.getY() };
                 stored->positionValid = true;
             }
 
@@ -881,7 +881,7 @@ private:
         PatchGraph::Node modelNode;
         modelNode.id = id;
         modelNode.title = title;
-        modelNode.position = node.worldBounds.getPosition();
+        modelNode.position = { node.worldBounds.getX(), node.worldBounds.getY() };
         modelNode.positionValid = true;
         if (role == NodeRole::master) modelNode.type = PatchGraph::NodeType::master;
         else if (role == NodeRole::clock) modelNode.type = PatchGraph::NodeType::clock;
