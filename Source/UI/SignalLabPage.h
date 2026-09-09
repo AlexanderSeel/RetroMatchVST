@@ -1220,7 +1220,7 @@ private:
         return false;
     }
 
-    void drawEdgeLabel
+    void drawEdgeLabel (juce::Graphics& g, const GraphEdge& edge, juce::Colour colour)
     {
         if (edge.label.isEmpty()) return;
         const auto [a, b] = edgeEndpoints (edge);
