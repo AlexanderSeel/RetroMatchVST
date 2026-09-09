@@ -1,0 +1,2 @@
+CI verification trigger for commit 92d2c196d9b38198e6926fbf7faaa11618fba207.
+Source fixes: JUCE ThreadPool addJob void API, SynthEngine parallel FX local block state, and MSVC warning cleanup.
