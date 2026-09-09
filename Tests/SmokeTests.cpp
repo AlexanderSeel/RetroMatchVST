@@ -595,6 +595,22 @@ int main (int argc, char** argv)
             return fail ("patch graph topological order is not deterministic");
         PatchGraph::Edge wrong = a; wrong.id = "wrong"; wrong.toPort = "mod.in";
         if (graph.validateConnection (wrong).ok) return fail ("patch graph allowed incompatible port types");
+        juce::String mutationReason;
+        if (graph.removeEdge ("b", &mutationReason)) return fail ("patch graph removed a required audio route that orphaned MASTER");
+        if (graph.findEdge ("b") == nullptr) return fail ("failed graph mutation changed the original document");
+
+        PatchGraph::Document editable;
+        PatchGraph::Node mod; mod.id = "MOD"; mod.type = PatchGraph::NodeType::modulationRouter; mod.ports = { PatchGraph::modulationOutput() };
+        PatchGraph::Node targetA; targetA.id = "A"; targetA.type = PatchGraph::NodeType::processor; targetA.ports = { PatchGraph::modulationInput() };
+        PatchGraph::Node targetB = targetA; targetB.id = "B";
+        if (! editable.addNode (mod) || ! editable.addNode (targetA) || ! editable.addNode (targetB)) return fail ("editable graph fixture setup failed");
+        PatchGraph::Edge route; route.id = "route"; route.fromNode = "MOD"; route.fromPort = "mod.out"; route.toNode = "A"; route.toPort = "mod.in";
+        route.type = PatchGraph::PortType::modulation; route.editable = true;
+        if (! editable.addEdge (route)) return fail ("editable route fixture rejected valid route");
+        auto reconnected = route; reconnected.toNode = "B";
+        if (! editable.replaceEdge ("route", reconnected, &mutationReason)) return fail ("editable route endpoint could not be reconnected");
+        if (editable.findEdge ("route") == nullptr || editable.findEdge ("route")->toNode != "B") return fail ("reconnected route did not replace the endpoint");
+        if (! editable.removeEdge ("route", &mutationReason) || editable.findEdge ("route") != nullptr) return fail ("editable route could not be removed");
 
         PatchGraph::Document cycle;
         PatchGraph::Node x; x.id = "A"; x.type = PatchGraph::NodeType::processor; x.ports = { PatchGraph::audioInput (true), PatchGraph::audioOutput() };

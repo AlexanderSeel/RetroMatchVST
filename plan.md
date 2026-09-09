@@ -25,7 +25,7 @@ The next major UI/DSP milestone turns **SIGNAL LAB / PATCH MAP** from a read-onl
 - [x] Keep the existing synth engine as the source of truth for playback and offline matching.
 - [ ] Any feedback-capable routing must have explicit gain limiting, delay/state ownership and cycle validation.
 - [x] Old sessions without graph state load into the current canonical signal chain; Patch Map rebuilds the typed graph from restored DSP/APVTS state.
-- [ ] Graph edits must be undoable and serializable before arbitrary routing is enabled.
+- [x] Currently supported graph edits are undoable and serializable before arbitrary audio routing is enabled.
 
 ## 1. Interactive canvas foundation
 
@@ -80,14 +80,14 @@ Each node gets a stable ID, type and capabilities, for example:
 
 ## 3. Cable editing and routing UI
 
-- [ ] Drag from output port to compatible input port to create a connection.
-- [ ] Drag an existing cable endpoint to reconnect it.
-- [ ] Click cable to select; Delete/right-click removes it.
+- [x] Drag from the MOD output jack to a compatible modulation input to create a DSP-backed connection.
+- [x] Drag an existing modulation cable destination endpoint to reconnect it while preserving source/depth.
+- [x] Click cable to select; Delete removes editable routes/layer combines; right-click or double-click opens detailed editing.
 - [ ] Hover highlights the complete upstream/downstream path.
-- [ ] Distinct visual language for audio, modulation and clock cables.
+- [x] Distinct visual language for audio, modulation and clock cables.
 - [ ] Quick actions: **Insert after**, **Split parallel**, **Merge**, **Disconnect**, **Restore default route**.
 - [ ] Context menu on nodes: Edit, Bypass, Solo, Mute, Duplicate, Randomize, Lock position.
-- [ ] Undo/redo all graph operations.
+- [x] Undo/redo for supported graph operations: node layout, modulation cable create/edit/reconnect/delete and layer-combine edits.
 
 ## 4. DSP routing compiler
 
@@ -137,7 +137,7 @@ The matcher should be able to exploit the richer graph rather than only paramete
 
 - [x] Serialize graph version, nodes, edges, positions and UI viewport into `.rmsynth` and DAW state.
 - [x] Migrate legacy sessions without graph state to the canonical graph rebuilt from their restored synth state.
-- [ ] Do not serialize temporary meters/hover/selection state.
+- [x] Temporary meters/hover/selection and undo history are not serialized.
 - [x] Add graph schema versioning independent of plug-in version.
 - [x] Validate and repair malformed graph state instead of crashing; invalid nodes/edges are skipped during ValueTree restore.
 
@@ -160,7 +160,7 @@ A user can rearrange the patch visually, create/reconnect/remove only valid cabl
 
 1. **Canvas interaction** — node drag, grid, zoom controls, fit/auto arrange. *(started on main)*
 2. **Persistent graph data model** — stable IDs, typed ports, edge serialization, validation. *(implemented; typed schema v1 persisted in session/preset state)*
-3. **Cable editor** — connection creation/reconnection/deletion + undo.
+3. **Cable editor** — connection creation/reconnection/deletion + undo. *(v1 implemented for DSP-backed modulation and layer-combine cables; fixed audio topology remains protected)*
 4. **DSP compiler v1** — safe serial/parallel audio routing and layer combine topology.
 5. **Modulation cable routing** — expose supported destinations through the graph.
 6. **Sound-design utilities/macros/scenes**.

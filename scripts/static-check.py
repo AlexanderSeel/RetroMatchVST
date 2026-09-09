@@ -132,6 +132,7 @@ required_tokens = {
     'tempo modular FX': ['tempoSync', 'tempoDivision', 'fxModuleCanTempoSync', 'TempoSync::frequencyHz', 'TempoSync::seconds'],
     'interactive signal map': ['mouseWheelMove', 'mouseDrag', 'mouseDoubleClick', 'graphZoom', 'graphPan', 'INSTANCE 1 / MAIN'],
     'typed persistent patch graph': ['schemaVersion', 'PortType', 'validateConnection', 'wouldCreateAudioCycle', 'topologicalOrder', 'toValueTree', 'fromValueTree', 'modulationSafe'],
+    'cable editor v1': ['findEdge', 'replaceEdge', 'removeEdge', 'showReconnectRouteMenu', 'deleteSelectedCable', 'undoCableEdit', 'redoCableEdit', 'KeyPress::deleteKey'],
 }
 texts = {
     'processor wavetable parameters': processor,
@@ -170,6 +171,7 @@ texts = {
     'tempo modular FX': module_rack + processor,
     'interactive signal map': signal_page,
     'typed persistent patch graph': patch_graph + signal_page + processor_h,
+    'cable editor v1': patch_graph + signal_page,
 }
 for name, tokens in required_tokens.items():
     for token in tokens:

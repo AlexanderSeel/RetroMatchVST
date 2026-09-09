@@ -131,6 +131,20 @@ public:
         return nullptr;
     }
 
+    const Edge* findEdge (const juce::String& edgeId) const noexcept
+    {
+        for (const auto& edge : edges)
+            if (edge.id == edgeId) return &edge;
+        return nullptr;
+    }
+
+    Edge* findEdge (const juce::String& edgeId) noexcept
+    {
+        for (auto& edge : edges)
+            if (edge.id == edgeId) return &edge;
+        return nullptr;
+    }
+
     bool addNode (Node node, juce::String* reason = nullptr)
     {
         if (node.id.isEmpty())
@@ -210,6 +224,56 @@ public:
             return false;
         }
         edges.push_back (std::move (edge));
+        return true;
+    }
+
+    bool removeEdge (const juce::String& edgeId, juce::String* reason = nullptr, bool requireValidGraph = true)
+    {
+        Document candidate = *this;
+        const auto it = std::find_if (candidate.edges.begin(), candidate.edges.end(), [&] (const Edge& edge) { return edge.id == edgeId; });
+        if (it == candidate.edges.end())
+        {
+            if (reason != nullptr) *reason = "Connection not found: " + edgeId;
+            return false;
+        }
+        candidate.edges.erase (it);
+        if (requireValidGraph)
+        {
+            const auto validation = candidate.validate();
+            if (! validation.ok)
+            {
+                if (reason != nullptr) *reason = validation.message;
+                return false;
+            }
+        }
+        *this = std::move (candidate);
+        return true;
+    }
+
+    bool replaceEdge (const juce::String& edgeId, Edge replacement, juce::String* reason = nullptr)
+    {
+        Document candidate = *this;
+        const auto it = std::find_if (candidate.edges.begin(), candidate.edges.end(), [&] (const Edge& edge) { return edge.id == edgeId; });
+        if (it == candidate.edges.end())
+        {
+            if (reason != nullptr) *reason = "Connection not found: " + edgeId;
+            return false;
+        }
+        candidate.edges.erase (it);
+        if (replacement.id.isEmpty()) replacement.id = edgeId;
+        juce::String localReason;
+        if (! candidate.addEdge (std::move (replacement), &localReason))
+        {
+            if (reason != nullptr) *reason = localReason;
+            return false;
+        }
+        const auto validation = candidate.validate();
+        if (! validation.ok)
+        {
+            if (reason != nullptr) *reason = validation.message;
+            return false;
+        }
+        *this = std::move (candidate);
         return true;
     }
 
