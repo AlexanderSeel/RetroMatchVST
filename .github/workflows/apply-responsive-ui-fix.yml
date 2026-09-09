@@ -1,0 +1,41 @@
+name: Apply responsive UI fix
+
+on:
+  push:
+    branches:
+      - plan/cable-editor-v1-20260909
+    paths:
+      - scripts/apply-responsive-ui-fix.py
+      - .github/workflows/apply-responsive-ui-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: plan/cable-editor-v1-20260909
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Apply patch
+        run: python scripts/apply-responsive-ui-fix.py
+      - name: Static integrity
+        run: python scripts/static-check.py
+      - name: Commit product changes and remove migration scaffold
+        shell: bash
+        run: |
+          rm -f scripts/apply-responsive-ui-fix.py .github/workflows/apply-responsive-ui-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Fix responsive UI layout and macOS portability"
+          git push origin HEAD:plan/cable-editor-v1-20260909
