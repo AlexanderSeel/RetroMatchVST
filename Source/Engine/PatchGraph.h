@@ -173,7 +173,8 @@ public:
 
         for (const auto& edge : edges)
         {
-            if (edge.fromNode == candidate.fromNode && edge.fromPort == candidate.fromPort
+            if (! toPort->acceptsMultiple
+                && edge.fromNode == candidate.fromNode && edge.fromPort == candidate.fromPort
                 && edge.toNode == candidate.toNode && edge.toPort == candidate.toPort)
                 return ValidationResult::failure ("Connection already exists", candidate.id);
             if (! toPort->acceptsMultiple && edge.toNode == candidate.toNode && edge.toPort == candidate.toPort)
