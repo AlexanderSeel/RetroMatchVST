@@ -1,6 +1,7 @@
 #include <JuceHeader.h>
 #include "../Source/Analysis/SampleAnalyzer.h"
 #include "../Source/Engine/MSEG.h"
+#include "../Source/Engine/PatchGraph.h"
 #include "../Source/Engine/ReferenceWavetable.h"
 #include "../Source/Engine/PresetLibrary.h"
 #include "../Source/Matching/OfflineRenderer.h"
@@ -578,5 +579,37 @@ int main (int argc, char** argv)
               << " refined=" << refined.similarity.total
               << " candidates=" << refined.evaluatedCandidates
               << " latency=" << latencyProbe.getLatencySamples() << " samples\n";
+    {
+        PatchGraph::Document graph;
+        PatchGraph::Node source; source.id = "SRC"; source.type = PatchGraph::NodeType::source; source.ports = { PatchGraph::audioOutput() };
+        source.position = { 11.0f, 22.0f }; source.positionValid = true;
+        PatchGraph::Node filter; filter.id = "FILTER"; filter.type = PatchGraph::NodeType::processor;
+        filter.ports = { PatchGraph::audioInput(), PatchGraph::audioOutput(), PatchGraph::modulationInput() };
+        PatchGraph::Node master; master.id = "MASTER"; master.type = PatchGraph::NodeType::master; master.ports = { PatchGraph::audioInput() };
+        if (! graph.addNode (source) || ! graph.addNode (filter) || ! graph.addNode (master)) return fail ("typed patch graph rejected valid nodes");
+        PatchGraph::Edge a; a.id = "a"; a.fromNode = "SRC"; a.fromPort = "audio.out"; a.toNode = "FILTER"; a.toPort = "audio.in"; a.type = PatchGraph::PortType::audio;
+        PatchGraph::Edge b; b.id = "b"; b.fromNode = "FILTER"; b.fromPort = "audio.out"; b.toNode = "MASTER"; b.toPort = "audio.in"; b.type = PatchGraph::PortType::audio;
+        if (! graph.addEdge (a) || ! graph.addEdge (b) || ! graph.validate().ok) return fail ("typed patch graph rejected valid audio chain");
+        const auto order = graph.topologicalOrder();
+        if (order.size() != 3 || order[0] != "SRC" || order[1] != "FILTER" || order[2] != "MASTER")
+            return fail ("patch graph topological order is not deterministic");
+        PatchGraph::Edge wrong = a; wrong.id = "wrong"; wrong.toPort = "mod.in";
+        if (graph.validateConnection (wrong).ok) return fail ("patch graph allowed incompatible port types");
+
+        PatchGraph::Document cycle;
+        PatchGraph::Node x; x.id = "A"; x.type = PatchGraph::NodeType::processor; x.ports = { PatchGraph::audioInput (true), PatchGraph::audioOutput() };
+        PatchGraph::Node y = x; y.id = "B";
+        if (! cycle.addNode (x) || ! cycle.addNode (y)) return fail ("cycle fixture node setup failed");
+        PatchGraph::Edge ab; ab.id = "ab"; ab.fromNode = "A"; ab.fromPort = "audio.out"; ab.toNode = "B"; ab.toPort = "audio.in"; ab.type = PatchGraph::PortType::audio;
+        PatchGraph::Edge ba; ba.id = "ba"; ba.fromNode = "B"; ba.fromPort = "audio.out"; ba.toNode = "A"; ba.toPort = "audio.in"; ba.type = PatchGraph::PortType::audio;
+        if (! cycle.addEdge (ab) || cycle.validateConnection (ba).ok) return fail ("patch graph allowed a zero-delay audio cycle");
+
+        graph.view.pan = { 33.0f, -17.0f }; graph.view.zoom = 1.37f; graph.view.snapToGrid = false;
+        const auto roundTrip = PatchGraph::Document::fromValueTree (graph.toValueTree());
+        const auto* restored = roundTrip.findNode ("SRC");
+        if (restored == nullptr || ! restored->positionValid || std::abs (restored->position.x - 11.0f) > 0.001f
+            || std::abs (roundTrip.view.zoom - 1.37f) > 0.001f || roundTrip.view.snapToGrid)
+            return fail ("patch graph session round-trip lost layout or viewport state");
+    }
     return 0;
 }

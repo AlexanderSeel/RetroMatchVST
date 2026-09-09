@@ -24,7 +24,7 @@ The next major UI/DSP milestone turns **SIGNAL LAB / PATCH MAP** from a read-onl
 - [x] Keep expensive analysis, graph rebuilding and file work off the real-time audio callback.
 - [x] Keep the existing synth engine as the source of truth for playback and offline matching.
 - [ ] Any feedback-capable routing must have explicit gain limiting, delay/state ownership and cycle validation.
-- [ ] Old sessions without graph state must load into the current canonical signal chain.
+- [x] Old sessions without graph state load into the current canonical signal chain; Patch Map rebuilds the typed graph from restored DSP/APVTS state.
 - [ ] Graph edits must be undoable and serializable before arbitrary routing is enabled.
 
 ## 1. Interactive canvas foundation
@@ -38,7 +38,7 @@ The next major UI/DSP milestone turns **SIGNAL LAB / PATCH MAP** from a read-onl
 - [x] Replace ad-hoc straight wires with an explicit node/edge model and curved connections.
 - [x] Separate the audio chain from modulation/clock relationships visually: MOD no longer pretends to be an audio insert.
 - [x] Show connection ports so later cable editing has a clear interaction target.
-- [ ] Persist custom node positions, pan, zoom and grid preference in UI/session state.
+- [x] Persist custom node positions, pan, zoom and grid preference in UI/session state.
 - [ ] Multi-select, box select, group move and optional node locking.
 - [ ] Minimap for very large eight-instance patches.
 
@@ -70,13 +70,13 @@ Each node gets a stable ID, type and capabilities, for example:
 
 ### Validation rules
 
-- [ ] Only compatible port types can connect.
-- [ ] Audio must eventually resolve to MASTER OUT.
-- [ ] No accidental zero-delay audio cycles.
-- [ ] Modulation cannot target parameters that are not modulation-safe.
-- [ ] A node cannot own invalid duplicate inputs unless its topology explicitly supports mixing.
-- [ ] Show a clear reason when a cable drop is rejected.
-- [ ] Topological ordering is deterministic and independent of visual node position.
+- [x] Only compatible port types can connect.
+- [x] Audio must eventually resolve to MASTER OUT.
+- [x] No accidental zero-delay audio cycles.
+- [x] Modulation cannot target parameters that are not modulation-safe.
+- [x] A node cannot own invalid duplicate inputs unless its topology explicitly supports mixing.
+- [x] Show a clear reason when a cable drop is rejected.
+- [x] Topological ordering is deterministic and independent of visual node position.
 
 ## 3. Cable editing and routing UI
 
@@ -135,20 +135,20 @@ The matcher should be able to exploit the richer graph rather than only paramete
 
 ## 7. Persistence and compatibility
 
-- [ ] Serialize graph version, nodes, edges, positions and UI viewport into `.rmsynth` and DAW state.
-- [ ] Migrate legacy sessions to the canonical default graph.
+- [x] Serialize graph version, nodes, edges, positions and UI viewport into `.rmsynth` and DAW state.
+- [x] Migrate legacy sessions without graph state to the canonical graph rebuilt from their restored synth state.
 - [ ] Do not serialize temporary meters/hover/selection state.
-- [ ] Add graph schema versioning independent of plug-in version.
-- [ ] Validate and repair malformed graph state instead of crashing.
+- [x] Add graph schema versioning independent of plug-in version.
+- [x] Validate and repair malformed graph state instead of crashing; invalid nodes/edges are skipped during ValueTree restore.
 
 ## 8. Verification
 
-- [ ] Static contracts for graph model, validation and append-only automation.
-- [ ] Unit tests for allowed/forbidden connections.
-- [ ] Topological-sort and cycle-detection tests.
+- [x] Static contracts for graph model, validation and append-only automation.
+- [x] Unit tests for allowed/forbidden connections.
+- [x] Topological-sort and cycle-detection tests.
 - [ ] DSP tests proving routing changes produce different but finite/non-silent output.
 - [ ] Parallel split/merge loudness regression tests.
-- [ ] Session round-trip tests for custom graph + node layout.
+- [x] Session round-trip tests for typed graph + custom node layout/view state.
 - [ ] Stress test continuous graph editing while audio is running.
 - [ ] VST3/AU/Standalone builds and pluginval/auval coverage.
 
@@ -159,7 +159,7 @@ A user can rearrange the patch visually, create/reconnect/remove only valid cabl
 ## Implementation order
 
 1. **Canvas interaction** — node drag, grid, zoom controls, fit/auto arrange. *(started on main)*
-2. **Persistent graph data model** — stable IDs, typed ports, edge serialization, validation.
+2. **Persistent graph data model** — stable IDs, typed ports, edge serialization, validation. *(implemented; typed schema v1 persisted in session/preset state)*
 3. **Cable editor** — connection creation/reconnection/deletion + undo.
 4. **DSP compiler v1** — safe serial/parallel audio routing and layer combine topology.
 5. **Modulation cable routing** — expose supported destinations through the graph.

@@ -13,6 +13,13 @@ class SignalLabPage final : public juce::Component, private juce::Timer
 public:
     explicit SignalLabPage (RetroMatchSynthAudioProcessor& p, bool mapOnly = false) : proc (p), mapOnlyMode (mapOnly)
     {
+        const auto restored = proc.getPatchGraphDocument();
+        graphPan = { restored.view.pan.x, restored.view.pan.y };
+        graphZoom = restored.view.zoom;
+        snapToGrid = restored.view.snapToGrid;
+        lastPersistedGraphFingerprint = restored.fingerprint();
+        for (const auto& node : restored.nodes)
+            if (node.positionValid) restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };
         setWantsKeyboardFocus (true);
         startTimerHz (30);
     }
@@ -86,6 +93,7 @@ public:
             }
             if (const int output = hitTestModOutput (e.position); output >= 0)
             {
+                connectionValidationMessage.clear();
                 connecting = true;
                 connectionFromId = nodes[(size_t) output].id.toStdString();
                 connectionDragPoint = e.position;
@@ -127,9 +135,17 @@ public:
             hoverTargetId.clear();
             if (const int target = hitTestModInput (e.position); target >= 0)
             {
+                hoverTargetId = nodes[(size_t) target].id.toStdString();
                 const int from = findNodeIndex (connectionFromId);
-                if (from >= 0 && canConnect (nodes[(size_t) from], nodes[(size_t) target]))
-                    hoverTargetId = nodes[(size_t) target].id.toStdString();
+                if (from >= 0)
+                {
+                    const auto validation = validateModConnection (nodes[(size_t) from], nodes[(size_t) target]);
+                    connectionValidationMessage = validation.ok ? juce::String {} : validation.message;
+                }
+            }
+            else
+            {
+                connectionValidationMessage = "Drop on a compatible MOD input in the same synth instance";
             }
             repaint();
             return;
@@ -166,10 +182,26 @@ public:
 
             const int from = findNodeIndex (fromId);
             const int target = findNodeIndex (targetId);
-            if (from >= 0 && target >= 0 && canConnect (nodes[(size_t) from], nodes[(size_t) target]))
-                showNewRouteMenu (nodes[(size_t) from].layer, nodes[(size_t) target].stage);
+            if (from >= 0 && target >= 0)
+            {
+                const auto validation = validateModConnection (nodes[(size_t) from], nodes[(size_t) target]);
+                if (validation.ok)
+                {
+                    connectionValidationMessage.clear();
+                    showNewRouteMenu (nodes[(size_t) from].layer, nodes[(size_t) target].stage);
+                }
+                else
+                {
+                    connectionValidationMessage = validation.message;
+                }
+            }
+            else
+            {
+                connectionValidationMessage = "Drop on a compatible MOD input in the same synth instance";
+            }
 
             connectionDragPoint = e.position;
+            stageGraphStateForPersistence();
             repaint();
             return;
         }
@@ -177,6 +209,7 @@ public:
         panning = false;
         draggingNode = false;
         draggingNodeId.clear();
+        stageGraphStateForPersistence();
     }
 
     void mouseDoubleClick (const juce::MouseEvent& e) override
@@ -256,6 +289,11 @@ private:
     std::vector<GraphEdge> edges;
     std::vector<ToolbarButton> toolbarButtons;
     std::map<std::string, juce::Point<float>> nodeOffsets;
+    std::map<std::string, juce::Point<float>> restoredNodePositions;
+    PatchGraph::Document graphModel;
+    juce::String lastPersistedGraphFingerprint, pendingGraphFingerprint;
+    juce::String graphValidationMessage, connectionValidationMessage;
+    bool graphStateDirty = false;
     float graphZoom = 0.82f;
     juce::Point<float> graphPan { 18.0f, 18.0f };
     bool panning = false, draggingNode = false, snapToGrid = true, connecting = false;
@@ -603,11 +641,57 @@ private:
         return -1;
     }
 
+    PatchGraph::ValidationResult validateModConnection (const GraphNode& from, const GraphNode& to) const
+    {
+        if (from.role != NodeRole::modHub || ! from.modOutputPort)
+            return PatchGraph::ValidationResult::failure ("Source is not a modulation output");
+        if (to.role != NodeRole::stage || ! to.modInputPort || to.stage < 1 || to.stage > 3)
+            return PatchGraph::ValidationResult::failure ("Target is not a modulation-safe synthesis stage");
+        if (from.layer != to.layer)
+            return PatchGraph::ValidationResult::failure ("Modulation routes must stay inside the same synth instance");
+
+        PatchGraph::Edge candidate;
+        candidate.id = "preview:" + from.id + ">" + to.id;
+        candidate.fromNode = from.id;
+        candidate.fromPort = "mod.out";
+        candidate.toNode = to.id;
+        candidate.toPort = "mod.in";
+        candidate.type = PatchGraph::PortType::modulation;
+        candidate.editable = true;
+        return graphModel.validateConnection (candidate);
+    }
+
     bool canConnect (const GraphNode& from, const GraphNode& to) const
     {
-        return from.role == NodeRole::modHub && from.modOutputPort
-            && to.role == NodeRole::stage && to.modInputPort
-            && from.layer == to.layer && to.stage >= 1 && to.stage <= 3;
+        return validateModConnection (from, to).ok;
+    }
+
+    void stageGraphStateForPersistence()
+    {
+        if (graphModel.nodes.empty()) return;
+        graphModel.view.pan = { graphPan.x, graphPan.y };
+        graphModel.view.zoom = graphZoom;
+        graphModel.view.snapToGrid = snapToGrid;
+        for (const auto& node : nodes)
+            if (auto* stored = graphModel.findNode (node.id))
+            {
+                stored->position = { node.worldBounds.getX(), node.worldBounds.getY() };
+                stored->positionValid = true;
+            }
+
+        const auto validation = graphModel.validate();
+        graphValidationMessage = validation.ok ? juce::String {} : validation.message;
+        if (! validation.ok) return;
+        pendingGraphFingerprint = graphModel.fingerprint();
+        graphStateDirty = pendingGraphFingerprint != lastPersistedGraphFingerprint;
+    }
+
+    void flushGraphStatePersistence()
+    {
+        if (! graphStateDirty) return;
+        proc.setPatchGraphDocument (graphModel);
+        lastPersistedGraphFingerprint = pendingGraphFingerprint;
+        graphStateDirty = false;
     }
 
     ToolbarAction hitToolbar (juce::Point<float> point) const
@@ -623,6 +707,7 @@ private:
         {
             case ToolbarAction::autoArrange:
                 nodeOffsets.clear();
+                restoredNodePositions.clear();
                 for (auto& node : nodes) node.worldBounds = node.baseBounds;
                 fitToView();
                 break;
@@ -634,6 +719,7 @@ private:
             case ToolbarAction::expand: showPatchMapOverlay(); break;
             case ToolbarAction::none: break;
         }
+        stageGraphStateForPersistence();
     }
 
     void showPatchMapOverlay()
@@ -661,6 +747,7 @@ private:
         const auto before = toWorld (screenPoint);
         graphZoom = juce::jlimit (0.35f, 2.2f, requestedZoom);
         graphPan = screenPoint - graphViewport.getPosition() - before * graphZoom;
+        stageGraphStateForPersistence();
         repaint();
     }
 
@@ -680,6 +767,7 @@ private:
         const float sy = graphViewport.getHeight() / juce::jmax (1.0f, world.getHeight());
         graphZoom = juce::jlimit (0.35f, 1.65f, juce::jmin (sx, sy));
         graphPan = graphViewport.getCentre() - graphViewport.getPosition() - world.getCentre() * graphZoom;
+        stageGraphStateForPersistence();
         repaint();
     }
 
@@ -774,13 +862,43 @@ private:
                  bool inputPort = true, bool outputPort = true, NodeRole role = NodeRole::stage,
                  int stage = -1, bool modInputPort = false, bool modOutputPort = false)
     {
+        const auto stableId = id.toStdString();
         auto offset = juce::Point<float>();
-        if (const auto it = nodeOffsets.find (id.toStdString()); it != nodeOffsets.end()) offset = it->second;
+        if (const auto it = nodeOffsets.find (stableId); it != nodeOffsets.end())
+            offset = it->second;
+        else if (const auto restored = restoredNodePositions.find (stableId); restored != restoredNodePositions.end())
+        {
+            offset = restored->second - base.getPosition();
+            nodeOffsets[stableId] = offset;
+        }
+
         GraphNode node;
         node.id = id; node.baseBounds = base; node.worldBounds = base.translated (offset.x, offset.y);
         node.title = title; node.detail = detail; node.tab = tab; node.layer = layer; node.colour = colour;
         node.inputPort = inputPort; node.outputPort = outputPort; node.role = role; node.stage = stage;
         node.modInputPort = modInputPort; node.modOutputPort = modOutputPort;
+
+        PatchGraph::Node modelNode;
+        modelNode.id = id;
+        modelNode.title = title;
+        modelNode.position = { node.worldBounds.getX(), node.worldBounds.getY() };
+        modelNode.positionValid = true;
+        if (role == NodeRole::master) modelNode.type = PatchGraph::NodeType::master;
+        else if (role == NodeRole::clock) modelNode.type = PatchGraph::NodeType::clock;
+        else if (role == NodeRole::modHub) modelNode.type = PatchGraph::NodeType::modulationRouter;
+        else if (stage == 0) modelNode.type = PatchGraph::NodeType::source;
+        else if (stage == 5) modelNode.type = PatchGraph::NodeType::mixer;
+        else modelNode.type = PatchGraph::NodeType::processor;
+        const bool ownsAudioPorts = role != NodeRole::clock && role != NodeRole::modHub;
+        if (inputPort && ownsAudioPorts) modelNode.ports.push_back (PatchGraph::audioInput (id == "GLOBALBUS"));
+        if (outputPort && ownsAudioPorts) modelNode.ports.push_back (PatchGraph::audioOutput());
+        if (modInputPort) modelNode.ports.push_back (PatchGraph::modulationInput());
+        if (modOutputPort) modelNode.ports.push_back (PatchGraph::modulationOutput());
+        if (role == NodeRole::modHub) modelNode.ports.push_back (PatchGraph::clockInput());
+        if (role == NodeRole::clock) modelNode.ports.push_back (PatchGraph::clockOutput());
+        juce::String reason;
+        if (! graphModel.addNode (std::move (modelNode), &reason)) graphValidationMessage = reason;
+
         nodes.push_back (std::move (node));
         return (int) nodes.size() - 1;
     }
@@ -788,8 +906,32 @@ private:
     void connect (int from, int to, EdgeKind kind = EdgeKind::audio, EdgeEditKind editKind = EdgeEditKind::none,
                   int layer = -2, int slot = -1, const juce::String& key = {}, const juce::String& label = {})
     {
-        if (juce::isPositiveAndBelow (from, (int) nodes.size()) && juce::isPositiveAndBelow (to, (int) nodes.size()))
-            edges.push_back ({ from, to, kind, editKind, layer, slot, key, label });
+        if (! juce::isPositiveAndBelow (from, (int) nodes.size()) || ! juce::isPositiveAndBelow (to, (int) nodes.size())) return;
+
+        PatchGraph::Edge modelEdge;
+        modelEdge.id = key;
+        modelEdge.fromNode = nodes[(size_t) from].id;
+        modelEdge.toNode = nodes[(size_t) to].id;
+        modelEdge.editable = editKind != EdgeEditKind::none;
+        if (kind == EdgeKind::audio)
+        {
+            modelEdge.fromPort = "audio.out"; modelEdge.toPort = "audio.in"; modelEdge.type = PatchGraph::PortType::audio;
+        }
+        else if (kind == EdgeKind::modulation)
+        {
+            modelEdge.fromPort = "mod.out"; modelEdge.toPort = "mod.in"; modelEdge.type = PatchGraph::PortType::modulation;
+        }
+        else
+        {
+            modelEdge.fromPort = "clock.out"; modelEdge.toPort = "clock.in"; modelEdge.type = PatchGraph::PortType::clock;
+        }
+        juce::String reason;
+        if (! graphModel.addEdge (std::move (modelEdge), &reason))
+        {
+            graphValidationMessage = reason;
+            return;
+        }
+        edges.push_back ({ from, to, kind, editKind, layer, slot, key, label });
     }
 
     void drawGrid (juce::Graphics& g, juce::Colour led)
@@ -1004,11 +1146,23 @@ private:
         }
 
         auto textArea = header.withTrimmedRight (total + 12.0f).reduced (8, 0);
-        g.setColour (led); g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+        g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
         const bool daw = parameter ("tempoSource", 1.0f) >= 0.5f;
-        g.drawFittedText ("PATCH MAP / LEFT-CLICK EDITABLE CABLE / DRAG MOD JACK TO ADD / BIG = LARGE OVERLAY / FIXED AUDIO ORDER STAYS SAFE    CLOCK: "
-                          + juce::String (proc.getEffectiveBpm(), 1) + " BPM " + (daw ? "DAW" : "MANUAL"),
-                          textArea.toNearestInt(), juce::Justification::centredLeft, 1);
+        juce::String status = "PATCH MAP / TYPED + PERSISTENT GRAPH / DRAG MOD JACK TO ADD / BIG = LARGE OVERLAY    CLOCK: "
+                            + juce::String (proc.getEffectiveBpm(), 1) + " BPM " + (daw ? "DAW" : "MANUAL");
+        auto statusColour = led;
+        if (connectionValidationMessage.isNotEmpty())
+        {
+            status = "ROUTE REJECTED / " + connectionValidationMessage;
+            statusColour = juce::Colour (0xffff9673);
+        }
+        else if (graphValidationMessage.isNotEmpty())
+        {
+            status = "GRAPH VALIDATION / " + graphValidationMessage;
+            statusColour = juce::Colour (0xffff9673);
+        }
+        g.setColour (statusColour);
+        g.drawFittedText (status, textArea.toNearestInt(), juce::Justification::centredLeft, 1);
     }
 
     void drawPatchMap (juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour led, juce::Colour accent)
@@ -1019,6 +1173,8 @@ private:
         graphViewport = bounds.reduced (4);
 
         nodes.clear(); edges.clear();
+        graphModel.clearTopology();
+        graphValidationMessage.clear();
         std::vector<int> instances { -1 };
         for (int i = 0; i < VoiceParameters::extraLayerCount; ++i)
             if (proc.hasLayer (i) && parameter ("layer" + juce::String (i + 1) + "Enabled") >= 0.5f) instances.push_back (i);
@@ -1116,10 +1272,12 @@ private:
         for (const auto& node : nodes) drawNode (g, node, led, accent);
         drawConnectionPreview (g, led, accent);
         g.restoreState();
+        stageGraphStateForPersistence();
     }
 
     void timerCallback() override
     {
+        flushGraphStatePersistence();
         const int n = proc.visualAudio.read (incomingLeft.data(), incomingRight.data(), (int) incomingLeft.size());
         for (int i = 0; i < n; ++i)
         {
