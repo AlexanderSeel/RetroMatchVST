@@ -611,7 +611,7 @@ replace_once(
         return -1;
     }
 
-    void drawEdgeLabel
+    void drawEdgeLabel (juce::Graphics& g, const GraphEdge& edge, juce::Colour colour)
 ''',
 '''    int hitTestEdge (juce::Point<float> point) const
     {
