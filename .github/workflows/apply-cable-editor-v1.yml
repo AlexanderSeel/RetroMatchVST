@@ -19,7 +19,7 @@ jobs:
         with:
           ref: plan/cable-editor-v1-20260909
           fetch-depth: 0
-      - name: Apply migration
+      - name: Apply corrected migration
         run: python3 scripts/apply-cable-editor-v1-20260909.py
       - name: Remove migration scaffolding
         run: |
