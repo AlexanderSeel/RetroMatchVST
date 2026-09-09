@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "Engine/SynthEngine.h"
+#include "Engine/PatchGraph.h"
 #include "Analysis/SampleAnalyzer.h"
 #include "Matching/SoundMatcher.h"
 #include "Matching/OfflineRenderer.h"
@@ -73,6 +74,16 @@ public:
         auto previous = apvts.state.getChildWithName ("MELODY");
         if (previous.isValid()) apvts.state.removeChild (previous, nullptr);
         apvts.state.appendChild (clip.toState(), nullptr);
+    }
+    PatchGraph::Document getPatchGraphDocument() const
+    {
+        return PatchGraph::Document::fromValueTree (apvts.state.getChildWithName ("PATCH_GRAPH"));
+    }
+    void setPatchGraphDocument (const PatchGraph::Document& graph)
+    {
+        auto previous = apvts.state.getChildWithName ("PATCH_GRAPH");
+        if (previous.isValid()) apvts.state.removeChild (previous, nullptr);
+        apvts.state.appendChild (graph.toValueTree(), nullptr);
     }
     void playMelody()
     {
