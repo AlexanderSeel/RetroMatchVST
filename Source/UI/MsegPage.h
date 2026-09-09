@@ -181,8 +181,10 @@ public:
     {
         auto area = getLocalBounds().reduced (12);
         auto clock = area.removeFromTop (36);
-        tempo.setBounds (clock.removeFromLeft (juce::jmax (330, getWidth() / 2)).reduced (2));
-        sync.setBounds (clock.removeFromLeft (210).reduced (2));
+        const int tempoWidth = juce::jlimit (180, juce::jmax (180, clock.getWidth() - 150),
+                                             (int) std::round (clock.getWidth() * 0.56f));
+        tempo.setBounds (clock.removeFromLeft (juce::jmin (tempoWidth, clock.getWidth())).reduced (2));
+        sync.setBounds (clock.reduced (2));
         area.removeFromTop (4);
 
         auto header = area.removeFromTop (68);
