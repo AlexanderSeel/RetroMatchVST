@@ -1,0 +1,32 @@
+name: Apply large signal-map HiDPI fix
+
+on:
+  push:
+    branches:
+      - plan/big-signal-view-20260909
+    paths:
+      - scripts/apply-big-signal-view-hidpi.py
+      - .github/workflows/apply-big-signal-view-hidpi.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: plan/big-signal-view-20260909
+          fetch-depth: 0
+      - run: python scripts/apply-big-signal-view-hidpi.py
+      - run: python scripts/static-check.py
+      - name: Commit source and remove scaffolding
+        shell: bash
+        run: |
+          rm -f scripts/apply-big-signal-view-hidpi.py .github/workflows/apply-big-signal-view-hidpi.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Preserve plugin scale in large patch-map window"
+          git push origin HEAD:plan/big-signal-view-20260909
