@@ -187,18 +187,29 @@ public:
 
         auto header = area.removeFromTop (68);
         auto enableRow = header.removeFromTop (32);
-        enabled.setBounds (enableRow.removeFromLeft (150).reduced (2, 2));
-        loopEnabled.setBounds (enableRow.removeFromLeft (190).reduced (2, 2));
-        loopStartLabel.setBounds (enableRow.removeFromLeft (78));
-        loopStart.setBounds (enableRow.removeFromLeft (82).reduced (2, 2));
-        loopEndLabel.setBounds (enableRow.removeFromLeft (72));
-        loopEnd.setBounds (enableRow.removeFromLeft (82).reduced (2, 2));
+        const int enabledWidth = juce::jlimit (100, 150, enableRow.getWidth() / 5);
+        const int loopToggleWidth = juce::jlimit (120, 190, enableRow.getWidth() / 4);
+        enabled.setBounds (enableRow.removeFromLeft (enabledWidth).reduced (2, 2));
+        loopEnabled.setBounds (enableRow.removeFromLeft (loopToggleWidth).reduced (2, 2));
+        const int loopGroupWidth = juce::jmax (1, enableRow.getWidth() / 2);
+        auto loopStartArea = enableRow.removeFromLeft (loopGroupWidth);
+        auto loopEndArea = enableRow;
+        const int loopLabelWidth = juce::jlimit (48, 78, loopStartArea.getWidth() / 2);
+        loopStartLabel.setBounds (loopStartArea.removeFromLeft (loopLabelWidth));
+        loopStart.setBounds (loopStartArea.reduced (2, 2));
+        loopEndLabel.setBounds (loopEndArea.removeFromLeft (juce::jlimit (44, 72, loopEndArea.getWidth() / 2)));
+        loopEnd.setBounds (loopEndArea.reduced (2, 2));
+
         auto directRow = header.removeFromTop (32);
-        targetLabel.setBounds (directRow.removeFromLeft (95));
-        target.setBounds (directRow.removeFromLeft (250).reduced (2, 2));
-        directRow.removeFromLeft (10);
-        depthLabel.setBounds (directRow.removeFromLeft (55));
-        depth.setBounds (directRow.removeFromLeft (300).reduced (2, 2));
+        const int targetLabelWidth = juce::jlimit (64, 95, directRow.getWidth() / 8);
+        const int depthLabelWidth = juce::jlimit (46, 55, directRow.getWidth() / 12);
+        targetLabel.setBounds (directRow.removeFromLeft (targetLabelWidth));
+        const int controlsWidth = juce::jmax (1, directRow.getWidth() - depthLabelWidth - 8);
+        const int targetWidth = juce::jlimit (110, 250, (int) std::round (controlsWidth * 0.46f));
+        target.setBounds (directRow.removeFromLeft (juce::jmin (targetWidth, directRow.getWidth())).reduced (2, 2));
+        if (directRow.getWidth() > depthLabelWidth + 8) directRow.removeFromLeft (8);
+        depthLabel.setBounds (directRow.removeFromLeft (juce::jmin (depthLabelWidth, directRow.getWidth())));
+        depth.setBounds (directRow.reduced (2, 2));
         area.removeFromTop (5);
 
         const int graphHeight = juce::jlimit (140, 225, area.getHeight() / 3);
@@ -236,9 +247,12 @@ public:
         for (int i = 0; i < VoiceParameters::modGraphSlotCount; ++i)
         {
             auto row = routes.removeFromTop (i == VoiceParameters::modGraphSlotCount - 1 ? routes.getHeight() : rowHeight).reduced (3, 3);
-            routeLabels[(size_t) i].setBounds (row.removeFromLeft (70));
-            routeSources[(size_t) i].setBounds (row.removeFromLeft (juce::jmax (140, row.getWidth() / 3)).reduced (3, 0));
-            routeDestinations[(size_t) i].setBounds (row.removeFromLeft (juce::jmax (160, row.getWidth() / 2)).reduced (3, 0));
+            const int labelWidth = juce::jlimit (48, 70, row.getWidth() / 8);
+            routeLabels[(size_t) i].setBounds (row.removeFromLeft (labelWidth));
+            const int sourceWidth = juce::jmax (1, (int) std::round (row.getWidth() * 0.32f));
+            routeSources[(size_t) i].setBounds (row.removeFromLeft (sourceWidth).reduced (3, 0));
+            const int destinationWidth = juce::jmax (1, (int) std::round (row.getWidth() * 0.56f));
+            routeDestinations[(size_t) i].setBounds (row.removeFromLeft (juce::jmin (destinationWidth, row.getWidth())).reduced (3, 0));
             routeAmounts[(size_t) i].setBounds (row.reduced (3, 0));
         }
     }

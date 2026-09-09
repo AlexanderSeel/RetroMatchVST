@@ -11,6 +11,7 @@
 #include "Matching/ResynthesisAdvisor.h"
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <vector>
 
 namespace

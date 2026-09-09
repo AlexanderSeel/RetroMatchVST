@@ -3,6 +3,7 @@
 #include "RetroLookAndFeel.h"
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <map>
 #include <string>
 #include <utility>
@@ -10,12 +11,14 @@
 
 class SignalLabPage final : public juce::Component, private juce::Timer
 {
+    static constexpr float kReadableGraphZoom = 0.50f;
+
 public:
     explicit SignalLabPage (RetroMatchSynthAudioProcessor& p, bool mapOnly = false) : proc (p), mapOnlyMode (mapOnly)
     {
         const auto restored = proc.getPatchGraphDocument();
         graphPan = { restored.view.pan.x, restored.view.pan.y };
-        graphZoom = restored.view.zoom;
+        graphZoom = juce::jlimit (kReadableGraphZoom, 2.2f, restored.view.zoom);
         snapToGrid = restored.view.snapToGrid;
         lastPersistedGraphFingerprint = restored.fingerprint();
         for (const auto& node : restored.nodes)
@@ -932,7 +935,7 @@ private:
     {
         if (graphViewport.isEmpty()) return;
         const auto before = toWorld (screenPoint);
-        graphZoom = juce::jlimit (0.35f, 2.2f, requestedZoom);
+        graphZoom = juce::jlimit (kReadableGraphZoom, 2.2f, requestedZoom);
         graphPan = screenPoint - graphViewport.getPosition() - before * graphZoom;
         stageGraphStateForPersistence();
         repaint();
@@ -952,7 +955,7 @@ private:
         world = world.expanded (28.0f);
         const float sx = graphViewport.getWidth() / juce::jmax (1.0f, world.getWidth());
         const float sy = graphViewport.getHeight() / juce::jmax (1.0f, world.getHeight());
-        graphZoom = juce::jlimit (0.35f, 1.65f, juce::jmin (sx, sy));
+        graphZoom = juce::jlimit (kReadableGraphZoom, 1.65f, juce::jmin (sx, sy));
         graphPan = graphViewport.getCentre() - graphViewport.getPosition() - world.getCentre() * graphZoom;
         stageGraphStateForPersistence();
         repaint();
@@ -1246,14 +1249,14 @@ private:
         {
             const auto colour = selected ? accent.brighter (0.2f) : from.colour.interpolatedWith (to.colour, 0.45f).withAlpha (0.7f);
             glow (g, wire, colour, juce::jmax (0.9f, graphZoom + (selected ? 0.8f : 0.0f)));
-            if (edge.editKind == EdgeEditKind::layerCombine) drawEdgeLabel (g, edge, accent);
+            if (edge.editKind == EdgeEditKind::layerCombine && (selected || graphZoom >= 0.62f)) drawEdgeLabel (g, edge, accent);
         }
         else if (edge.kind == EdgeKind::modulation)
         {
             const auto colour = selected ? juce::Colours::white : led;
             g.setColour (colour.withAlpha (selected ? 0.92f : 0.64f));
             g.strokePath (wire, juce::PathStrokeType (juce::jmax (1.0f, graphZoom * (selected ? 1.8f : 1.25f))));
-            drawEdgeLabel (g, edge, led);
+            if (selected || graphZoom >= 0.62f) drawEdgeLabel (g, edge, led);
         }
         else
         {
@@ -1271,12 +1274,23 @@ private:
         g.fillRoundedRectangle (r, 5.0f * graphZoom);
         g.setColour ((selected ? juce::Colours::white : node.colour).withAlpha (selected ? 0.95f : 0.72f));
         g.drawRoundedRectangle (r, 5.0f * graphZoom, juce::jmax (1.0f, 1.3f * graphZoom));
-        g.setColour (node.colour); g.setFont (juce::Font (juce::FontOptions (juce::jmax (7.0f, 10.0f * graphZoom), juce::Font::bold)));
-        g.drawFittedText (node.title, r.reduced (6 * graphZoom, 2 * graphZoom).removeFromTop (r.getHeight() * 0.53f).toNearestInt(), juce::Justification::centredLeft, 1);
-        g.setColour (accent.withAlpha (0.82f)); g.setFont (juce::Font (juce::FontOptions (juce::jmax (6.5f, 8.5f * graphZoom))));
-        g.drawFittedText (node.detail, r.reduced (6 * graphZoom, 2 * graphZoom).withTrimmedTop (r.getHeight() * 0.48f).toNearestInt(), juce::Justification::centredLeft, 1);
+        const bool showDetail = graphZoom >= 0.62f && r.getWidth() >= 72.0f && r.getHeight() >= 27.0f;
+        auto textBounds = r.reduced (juce::jmax (4.0f, 6.0f * graphZoom), juce::jmax (1.0f, 2.0f * graphZoom));
+        g.setColour (node.colour);
+        g.setFont (juce::Font (juce::FontOptions (juce::jmax (8.2f, 10.0f * graphZoom), juce::Font::bold)));
+        if (showDetail)
+        {
+            g.drawFittedText (node.title, textBounds.removeFromTop (textBounds.getHeight() * 0.54f).toNearestInt(), juce::Justification::centredLeft, 1);
+            g.setColour (accent.withAlpha (0.82f));
+            g.setFont (juce::Font (juce::FontOptions (juce::jmax (7.4f, 8.5f * graphZoom))));
+            g.drawFittedText (node.detail, textBounds.toNearestInt(), juce::Justification::centredLeft, 1);
+        }
+        else
+        {
+            g.drawFittedText (node.title, textBounds.toNearestInt(), juce::Justification::centredLeft, 1);
+        }
 
-        const float portRadius = juce::jmax (2.3f, 3.1f * graphZoom);
+        const float portRadius = juce::jmax (3.0f, 3.1f * graphZoom);
         g.setColour (node.colour.withAlpha (0.9f));
         if (node.inputPort) g.fillEllipse (r.getX() - portRadius, r.getCentreY() - portRadius, portRadius * 2, portRadius * 2);
         if (node.outputPort) g.fillEllipse (r.getRight() - portRadius, r.getCentreY() - portRadius, portRadius * 2, portRadius * 2);
@@ -1345,31 +1359,44 @@ private:
     void drawToolbar (juce::Graphics& g, juce::Rectangle<float> header, juce::Colour led, juce::Colour accent)
     {
         toolbarButtons.clear();
-        const float gap = 4.0f, h = 20.0f;
+        const bool compactHeader = header.getHeight() > 40.0f;
+        const bool veryNarrow = header.getWidth() < 620.0f;
+        const float gap = veryNarrow ? 3.0f : 4.0f;
+        const float h = compactHeader ? 22.0f : 20.0f;
         struct Def { const char* label; float width; ToolbarAction action; };
         const Def defs[] {{ "BIG", 42, ToolbarAction::expand }, { "UNDO", 48, ToolbarAction::undo }, { "REDO", 48, ToolbarAction::redo },
                           { "AUTO", 48, ToolbarAction::autoArrange }, { "FIT", 40, ToolbarAction::fit }, { "-", 26, ToolbarAction::zoomOut },
                           { "100%", 42, ToolbarAction::zoom100 }, { "+", 26, ToolbarAction::zoomIn }, { "GRID", 48, ToolbarAction::grid }};
+
         float total = -gap;
-        for (const auto& d : defs) total += d.width + gap;
-        float x = header.getRight() - total - 6.0f;
+        for (const auto& d : defs)
+            if (! (mapOnlyMode && d.action == ToolbarAction::expand)) total += (veryNarrow ? juce::jmax (24.0f, d.width - 6.0f) : d.width) + gap;
+
+        auto buttonRow = compactHeader ? header.removeFromBottom (26.0f) : header;
+        float x = compactHeader ? buttonRow.getX() + 6.0f : buttonRow.getRight() - total - 6.0f;
         for (const auto& d : defs)
         {
-            juce::Rectangle<float> r (x, header.getCentreY() - h * 0.5f, d.width, h);
+            if (mapOnlyMode && d.action == ToolbarAction::expand) continue;
+            const float buttonWidth = veryNarrow ? juce::jmax (24.0f, d.width - 6.0f) : d.width;
+            juce::Rectangle<float> r (x, buttonRow.getCentreY() - h * 0.5f, buttonWidth, h);
             toolbarButtons.push_back ({ r, d.label, d.action });
             const bool active = d.action == ToolbarAction::grid && snapToGrid;
             g.setColour (active ? led.withAlpha (0.18f) : juce::Colour (0xff132126)); g.fillRoundedRectangle (r, 4);
             g.setColour ((active ? led : accent).withAlpha (0.8f)); g.drawRoundedRectangle (r, 4, 1);
-            g.setFont (juce::Font (juce::FontOptions (8.0f, juce::Font::bold))); g.setColour (active ? led : juce::Colour (0xffb7c5c8));
+            g.setFont (juce::Font (juce::FontOptions (8.5f, juce::Font::bold))); g.setColour (active ? led : juce::Colour (0xffb7c5c8));
             g.drawText (d.label, r, juce::Justification::centred);
-            x += d.width + gap;
+            x += buttonWidth + gap;
         }
 
-        auto textArea = header.withTrimmedRight (total + 12.0f).reduced (8, 0);
-        g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+        auto textArea = compactHeader ? header.reduced (8.0f, 0.0f)
+                                      : header.withTrimmedRight (total + 12.0f).reduced (8.0f, 0.0f);
+        g.setFont (juce::Font (juce::FontOptions (compactHeader ? 9.5f : 9.0f, juce::Font::bold)));
         const bool daw = parameter ("tempoSource", 1.0f) >= 0.5f;
-        juce::String status = "PATCH MAP / DRAG MOD JACK = ADD / DRAG CABLE END = RECONNECT / DEL = REMOVE / CTRL-CMD+Z = UNDO    CLOCK: "
-                            + juce::String (proc.getEffectiveBpm(), 1) + " BPM " + (daw ? "DAW" : "MANUAL");
+        juce::String status = compactHeader
+            ? "PATCH MAP / DRAG MOD = ADD / CABLE END = RECONNECT / DEL = REMOVE     CLOCK "
+                + juce::String (proc.getEffectiveBpm(), 1) + " " + (daw ? "DAW" : "MANUAL")
+            : "PATCH MAP / DRAG MOD JACK = ADD / DRAG CABLE END = RECONNECT / DEL = REMOVE / CTRL-CMD+Z = UNDO    CLOCK: "
+                + juce::String (proc.getEffectiveBpm(), 1) + " BPM " + (daw ? "DAW" : "MANUAL");
         auto statusColour = led;
         if (connectionValidationMessage.isNotEmpty())
         {
@@ -1389,7 +1416,8 @@ private:
     {
         g.setColour (juce::Colour (0xff03080b)); g.fillRoundedRectangle (bounds, 7);
         g.setColour (juce::Colour (0xff506166)); g.drawRoundedRectangle (bounds, 7, 1);
-        auto header = bounds.removeFromTop (30);
+        const float headerHeight = bounds.getWidth() < 980.0f ? 56.0f : 30.0f;
+        auto header = bounds.removeFromTop (headerHeight);
         graphViewport = bounds.reduced (4);
 
         nodes.clear(); edges.clear();
