@@ -134,7 +134,7 @@ required_tokens = {
     'tempo divisions': ['1/32', '1/16', '1/8', '1/4', '1/2', '1/1', '2/1', '4/1'],
     'tempo modular FX': ['tempoSync', 'tempoDivision', 'fxModuleCanTempoSync', 'TempoSync::frequencyHz', 'TempoSync::seconds'],
     'interactive signal map': ['mouseWheelMove', 'mouseDrag', 'mouseDoubleClick', 'graphZoom', 'graphPan', 'INSTANCE 1 / MAIN'],
-    'responsive large signal map': ['bigViewNeedsFit', 'applyFitToView', 'setContentOwned (content, false)', 'mapOnlyMode || header.getHeight() > 40.0f'],
+    'responsive large signal map': ['bigViewNeedsFit', 'applyFitToView', 'setContentOwned (content, false)', 'getApproximateScaleFactorForComponent', 'mapOnlyMode || header.getHeight() > 40.0f'],
     'typed persistent patch graph': ['schemaVersion', 'PortType', 'validateConnection', 'wouldCreateAudioCycle', 'topologicalOrder', 'toValueTree', 'fromValueTree', 'modulationSafe'],
     'cable editor v1': ['findEdge', 'replaceEdge', 'removeEdge', 'showReconnectRouteMenu', 'deleteSelectedCable', 'undoCableEdit', 'redoCableEdit', 'KeyPress::deleteKey'],
     'DSP routing compiler v1': ['maxLayerCount', 'layerOrder', 'CompileResult', 'AtomicPlan', 'memory_order_release', 'memory_order_acquire'],

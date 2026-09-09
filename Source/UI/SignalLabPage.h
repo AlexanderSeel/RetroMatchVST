@@ -1036,8 +1036,9 @@ private:
         // For the large map we need the opposite relationship: the SignalLabPage must follow
         // every dialog resize so its toolbar/viewport never live outside the visible window.
         auto* content = new SignalLabPage (proc, true);
+        const float desktopScale = juce::Component::getApproximateScaleFactorForComponent (this);
         auto* dialogWindow = new juce::DialogWindow ("RM-01 / LARGE PATCH MAP",
-                                                     juce::Colour (0xff101719), true, true);
+                                                     juce::Colour (0xff101719), true, true, desktopScale);
         dialogWindow->setUsingNativeTitleBar (false);
         dialogWindow->setResizable (true, false);
         dialogWindow->setResizeLimits (900, 540, 2400, 1600);
