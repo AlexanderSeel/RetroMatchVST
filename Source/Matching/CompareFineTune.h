@@ -1,5 +1,6 @@
 #pragma once
 #include "../Engine/SynthEngine.h"
+#include "../Analysis/SampleAnalyzer.h"
 #include <cmath>
 
 // Musical residual corrections applied on top of a measured candidate. These mappings
@@ -103,6 +104,47 @@ inline void applyToVoice (VoiceParameters& p, Values values) noexcept
 
     // Fine pitch is intentionally limited to one semitone total range.
     p.masterTuneCents = juce::jlimit (-100.0f, 100.0f, p.masterTuneCents + values.finePitch * 50.0f);
+}
+
+inline Values suggestFromResidual (const SoundFeatures& reference, const SoundFeatures& candidate,
+                                   const VoiceParameters& baseline, float maxStep = 0.24f) noexcept
+{
+    Values v;
+    maxStep = juce::jlimit (0.02f, 0.40f, maxStep);
+    auto limit = [maxStep] (float x) { return juce::jlimit (-maxStep, maxStep, x); };
+    auto logRatio = [] (float target, float current) noexcept
+    {
+        if (target <= 1.0e-5f || current <= 1.0e-5f) return 0.0f;
+        return std::log2 (target / current);
+    };
+
+    // Match the direction used by each musical macro, not a generic optimizer gradient.
+    v.brightness = limit (logRatio (reference.spectralCentroidHz, candidate.spectralCentroidHz) / 1.75f);
+    v.lowEnd = limit ((reference.lowEnergyRatio - candidate.lowEnergyRatio) * 2.6f);
+    v.punch = limit (logRatio (candidate.attackSeconds, reference.attackSeconds) / 2.25f);
+
+    const float tailResidual = 0.48f * logRatio (reference.releaseSeconds, candidate.releaseSeconds)
+                             + 0.34f * logRatio (reference.decaySeconds, candidate.decaySeconds)
+                             + 0.18f * (reference.sustainLevel - candidate.sustainLevel);
+    v.tail = limit (tailResidual / 1.65f);
+    v.width = limit ((reference.stereoWidth - candidate.stereoWidth) * 0.85f);
+
+    bool hasExistingMotion = std::abs (baseline.lfoPitch) > 1.0e-5f || std::abs (baseline.lfoCutoff) > 1.0e-5f
+                          || std::abs (baseline.lfoAmp) > 1.0e-5f || std::abs (baseline.msegDepth) > 1.0e-5f;
+    for (const auto& slot : baseline.modSlots) hasExistingMotion |= std::abs (slot.amount) > 1.0e-5f;
+    for (const auto& slot : baseline.modGraphSlots) hasExistingMotion |= std::abs (slot.amount) > 1.0e-5f;
+    for (const auto& slot : baseline.moduleModSlots) hasExistingMotion |= std::abs (slot.amount) > 1.0e-5f;
+    if (hasExistingMotion)
+        v.motion = limit ((reference.spectralMotion - candidate.spectralMotion) * 2.0f);
+
+    if (reference.fundamentalHz > 20.0f && candidate.fundamentalHz > 20.0f
+        && reference.pitchConfidence > 0.20f && candidate.pitchConfidence > 0.20f)
+    {
+        const float cents = 1200.0f * logRatio (reference.fundamentalHz, candidate.fundamentalHz);
+        v.finePitch = limit (cents / 50.0f);
+    }
+    v.clamp();
+    return v;
 }
 
 inline VoiceParameters apply (const VoiceParameters& baseline, Values values)

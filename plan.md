@@ -206,7 +206,7 @@ Do **not** add generic Drive/Reverb/Delay macros to this first row: those alread
 - [x] Never estimate or cosmetically inflate similarity. Until a re-render completes, label the adjusted score **PENDING MEASURE** and keep the baseline trace/score distinct.
 - [x] **RESET** returns all knobs to zero and exactly restores the selected candidate baseline.
 - [x] **KEEP / APPLY TO PATCH** commits the adjusted `VoiceParameters` as the editable patch while retaining the original candidate bank for comparison/history.
-- [ ] Optional **AUTO NUDGE** comes later: derive small suggested offsets from signed residuals, then re-render and accept only improvements. It must not become an unbounded second optimizer.
+- [x] **AUTO NUDGE** derives one bounded correction step from directed feature residuals, performs a real background re-render, and automatically rejects the suggestion unless measured total similarity improves.
 
 ### Verification for Compare fine-tune
 

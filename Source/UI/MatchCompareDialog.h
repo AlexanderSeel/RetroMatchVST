@@ -13,13 +13,13 @@ public:
         setLookAndFeel (&laf);
         setOpaque (true);
 
-        for (auto* b : { &candidateA, &candidateB, &candidateC, &synth, &reference, &mix, &stop, &baseline, &adjusted, &resetTune, &measureTune, &keepTune })
+        for (auto* b : { &candidateA, &candidateB, &candidateC, &synth, &reference, &mix, &stop, &baseline, &adjusted, &resetTune, &measureTune, &autoNudge, &keepTune })
             addAndMakeVisible (*b);
 
         candidateA.setButtonText ("A"); candidateB.setButtonText ("B"); candidateC.setButtonText ("C");
         synth.setButtonText ("SYNTH"); reference.setButtonText ("REFERENCE"); mix.setButtonText ("MIX"); stop.setButtonText ("STOP");
         baseline.setButtonText ("BASELINE"); adjusted.setButtonText ("ADJUSTED"); resetTune.setButtonText ("RESET");
-        measureTune.setButtonText ("MEASURE"); keepTune.setButtonText ("KEEP / APPLY");
+        measureTune.setButtonText ("MEASURE"); autoNudge.setButtonText ("AUTO NUDGE"); keepTune.setButtonText ("KEEP / APPLY");
         baseline.setClickingTogglesState (true); adjusted.setClickingTogglesState (true);
         baseline.setRadioGroupId (0x524d46); adjusted.setRadioGroupId (0x524d46);
 
@@ -89,6 +89,7 @@ public:
             syncButtonState();
             repaint();
         };
+        autoNudge.onClick = [this] { startAutoNudge(); };
         keepTune.onClick = [this]
         {
             baselineAudition = false;
@@ -134,8 +135,9 @@ public:
         adjusted.setBounds (tuneRow1.removeFromLeft (96).reduced (2));
         resetTune.setBounds (tuneRow1.removeFromLeft (92).reduced (2));
         auto tuneRow2 = tuneButtons.removeFromTop (30);
-        measureTune.setBounds (tuneRow2.removeFromLeft (118).reduced (2));
-        keepTune.setBounds (tuneRow2.removeFromLeft (166).reduced (2));
+        measureTune.setBounds (tuneRow2.removeFromLeft (86).reduced (2));
+        autoNudge.setBounds (tuneRow2.removeFromLeft (104).reduced (2));
+        keepTune.setBounds (tuneRow2.removeFromLeft (104).reduced (2));
         const int cell = juce::jmax (54, tune.getWidth() / (int) fineTune.size());
         for (size_t i = 0; i < fineTune.size(); ++i)
         {
@@ -212,6 +214,8 @@ public:
                              + juce::String ((measuredAdjusted->similarity.total - baselineResult->similarity.total) * 100.0f, 1) + " pt";
         else correctionStatus = "MEASURED BASELINE · ZERO / UNMEASURED CORRECTION";
         if (proc.isCompareFineTuneApplied()) correctionStatus += "   ·   APPLIED";
+        if (juce::Time::getMillisecondCounterHiRes() < autoNudgeMessageUntilMs && autoNudgeMessage.isNotEmpty())
+            correctionStatus += "   ·   " + autoNudgeMessage;
         g.setColour (proc.isCompareFineTunePending() ? gold : (measuredAdjusted ? cyan : juce::Colour (0xff82928d)));
         g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
         g.drawText (correctionStatus,
@@ -243,13 +247,18 @@ private:
     RetroMatchSynthAudioProcessor& proc;
     RetroLookAndFeel laf;
     juce::TextButton candidateA, candidateB, candidateC, synth, reference, mix, stop;
-    juce::TextButton baseline, adjusted, resetTune, measureTune, keepTune;
+    juce::TextButton baseline, adjusted, resetTune, measureTune, autoNudge, keepTune;
     std::array<juce::Slider, 7> fineTune;
     std::array<juce::Label, 7> fineTuneLabels;
     bool syncingFineTune = false;
     bool baselineAudition = false;
     bool compareMeasureRunning = false;
     bool autoMeasureArmed = false;
+    bool autoNudgeTrial = false;
+    int autoNudgeCandidate = -1;
+    float autoNudgeBaselineScore = 0.0f;
+    juce::String autoNudgeMessage;
+    double autoNudgeMessageUntilMs = 0.0;
     bool closing = false;
     double lastFineTuneChangeMs = 0.0;
     juce::ThreadPool compareMeasurePool { 1 };
@@ -296,11 +305,53 @@ private:
         candidateA.setToggleState (proc.selectedCandidate == 0, juce::dontSendNotification);
         candidateB.setToggleState (proc.selectedCandidate == 1, juce::dontSendNotification);
         candidateC.setToggleState (proc.selectedCandidate == 2, juce::dontSendNotification);
+        candidateA.setEnabled (! compareMeasureRunning); candidateB.setEnabled (! compareMeasureRunning); candidateC.setEnabled (! compareMeasureRunning);
         baseline.setToggleState (baselineAudition, juce::dontSendNotification);
         adjusted.setToggleState (! baselineAudition, juce::dontSendNotification);
         measureTune.setButtonText (compareMeasureRunning ? "MEASURING..." : "MEASURE");
         measureTune.setEnabled (proc.isCompareFineTunePending() && ! compareMeasureRunning);
+        autoNudge.setEnabled (proc.getCompareFineTuneValues().isNeutral() && proc.getSelectedCandidateBaseline() != nullptr && ! compareMeasureRunning);
         keepTune.setEnabled (! proc.getCompareFineTuneValues().isNeutral() && ! compareMeasureRunning);
+    }
+
+    void setFineTuneControls (CompareFineTune::Values v)
+    {
+        const std::array<float, 7> values {{ v.brightness, v.lowEnd, v.punch, v.tail, v.width, v.motion, v.finePitch }};
+        syncingFineTune = true;
+        for (size_t i = 0; i < fineTune.size(); ++i) fineTune[i].setValue (values[i], juce::dontSendNotification);
+        syncingFineTune = false;
+    }
+
+    void startAutoNudge()
+    {
+        if (closing || compareMeasureRunning || ! proc.currentFeatures || ! proc.getCompareFineTuneValues().isNeutral()) return;
+        const auto* baselineResult = proc.getSelectedCandidateBaseline();
+        if (! baselineResult || baselineResult->candidateFeatures.duration <= 0.0f) return;
+
+        const auto suggestion = CompareFineTune::suggestFromResidual (*proc.currentFeatures,
+                                                                       baselineResult->candidateFeatures,
+                                                                       baselineResult->params);
+        if (suggestion.isNeutral())
+        {
+            autoNudgeMessage = "AUTO NUDGE: NO DIRECTED RESIDUAL";
+            autoNudgeMessageUntilMs = juce::Time::getMillisecondCounterHiRes() + 2600.0;
+            repaint();
+            return;
+        }
+
+        autoNudgeTrial = true;
+        autoNudgeCandidate = proc.selectedCandidate;
+        autoNudgeBaselineScore = baselineResult->similarity.total;
+        autoNudgeMessage = "AUTO NUDGE: VERIFYING";
+        autoNudgeMessageUntilMs = juce::Time::getMillisecondCounterHiRes() + 6000.0;
+        setFineTuneControls (suggestion);
+        baselineAudition = false;
+        proc.previewCompareFineTune (suggestion);
+        autoMeasureArmed = false;
+        lastFineTuneChangeMs = juce::Time::getMillisecondCounterHiRes();
+        startFineTuneMeasurement();
+        syncButtonState();
+        repaint();
     }
 
     void startFineTuneMeasurement()
@@ -321,8 +372,27 @@ private:
     void completeFineTuneMeasurement (int candidateIndex, CompareFineTune::Values values, MatchResult measured)
     {
         if (closing) return;
-        proc.acceptCompareFineTuneMeasurement (candidateIndex, values, std::move (measured));
+        const float measuredTotal = measured.similarity.total;
+        const bool acceptedMeasurement = proc.acceptCompareFineTuneMeasurement (candidateIndex, values, std::move (measured));
         compareMeasureRunning = false;
+
+        if (autoNudgeTrial && candidateIndex == autoNudgeCandidate)
+        {
+            autoNudgeTrial = false;
+            const bool improved = acceptedMeasurement && measuredTotal > autoNudgeBaselineScore + 0.0005f;
+            if (improved)
+            {
+                autoNudgeMessage = "AUTO NUDGE ACCEPTED  +" + juce::String ((measuredTotal - autoNudgeBaselineScore) * 100.0f, 1) + " pt";
+            }
+            else
+            {
+                setFineTuneControls ({});
+                proc.resetCompareFineTune();
+                autoNudgeMessage = "AUTO NUDGE REJECTED";
+            }
+            autoNudgeMessageUntilMs = juce::Time::getMillisecondCounterHiRes() + 3200.0;
+        }
+
         if (proc.isCompareFineTunePending())
         {
             autoMeasureArmed = true;
@@ -334,11 +404,7 @@ private:
 
     void syncFineTuneControlsFromProcessor()
     {
-        const auto v = proc.getCompareFineTuneValues();
-        const std::array<float, 7> values {{ v.brightness, v.lowEnd, v.punch, v.tail, v.width, v.motion, v.finePitch }};
-        syncingFineTune = true;
-        for (size_t i = 0; i < fineTune.size(); ++i) fineTune[i].setValue (values[i], juce::dontSendNotification);
-        syncingFineTune = false;
+        setFineTuneControls (proc.getCompareFineTuneValues());
     }
 
     CompareFineTune::Values fineTuneValues() const
@@ -359,6 +425,8 @@ private:
         if (syncingFineTune) return;
         baselineAudition = false;
         const auto values = fineTuneValues();
+        autoNudgeTrial = false;
+        autoNudgeMessage.clear();
         proc.previewCompareFineTune (values);
         autoMeasureArmed = ! values.isNeutral();
         lastFineTuneChangeMs = juce::Time::getMillisecondCounterHiRes();

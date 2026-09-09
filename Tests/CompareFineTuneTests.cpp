@@ -92,6 +92,25 @@ int main()
         || std::abs (stillStatic.lfoCutoff) > 1.0e-6f || std::abs (stillStatic.lfoAmp) > 1.0e-6f)
         return fail ("motion macro invented modulation topology");
 
+    SoundFeatures residualReference, residualCandidate;
+    residualReference.spectralCentroidHz = 4200.0f; residualCandidate.spectralCentroidHz = 2500.0f;
+    residualReference.lowEnergyRatio = 0.30f; residualCandidate.lowEnergyRatio = 0.16f;
+    residualReference.attackSeconds = 0.02f; residualCandidate.attackSeconds = 0.08f;
+    residualReference.decaySeconds = 0.50f; residualCandidate.decaySeconds = 0.24f;
+    residualReference.releaseSeconds = 0.70f; residualCandidate.releaseSeconds = 0.30f;
+    residualReference.sustainLevel = 0.75f; residualCandidate.sustainLevel = 0.55f;
+    residualReference.stereoWidth = 0.65f; residualCandidate.stereoWidth = 0.22f;
+    residualReference.spectralMotion = 0.40f; residualCandidate.spectralMotion = 0.12f;
+    residualReference.fundamentalHz = 222.0f; residualCandidate.fundamentalHz = 220.0f;
+    residualReference.pitchConfidence = residualCandidate.pitchConfidence = 0.9f;
+    const auto nudge = CompareFineTune::suggestFromResidual (residualReference, residualCandidate, baseline);
+    if (nudge.brightness <= 0.0f || nudge.lowEnd <= 0.0f || nudge.punch <= 0.0f
+        || nudge.tail <= 0.0f || nudge.width <= 0.0f || nudge.motion <= 0.0f || nudge.finePitch <= 0.0f)
+        return fail ("Auto Nudge residual directions are inconsistent with macro mappings");
+    const auto staticNudge = CompareFineTune::suggestFromResidual (residualReference, residualCandidate, staticPatch);
+    if (std::abs (staticNudge.motion) > 1.0e-6f)
+        return fail ("Auto Nudge suggested motion for a patch without existing motion topology");
+
     CompareFineTune::Values bright, dark;
     bright.brightness = 0.85f;
     dark.brightness = -0.85f;
