@@ -2237,43 +2237,65 @@ bool RetroMatchSynthAudioProcessor::showCompareFineTuneBaseline (bool baselineVi
     return true;
 }
 
-bool RetroMatchSynthAudioProcessor::measureCompareFineTune()
+std::optional<RetroMatchSynthAudioProcessor::CompareFineTuneMeasureRequest>
+RetroMatchSynthAudioProcessor::makeCompareFineTuneMeasureRequest() const
 {
-    if (! currentFeatures || ! juce::isPositiveAndBelow (selectedCandidate, 3)) return false;
+    if (! currentFeatures || ! juce::isPositiveAndBelow (selectedCandidate, 3)) return std::nullopt;
     const auto index = (size_t) selectedCandidate;
     const auto baseline = candidateBank[index];
-    if (baseline.confidence <= 0.0f) return false;
+    if (baseline.confidence <= 0.0f) return std::nullopt;
 
-    const auto values = compareFineTuneValuesByCandidate[index];
-    if (values.isNeutral())
-    {
-        compareFineTuneMeasuredValuesByCandidate[index] = {};
-        compareFineTuneMeasuredByCandidate[index].reset();
-        compareFineTunePending = false;
-        applyGeneratedRack (baseline, selectedCandidate);
-        lastMatch = baseline;
-        currentCandidateFeatures = baseline.candidateFeatures.duration > 0.0f
-                                 ? std::optional<SoundFeatures> (baseline.candidateFeatures) : std::nullopt;
-        return true;
-    }
+    CompareFineTuneMeasureRequest request;
+    request.candidateIndex = selectedCandidate;
+    request.values = compareFineTuneValuesByCandidate[index];
+    request.reference = *currentFeatures;
+    request.params = CompareFineTune::apply (baseline.params, request.values);
+    request.settings = matchSettings;
+    if (baseline.algorithm >= 0) request.settings.algorithm = juce::jlimit (0, 6, baseline.algorithm);
+    request.baseline = baseline;
+    return request;
+}
 
-    auto params = CompareFineTune::apply (baseline.params, values);
-    auto settings = matchSettings;
-    if (baseline.algorithm >= 0) settings.algorithm = juce::jlimit (0, 6, baseline.algorithm);
-    auto measured = SoundMatcher::evaluateFit (*currentFeatures, params, settings);
+bool RetroMatchSynthAudioProcessor::acceptCompareFineTuneMeasurement (int candidateIndex,
+                                                                       CompareFineTune::Values values,
+                                                                       MatchResult measured)
+{
+    if (! juce::isPositiveAndBelow (candidateIndex, 3)) return false;
+    const auto index = (size_t) candidateIndex;
+    if (candidateBank[index].confidence <= 0.0f
+        || ! compareFineTuneValuesByCandidate[index].nearlyEquals (values))
+        return false; // stale worker result: candidate/knobs moved while it rendered.
+
+    const auto& baseline = candidateBank[index];
     measured.algorithm = baseline.algorithm;
     measured.complexity = baseline.complexity;
     measured.fullRackScore = baseline.fullRackScore;
     measured.explanation = "Compare fine-tune measured adjustment. " + measured.explanation;
-
     compareFineTuneMeasuredValuesByCandidate[index] = values;
     compareFineTuneMeasuredByCandidate[index] = measured;
-    compareFineTunePending = false;
-    applyGeneratedRack (measured, selectedCandidate);
-    lastMatch = measured;
-    currentCandidateFeatures = measured.candidateFeatures.duration > 0.0f
-                             ? std::optional<SoundFeatures> (measured.candidateFeatures) : std::nullopt;
+
+    if (candidateIndex == selectedCandidate)
+    {
+        compareFineTunePending = false;
+        applyGeneratedRack (measured, selectedCandidate);
+        lastMatch = measured;
+        currentCandidateFeatures = measured.candidateFeatures.duration > 0.0f
+                                 ? std::optional<SoundFeatures> (measured.candidateFeatures) : std::nullopt;
+    }
     return true;
+}
+
+bool RetroMatchSynthAudioProcessor::measureCompareFineTune()
+{
+    const auto request = makeCompareFineTuneMeasureRequest();
+    if (! request) return false;
+    if (request->values.isNeutral())
+    {
+        resetCompareFineTune();
+        return true;
+    }
+    auto measured = SoundMatcher::evaluateFit (request->reference, request->params, request->settings);
+    return acceptCompareFineTuneMeasurement (request->candidateIndex, request->values, std::move (measured));
 }
 
 bool RetroMatchSynthAudioProcessor::keepCompareFineTune()

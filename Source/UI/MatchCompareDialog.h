@@ -85,7 +85,7 @@ public:
         measureTune.onClick = [this]
         {
             baselineAudition = false;
-            proc.measureCompareFineTune();
+            startFineTuneMeasurement();
             syncButtonState();
             repaint();
         };
@@ -104,6 +104,8 @@ public:
 
     ~MatchCompareDialog() override
     {
+        closing = true;
+        compareMeasurePool.removeAllJobs (true, 10000);
         proc.allEditorNotesOff();
         // BASELINE/ADJUSTED are audition states. Only KEEP is allowed to survive closing Compare.
         proc.showCompareFineTuneBaseline (! proc.isCompareFineTuneApplied());
@@ -246,10 +248,45 @@ private:
     std::array<juce::Label, 7> fineTuneLabels;
     bool syncingFineTune = false;
     bool baselineAudition = false;
+    bool compareMeasureRunning = false;
+    bool autoMeasureArmed = false;
+    bool closing = false;
+    double lastFineTuneChangeMs = 0.0;
+    juce::ThreadPool compareMeasurePool { 1 };
+
+    class FineTuneMeasureJob final : public juce::ThreadPoolJob
+    {
+    public:
+        FineTuneMeasureJob (juce::Component::SafePointer<MatchCompareDialog> ownerIn,
+                            RetroMatchSynthAudioProcessor::CompareFineTuneMeasureRequest requestIn)
+            : juce::ThreadPoolJob ("Compare fine-tune offline measure"), owner (ownerIn), request (std::move (requestIn)) {}
+
+        JobStatus runJob() override
+        {
+            if (shouldExit()) return jobHasFinished;
+            auto measured = SoundMatcher::evaluateFit (request.reference, request.params, request.settings);
+            if (shouldExit()) return jobHasFinished;
+            const auto candidateIndex = request.candidateIndex;
+            const auto values = request.values;
+            juce::MessageManager::callAsync ([safe = owner, candidateIndex, values, measured = std::move (measured)] () mutable
+            {
+                if (safe != nullptr) safe->completeFineTuneMeasurement (candidateIndex, values, std::move (measured));
+            });
+            return jobHasFinished;
+        }
+
+    private:
+        juce::Component::SafePointer<MatchCompareDialog> owner;
+        RetroMatchSynthAudioProcessor::CompareFineTuneMeasureRequest request;
+    };
 
     void timerCallback() override
     {
         laf.setPalette (proc.lightPalette.load());
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        if (autoMeasureArmed && ! compareMeasureRunning && proc.isCompareFineTunePending()
+            && now - lastFineTuneChangeMs >= 550.0)
+            startFineTuneMeasurement();
         syncButtonState();
         repaint();
     }
@@ -261,8 +298,38 @@ private:
         candidateC.setToggleState (proc.selectedCandidate == 2, juce::dontSendNotification);
         baseline.setToggleState (baselineAudition, juce::dontSendNotification);
         adjusted.setToggleState (! baselineAudition, juce::dontSendNotification);
-        measureTune.setEnabled (proc.isCompareFineTunePending());
-        keepTune.setEnabled (! proc.getCompareFineTuneValues().isNeutral());
+        measureTune.setButtonText (compareMeasureRunning ? "MEASURING..." : "MEASURE");
+        measureTune.setEnabled (proc.isCompareFineTunePending() && ! compareMeasureRunning);
+        keepTune.setEnabled (! proc.getCompareFineTuneValues().isNeutral() && ! compareMeasureRunning);
+    }
+
+    void startFineTuneMeasurement()
+    {
+        if (closing || compareMeasureRunning || ! proc.isCompareFineTunePending()) return;
+        auto request = proc.makeCompareFineTuneMeasureRequest();
+        if (! request || request->values.isNeutral()) return;
+        compareMeasureRunning = true;
+        autoMeasureArmed = false;
+        auto* job = new FineTuneMeasureJob (juce::Component::SafePointer<MatchCompareDialog> (this), std::move (*request));
+        if (! compareMeasurePool.addJob (job, true))
+        {
+            delete job;
+            compareMeasureRunning = false;
+        }
+    }
+
+    void completeFineTuneMeasurement (int candidateIndex, CompareFineTune::Values values, MatchResult measured)
+    {
+        if (closing) return;
+        proc.acceptCompareFineTuneMeasurement (candidateIndex, values, std::move (measured));
+        compareMeasureRunning = false;
+        if (proc.isCompareFineTunePending())
+        {
+            autoMeasureArmed = true;
+            lastFineTuneChangeMs = juce::Time::getMillisecondCounterHiRes();
+        }
+        syncButtonState();
+        repaint();
     }
 
     void syncFineTuneControlsFromProcessor()
@@ -291,7 +358,10 @@ private:
     {
         if (syncingFineTune) return;
         baselineAudition = false;
-        proc.previewCompareFineTune (fineTuneValues());
+        const auto values = fineTuneValues();
+        proc.previewCompareFineTune (values);
+        autoMeasureArmed = ! values.isNeutral();
+        lastFineTuneChangeMs = juce::Time::getMillisecondCounterHiRes();
         syncButtonState();
         repaint();
     }
@@ -302,6 +372,8 @@ private:
         {
             syncFineTuneControlsFromProcessor();
             baselineAudition = false;
+            autoMeasureArmed = proc.isCompareFineTunePending();
+            lastFineTuneChangeMs = juce::Time::getMillisecondCounterHiRes();
             syncButtonState();
             repaint();
         }

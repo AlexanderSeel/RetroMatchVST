@@ -200,7 +200,7 @@ Do **not** add generic Drive/Reverb/Delay macros to this first row: those alread
 - [x] Put the seven correction knobs directly below/alongside the current Reference-vs-Resynth plots, all bipolar and center-detented except where a more specific unit display is useful.
 - [x] Keep existing **REFERENCE / SYNTH / MIX** audition and add **BASELINE / ADJUSTED** so the ear can compare the correction without losing the reference A/B.
 - [x] While dragging, apply the adjusted parameters to the live synth immediately; do not perform expensive offline analysis in the audio callback or on every mouse tick.
-- [~] Re-measure Adjusted with the explicit **MEASURE** action using the offline matcher, then update measured score/feature traces. Automatic debounce after drag remains pending.
+- [x] Debounce Adjusted after knob movement (~550 ms), render/score it on a dedicated background worker, reject stale results, and update measured score/feature traces only after a valid offline result. **MEASURE** remains as a manual immediate trigger.
 - [x] Overlay three states where useful: Reference, Baseline and measured Adjusted; Baseline is a dim/ghost trace.
 - [x] Show measured before→after deltas for Spectrum, Timbre, Temporal, Envelope, Harmonic, Stereo and Pitch in the similarity grid.
 - [x] Never estimate or cosmetically inflate similarity. Until a re-render completes, label the adjusted score **PENDING MEASURE** and keep the baseline trace/score distinct.

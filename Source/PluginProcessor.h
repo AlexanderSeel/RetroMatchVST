@@ -193,6 +193,17 @@ public:
         return compareFineTuneValuesByCandidate[index].nearlyEquals (compareFineTuneMeasuredValuesByCandidate[index])
              ? &*compareFineTuneMeasuredByCandidate[index] : nullptr;
     }
+    struct CompareFineTuneMeasureRequest
+    {
+        int candidateIndex = -1;
+        CompareFineTune::Values values {};
+        SoundFeatures reference;
+        VoiceParameters params;
+        MatchSettings settings;
+        MatchResult baseline;
+    };
+    std::optional<CompareFineTuneMeasureRequest> makeCompareFineTuneMeasureRequest() const;
+    bool acceptCompareFineTuneMeasurement (int candidateIndex, CompareFineTune::Values values, MatchResult measured);
     bool previewCompareFineTune (CompareFineTune::Values values);
     void resetCompareFineTune();
     bool showCompareFineTuneBaseline (bool baseline);
