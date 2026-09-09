@@ -13,7 +13,7 @@ jobs:
           fetch-depth: 0
       - name: Patch source
         shell: bash
-        run: python3 -c "from pathlib import Path; p=Path('Source/UI/SignalLabPage.h'); s=p.read_text(); old='    {\\n        g.setColour (colour.withAlpha (0.84f));'; new='    void drawEdgeLabel (juce::Graphics& g, const GraphEdge& edge, juce::Colour colour)\\n    {\\n        g.setColour (colour.withAlpha (0.84f));'; assert s.count(old)==1, s.count(old); p.write_text(s.replace(old,new,1))"
+        run: python3 -c "from pathlib import Path; p=Path('Source/UI/SignalLabPage.h'); s=p.read_text(); old='    void drawEdgeLabel\\n    {'; new='    void drawEdgeLabel (juce::Graphics& g, const GraphEdge& edge, juce::Colour colour)\\n    {'; assert s.count(old)==1, s.count(old); p.write_text(s.replace(old,new,1))"
       - name: Validate and clean
         shell: bash
         run: |
