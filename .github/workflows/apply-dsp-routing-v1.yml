@@ -1,0 +1,33 @@
+name: Apply DSP routing v1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/apply-dsp-routing-v1.py
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply source patch
+        run: python scripts/apply-dsp-routing-v1.py
+      - name: Static source contracts
+        run: python scripts/static-check.py
+      - name: Diff hygiene
+        run: git diff --check
+      - name: Commit product changes directly to main
+        run: |
+          git config user.name "RetroMatch Plan Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Implement DSP routing compiler v1"
+          git pull --rebase origin main
+          git push origin HEAD:main
