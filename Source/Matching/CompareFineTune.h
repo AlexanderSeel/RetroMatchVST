@@ -2,6 +2,8 @@
 #include "../Engine/SynthEngine.h"
 #include <cmath>
 
+// Musical residual corrections applied on top of a measured candidate. These mappings
+// are deliberately bounded and deterministic so Compare can always return to baseline.
 namespace CompareFineTune
 {
 struct Values
@@ -61,8 +63,8 @@ inline void applyToVoice (VoiceParameters& p, Values values) noexcept
     // Brightness is logarithmic because filter cutoff is perceived roughly by octaves.
     p.cutoff = juce::jlimit (20.0f, 20000.0f, p.cutoff * signedScale (values.brightness, 1.75f));
 
-    // Low-end is deliberately conservative: it moves the existing/sub oscillator balance
-    // without changing oscillator topology or introducing a new layer.
+    // Low-end is deliberately conservative: it moves the sub balance without changing
+    // graph/layer topology or introducing another synth instance.
     p.subMix = juce::jlimit (0.0f, 0.65f, p.subMix + values.lowEnd * 0.20f);
 
     // Positive PUNCH means a faster onset. Keep FM envelopes coherent with the amp envelope.
