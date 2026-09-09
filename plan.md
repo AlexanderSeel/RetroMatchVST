@@ -39,6 +39,7 @@ The next major UI/DSP milestone turns **SIGNAL LAB / PATCH MAP** from a read-onl
 - [x] Separate the audio chain from modulation/clock relationships visually: MOD no longer pretends to be an audio insert.
 - [x] Show connection ports so later cable editing has a clear interaction target.
 - [x] Persist custom node positions, pan, zoom and grid preference in UI/session state.
+- [x] LARGE PATCH MAP is genuinely resizable: content follows the window, the full toolbar stays visible, and the graph re-fits after overlay resize.
 - [ ] Multi-select, box select, group move and optional node locking.
 - [ ] Minimap for very large eight-instance patches.
 
