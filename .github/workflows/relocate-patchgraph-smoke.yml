@@ -1,0 +1,46 @@
+name: Relocate PatchGraph smoke test
+
+on:
+  push:
+    branches:
+      - plan/typed-patch-graph-20260909
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: plan/typed-patch-graph-20260909
+          fetch-depth: 0
+      - name: Relocate graph smoke block
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('Tests/SmokeTests.cpp')
+          text = p.read_text(encoding='utf-8')
+          start_marker = '    {\n        PatchGraph::Document graph;\n'
+          next_marker = '    {\n        SoundFeatures guitar;\n'
+          start = text.find(start_marker)
+          assert start >= 0, 'PatchGraph smoke block start missing'
+          end = text.find(next_marker, start)
+          assert end > start, 'PatchGraph smoke block end missing'
+          block = text[start:end]
+          text = text[:start] + text[end:]
+          return_marker = '    return 0;\n'
+          insert = text.rfind(return_marker)
+          assert insert >= 0, 'Smoke test return anchor missing'
+          text = text[:insert] + block + text[insert:]
+          p.write_text(text, encoding='utf-8')
+          Path('.github/workflows/relocate-patchgraph-smoke.yml').unlink()
+      - name: Commit relocation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Avoid Gold and PatchGraph smoke merge overlap"
+          git push origin HEAD:plan/typed-patch-graph-20260909
