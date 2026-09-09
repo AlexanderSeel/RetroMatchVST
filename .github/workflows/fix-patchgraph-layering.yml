@@ -1,0 +1,64 @@
+name: Fix PatchGraph layering
+
+on:
+  push:
+    branches:
+      - plan/typed-patch-graph-20260909
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]' || !contains(github.event.head_commit.message, 'Make PatchGraph engine-neutral')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: plan/typed-patch-graph-20260909
+          fetch-depth: 0
+      - name: Patch engine/UI geometry boundary
+        shell: python
+        run: |
+          from pathlib import Path
+
+          graph = Path('Source/Engine/PatchGraph.h')
+          text = graph.read_text(encoding='utf-8')
+          anchor = '''struct Node\n{\n'''
+          replacement = '''struct Position\n{\n    float x = 0.0f;\n    float y = 0.0f;\n};\n\nstruct Node\n{\n'''
+          if 'struct Position\n{' not in text:
+              assert anchor in text, 'PatchGraph Node anchor missing'
+              text = text.replace(anchor, replacement, 1)
+          assert 'juce::Point<float> position;' in text, 'PatchGraph node position anchor missing'
+          text = text.replace('juce::Point<float> position;', 'Position position;', 1)
+          assert 'juce::Point<float> pan { 18.0f, 18.0f };' in text, 'PatchGraph pan anchor missing'
+          text = text.replace('juce::Point<float> pan { 18.0f, 18.0f };', 'Position pan { 18.0f, 18.0f };', 1)
+          graph.write_text(text, encoding='utf-8')
+
+          ui = Path('Source/UI/SignalLabPage.h')
+          text = ui.read_text(encoding='utf-8')
+          replacements = [
+              ('graphPan = restored.view.pan;', 'graphPan = { restored.view.pan.x, restored.view.pan.y };'),
+              ('if (node.positionValid) restoredNodePositions[node.id.toStdString()] = node.position;',
+               'if (node.positionValid) restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };'),
+              ('graphModel.view.pan = graphPan;', 'graphModel.view.pan = { graphPan.x, graphPan.y };'),
+              ('stored->position = node.worldBounds.getPosition();',
+               'stored->position = { node.worldBounds.getX(), node.worldBounds.getY() };'),
+              ('modelNode.position = node.worldBounds.getPosition();',
+               'modelNode.position = { node.worldBounds.getX(), node.worldBounds.getY() };'),
+          ]
+          for old, new in replacements:
+              assert old in text, f'UI anchor missing: {old}'
+              text = text.replace(old, new, 1)
+          ui.write_text(text, encoding='utf-8')
+
+          workflow = Path('.github/workflows/fix-patchgraph-layering.yml')
+          workflow.unlink()
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Make PatchGraph engine-neutral"
+          git push origin HEAD:plan/typed-patch-graph-20260909
