@@ -5,6 +5,7 @@
 #include "Analysis/SampleAnalyzer.h"
 #include "Matching/SoundMatcher.h"
 #include "Matching/OfflineRenderer.h"
+#include "Matching/CompareFineTune.h"
 #include "Reference/ReferenceSamplePlayer.h"
 #include <atomic>
 #include "Engine/MelodyTransport.h"
@@ -174,6 +175,11 @@ public:
                                                        SoundMatcher::CancelCallback cancel = {});
     bool selectCandidate (int index);
     void morphCandidates (int a, int b, float amount);
+    CompareFineTune::Values getCompareFineTuneValues() const noexcept { return compareFineTuneValues; }
+    bool previewCompareFineTune (CompareFineTune::Values values);
+    void resetCompareFineTune();
+    bool showCompareFineTuneBaseline (bool baseline);
+    bool isCompareFineTunePending() const noexcept { return compareFineTunePending; }
     VoiceParameters getCurrentVoiceParameters() const { return readParams(); }
     VoiceParameters getMainVoiceParameters() const
     {
@@ -230,6 +236,10 @@ private:
     std::atomic<bool> midiLearning { false };
     std::atomic<float> outputPeakLeft { 0.0f };
     std::atomic<float> outputPeakRight { 0.0f };
+    // Transient Compare correction state. It intentionally stays out of APVTS/session
+    // automation until the user explicitly commits a measured patch.
+    CompareFineTune::Values compareFineTuneValues {};
+    bool compareFineTunePending = false;
     int detectedReferenceMidiNote = 60;
     float detectedReferenceHz = 0.0f;
     float detectedReferencePitchConfidence = 0.0f;
