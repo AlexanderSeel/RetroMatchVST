@@ -565,6 +565,7 @@ void SynthEngine::prepare (double sr, int samplesPerBlock, int channels, bool wi
     latencyCompensation.prepare (spec);
     layerScratch.setSize (safeChannels, safeBlockSize);
     moduleRack.prepare (sr, samplesPerBlock, channels);
+    wholeInstrumentRack.prepare (sr, samplesPerBlock, channels);
     if (withLayers)
         for (auto& layer : layerEngines)
         {
@@ -580,6 +581,7 @@ void SynthEngine::reset()
     for (auto& layer : layerEngines) if (layer) layer->reset();
     layerActive.fill (false);
     moduleRack.reset();
+    wholeInstrumentRack.reset();
     chorus.reset();
     delay.reset();
     reverb.reset();
@@ -739,6 +741,8 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
         }
         auto p = *current.layers[i];
         p.layers.fill (nullptr); p.mainLayerGain = 1.0f;
+        // A whole-instrument rack belongs to the parent only; never repeat it inside companions.
+        p.globalFxModules = {};
         p.masterTuneCents += juce::jlimit (-24.0f, 24.0f, current.layerTune[i]) * 100.0f;
         p.oversamplingQuality = current.oversamplingQuality;
         p.inheritTempoFrom (current);
@@ -771,4 +775,10 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
             }
         }
     }
+
+    // Gold/offline whole-instrument chain: exactly once after the main voice and
+    // every companion have been combined. Live APVTS global FX are processed by
+    // PluginProcessor and therefore are not copied into this field by readParams().
+    wholeInstrumentRack.process (audio, current.globalFxModules, 0, current.tempoBpm);
+    wholeInstrumentRack.process (audio, current.globalFxModules, 1, current.tempoBpm);
 }

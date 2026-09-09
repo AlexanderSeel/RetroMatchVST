@@ -7,7 +7,9 @@
 
 struct EffectProbeSignature
 {
+    static constexpr int detailedBandCount = 8;
     float low = 0.0f, mid = 0.0f, high = 0.0f;
+    std::array<float, detailedBandCount> detailedBands {};
     float tail = 0.0f, stereo = 0.0f, nonlinear = 0.0f, dynamics = 0.0f;
 };
 
@@ -25,6 +27,18 @@ public:
         s.mid = juce::jmax (0.0f, 1.0f - s.low - s.high);
         const float bandSum = juce::jmax (1.0e-5f, s.low + s.mid + s.high);
         s.low /= bandSum; s.mid /= bandSum; s.high /= bandSum;
+
+        float detailSum = 0.0f;
+        for (int band = 0; band < EffectProbeSignature::detailedBandCount; ++band)
+        {
+            float energy = 0.0f;
+            const int first = band * SoundFeatures::spectralBandCount / EffectProbeSignature::detailedBandCount;
+            const int last = (band + 1) * SoundFeatures::spectralBandCount / EffectProbeSignature::detailedBandCount;
+            for (int i = first; i < last; ++i) energy += juce::jmax (0.0f, f.spectralBands[(size_t) i]);
+            s.detailedBands[(size_t) band] = energy; detailSum += energy;
+        }
+        detailSum = juce::jmax (1.0e-6f, detailSum);
+        for (auto& energy : s.detailedBands) energy /= detailSum;
 
         const float releaseContext = f.releaseSeconds / juce::jmax (0.10f, juce::jmin (2.5f, f.duration + 0.15f));
         s.tail = juce::jlimit (0.0f, 1.0f, releaseContext * 1.7f + f.stereoWidth * 0.12f);
@@ -45,9 +59,13 @@ public:
 
         struct Context
         {
-            ModuleRack rack;
+            ModuleRack voiceRack, globalRack;
             juce::AudioBuffer<float> buffer { 2, totalSamples };
-            Context() { rack.prepare (sampleRate, blockSize, 2); }
+            Context()
+            {
+                voiceRack.prepare (sampleRate, blockSize, 2);
+                globalRack.prepare (sampleRate, blockSize, 2);
+            }
         };
         thread_local Context context;
 
@@ -57,8 +75,10 @@ public:
             {
                 const int count = juce::jmin (blockSize, totalSamples - start);
                 juce::AudioBuffer<float> block (context.buffer.getArrayOfWritePointers(), 2, start, count);
-                context.rack.process (block, p.fxModules, 0, p.tempoBpm);
-                context.rack.process (block, p.fxModules, 1, p.tempoBpm);
+                context.voiceRack.process (block, p.fxModules, 0, p.tempoBpm);
+                context.voiceRack.process (block, p.fxModules, 1, p.tempoBpm);
+                context.globalRack.process (block, p.globalFxModules, 0, p.tempoBpm);
+                context.globalRack.process (block, p.globalFxModules, 1, p.tempoBpm);
             }
         };
 
@@ -66,12 +86,14 @@ public:
 
         // Pass 1: identical mono white noise into both channels. Relative low/mid/high
         // output energy estimates the broad colour imposed by HPF/LPF/cab-style stages.
-        context.rack.reset();
+        context.voiceRack.reset(); context.globalRack.reset();
         context.buffer.clear();
         juce::Random random ((int64) 0x524d465850524f42);
+        std::array<float, noiseSamples> excitation {};
         for (int i = 0; i < noiseSamples; ++i)
         {
             const float n = random.nextFloat() * 2.0f - 1.0f;
+            excitation[(size_t) i] = n;
             context.buffer.setSample (0, i, n);
             context.buffer.setSample (1, i, n);
         }
@@ -100,13 +122,38 @@ public:
         s.low = (float) (lowSq / bandTotal);
         s.mid = (float) (midSq / bandTotal);
         s.high = (float) (highSq / bandTotal);
+
+        double detailedSum = 0.0;
+        for (int band = 0; band < EffectProbeSignature::detailedBandCount; ++band)
+        {
+            const double t = (double) band / (double) (EffectProbeSignature::detailedBandCount - 1);
+            const double frequency = 70.0 * std::pow (5200.0 / 70.0, t);
+            double inRe = 0.0, inIm = 0.0, outRe = 0.0, outIm = 0.0;
+            for (int i = 0; i < noiseSamples; ++i)
+            {
+                const double phase = juce::MathConstants<double>::twoPi * frequency * (double) i / sampleRate;
+                const double c = std::cos (phase), sn = std::sin (phase);
+                const double input = excitation[(size_t) i];
+                const double output = 0.5 * ((double) context.buffer.getSample (0, i) + (double) context.buffer.getSample (1, i));
+                inRe += input * c; inIm -= input * sn;
+                outRe += output * c; outIm -= output * sn;
+            }
+            const double inputMagnitude = std::sqrt (inRe * inRe + inIm * inIm);
+            const double outputMagnitude = std::sqrt (outRe * outRe + outIm * outIm);
+            const float transfer = (float) juce::jlimit (0.0, 8.0, outputMagnitude / juce::jmax (1.0e-9, inputMagnitude));
+            const float energy = transfer * transfer;
+            s.detailedBands[(size_t) band] = energy; detailedSum += energy;
+        }
+        detailedSum = juce::jmax (1.0e-9, detailedSum);
+        for (auto& energy : s.detailedBands) energy = (float) (energy / detailedSum);
+
         const float activeRms = std::sqrt ((float) (activeSq / noiseSamples));
         const float crest = peak / juce::jmax (1.0e-5f, activeRms);
         s.dynamics = juce::jlimit (0.0f, 1.0f, (crest - 1.0f) / 3.5f);
 
         // Pass 2: an impulse followed by silence. This exposes echoes, reverb decay and
         // stereo spreading independently from the synthesized note envelope.
-        context.rack.reset();
+        context.voiceRack.reset(); context.globalRack.reset();
         context.buffer.clear();
         context.buffer.setSample (0, 0, 1.0f);
         context.buffer.setSample (1, 0, 1.0f);
@@ -130,6 +177,36 @@ public:
         const float sideRms = std::sqrt ((float) (sideSq / totalSamples));
         s.stereo = juce::jlimit (0.0f, 1.0f, sideRms / juce::jmax (1.0e-5f, midRms + sideRms));
 
+        // Pass 3: two non-harmonically-related tones expose harmonics and
+        // intermodulation generated by saturation/clip/wavefold stages.
+        context.voiceRack.reset(); context.globalRack.reset(); context.buffer.clear();
+        constexpr double toneA = 233.0, toneB = 617.0;
+        constexpr int toneSamples = 4096;
+        for (int i = 0; i < toneSamples; ++i)
+        {
+            const float x = 0.19f * (float) std::sin (juce::MathConstants<double>::twoPi * toneA * i / sampleRate)
+                          + 0.19f * (float) std::sin (juce::MathConstants<double>::twoPi * toneB * i / sampleRate);
+            context.buffer.setSample (0, i, x); context.buffer.setSample (1, i, x);
+        }
+        processRack();
+        auto magnitudeAt = [&] (double frequency)
+        {
+            double re = 0.0, im = 0.0;
+            for (int i = 0; i < toneSamples; ++i)
+            {
+                const double x = 0.5 * ((double) context.buffer.getSample (0, i) + (double) context.buffer.getSample (1, i));
+                const double phase = juce::MathConstants<double>::twoPi * frequency * i / sampleRate;
+                re += x * std::cos (phase); im -= x * std::sin (phase);
+            }
+            return std::sqrt (re * re + im * im);
+        };
+        const double fundamentals = magnitudeAt (toneA) + magnitudeAt (toneB);
+        const double products = magnitudeAt (toneA * 2.0) + magnitudeAt (toneB * 2.0)
+                              + magnitudeAt (toneB - toneA) + magnitudeAt (toneA + toneB)
+                              + magnitudeAt (toneB + toneA * 2.0);
+        const float measuredNonlinear = juce::jlimit (0.0f, 1.0f, (float) (products / juce::jmax (1.0e-9, fundamentals) * 2.8));
+        s.nonlinear = juce::jmax (s.nonlinear, measuredNonlinear);
+
         for (const auto& module : p.fxModules)
         {
             if (module.bypass || module.type == 0) continue;
@@ -149,9 +226,14 @@ public:
     static float compare (const EffectProbeSignature& target, const EffectProbeSignature& candidate)
     {
         auto similarity = [] (float a, float b) { return juce::jlimit (0.0f, 1.0f, 1.0f - std::abs (a - b)); };
-        const float colour = similarity (target.low, candidate.low) * 0.30f
-                           + similarity (target.mid, candidate.mid) * 0.36f
-                           + similarity (target.high, candidate.high) * 0.34f;
+        const float coarseColour = similarity (target.low, candidate.low) * 0.30f
+                                 + similarity (target.mid, candidate.mid) * 0.36f
+                                 + similarity (target.high, candidate.high) * 0.34f;
+        float detailedColour = 0.0f;
+        for (int i = 0; i < EffectProbeSignature::detailedBandCount; ++i)
+            detailedColour += similarity (target.detailedBands[(size_t) i], candidate.detailedBands[(size_t) i]);
+        detailedColour /= (float) EffectProbeSignature::detailedBandCount;
+        const float colour = coarseColour * 0.34f + detailedColour * 0.66f;
         return juce::jlimit (0.0f, 1.0f,
                             colour * 0.36f
                           + similarity (target.tail, candidate.tail) * 0.20f
