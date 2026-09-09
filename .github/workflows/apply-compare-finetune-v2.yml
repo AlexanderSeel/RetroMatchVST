@@ -1,0 +1,33 @@
+name: Apply Compare fine-tune v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/apply-compare-finetune-v2.py
+      - .github/workflows/apply-compare-finetune-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply source patch
+        run: python scripts/apply-compare-finetune-v2.py
+      - name: Diff hygiene
+        run: git diff --check
+      - name: Commit product changes directly to main
+        run: |
+          git config user.name "RetroMatch Plan Bot"
+          git config user.email "actions@users.noreply.github.com"
+          rm -f scripts/apply-compare-finetune-v2.py .github/workflows/apply-compare-finetune-v2.yml
+          git add -A
+          git commit -m "Complete Compare fine-tune workflow"
+          git pull --rebase origin main
+          git push origin HEAD:main
