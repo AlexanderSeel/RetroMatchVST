@@ -178,3 +178,12 @@ The implementation should favor a small number of musically useful, deterministi
 - Store the exact embedded rack in the winning candidate so selecting A/B/C reproduces what was measured.
 - Keep FX white-noise/impulse probing secondary to the musical reference score; never inflate the displayed similarity to meet a target.
 - Show method, depth and FULL RACK status in candidate cards and Compare.
+
+
+### Rack-level evolution
+
+- Gold does not stop after choosing a synthesis method and layer count.
+- Evolve the completed rack with bounded full renders: main/layer gain, pan, tune, role timbre and MSEG movement.
+- Include a whole-instrument post-sum filter/FX rack in the offline Gold model and mirror the winning rack into the live global FX controls.
+- Use white-noise transfer analysis at higher spectral resolution plus a multi-tone nonlinear probe for guitar/pedal/amp-chain matching.
+- Keep excitation probes diagnostic/secondary; the musical full-rack similarity remains the displayed truth.

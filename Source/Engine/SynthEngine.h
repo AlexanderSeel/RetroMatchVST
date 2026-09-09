@@ -91,6 +91,9 @@ struct VoiceParameters
     std::array<float, 3> extraLfoRate {{ 0.5f, 2.0f, 5.0f }};
     std::array<int, 3> extraLfoShape {};
     std::array<FxModuleParameters, FxModuleParameters::slotCount> fxModules {};
+    // Whole-instrument rack used by offline/full-rack rendering. The live plug-in
+    // mirrors this into its append-only globalFxModule APVTS bus when a Gold result is selected.
+    std::array<FxModuleParameters, FxModuleParameters::slotCount> globalFxModules {};
 
     float drive = 0.0f;
     int distortionMode = 0;
@@ -250,6 +253,7 @@ private:
     juce::AudioBuffer<float> layerScratch;
     VoiceParameters current;
     ModuleRack moduleRack;
+    ModuleRack wholeInstrumentRack;
     double sampleRate = 44100.0;
 
     juce::dsp::Chorus<float> chorus;
