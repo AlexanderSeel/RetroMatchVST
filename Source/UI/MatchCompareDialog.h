@@ -13,12 +13,13 @@ public:
         setLookAndFeel (&laf);
         setOpaque (true);
 
-        for (auto* b : { &candidateA, &candidateB, &candidateC, &synth, &reference, &mix, &stop, &baseline, &adjusted, &resetTune })
+        for (auto* b : { &candidateA, &candidateB, &candidateC, &synth, &reference, &mix, &stop, &baseline, &adjusted, &resetTune, &measureTune, &keepTune })
             addAndMakeVisible (*b);
 
         candidateA.setButtonText ("A"); candidateB.setButtonText ("B"); candidateC.setButtonText ("C");
         synth.setButtonText ("SYNTH"); reference.setButtonText ("REFERENCE"); mix.setButtonText ("MIX"); stop.setButtonText ("STOP");
         baseline.setButtonText ("BASELINE"); adjusted.setButtonText ("ADJUSTED"); resetTune.setButtonText ("RESET");
+        measureTune.setButtonText ("MEASURE"); keepTune.setButtonText ("KEEP / APPLY");
         baseline.setClickingTogglesState (true); adjusted.setClickingTogglesState (true);
         baseline.setRadioGroupId (0x524d46); adjusted.setRadioGroupId (0x524d46);
 
@@ -81,7 +82,22 @@ public:
             syncButtonState();
             repaint();
         };
+        measureTune.onClick = [this]
+        {
+            baselineAudition = false;
+            proc.measureCompareFineTune();
+            syncButtonState();
+            repaint();
+        };
+        keepTune.onClick = [this]
+        {
+            baselineAudition = false;
+            proc.keepCompareFineTune();
+            syncButtonState();
+            repaint();
+        };
 
+        syncFineTuneControlsFromProcessor();
         syncButtonState();
         startTimerHz (12);
     }
@@ -89,6 +105,8 @@ public:
     ~MatchCompareDialog() override
     {
         proc.allEditorNotesOff();
+        // BASELINE/ADJUSTED are audition states. Only KEEP is allowed to survive closing Compare.
+        proc.showCompareFineTuneBaseline (! proc.isCompareFineTuneApplied());
         setLookAndFeel (nullptr);
     }
 
@@ -108,10 +126,14 @@ public:
         stop.setBounds (top.removeFromLeft (76).reduced (2));
 
         auto tune = r.removeFromTop (96).reduced (2, 3);
-        auto tuneButtons = tune.removeFromRight (272);
-        baseline.setBounds (tuneButtons.removeFromTop (28).removeFromLeft (88).reduced (2));
-        adjusted.setBounds (tuneButtons.removeFromTop (28).removeFromLeft (88).reduced (2));
-        resetTune.setBounds (tuneButtons.removeFromTop (28).removeFromLeft (88).reduced (2));
+        auto tuneButtons = tune.removeFromRight (310);
+        auto tuneRow1 = tuneButtons.removeFromTop (30);
+        baseline.setBounds (tuneRow1.removeFromLeft (96).reduced (2));
+        adjusted.setBounds (tuneRow1.removeFromLeft (96).reduced (2));
+        resetTune.setBounds (tuneRow1.removeFromLeft (92).reduced (2));
+        auto tuneRow2 = tuneButtons.removeFromTop (30);
+        measureTune.setBounds (tuneRow2.removeFromLeft (118).reduced (2));
+        keepTune.setBounds (tuneRow2.removeFromLeft (166).reduced (2));
         const int cell = juce::jmax (54, tune.getWidth() / (int) fineTune.size());
         for (size_t i = 0; i < fineTune.size(); ++i)
         {
@@ -158,9 +180,10 @@ public:
         g.drawText ("METHOD  " + methods[methodIndex] + "    /    DEPTH  " + depths[depthIndex] + rackTag,
                     24, 38, getWidth() - 360, 16, juce::Justification::centredLeft, true);
 
-        auto legend = juce::Rectangle<float> ((float) getWidth() - 300.0f, 18.0f, 270.0f, 22.0f);
-        drawLegend (g, legend.removeFromLeft (125.0f), led, "REFERENCE");
-        drawLegend (g, legend, gold, "RESYNTH");
+        auto legend = juce::Rectangle<float> ((float) getWidth() - 390.0f, 18.0f, 360.0f, 22.0f);
+        drawLegend (g, legend.removeFromLeft (118.0f), led, "REFERENCE");
+        drawLegend (g, legend.removeFromLeft (118.0f), gold.withAlpha (0.58f), "BASELINE");
+        drawLegend (g, legend, cyan, "ADJUSTED");
 
         if (! proc.currentFeatures)
         {
@@ -171,14 +194,26 @@ public:
         }
 
         const auto& ref = *proc.currentFeatures;
-        const SoundFeatures* candidate = proc.currentCandidateFeatures ? &*proc.currentCandidateFeatures : nullptr;
+        const auto* baselineResult = proc.getSelectedCandidateBaseline();
+        const auto* measuredAdjusted = proc.getCompareFineTuneMeasuredResult();
+        const SoundFeatures* baselineFeatures = baselineResult && baselineResult->candidateFeatures.duration > 0.0f
+                                              ? &baselineResult->candidateFeatures : nullptr;
+        const SoundFeatures* adjustedFeatures = measuredAdjusted && measuredAdjusted->candidateFeatures.duration > 0.0f
+                                              ? &measuredAdjusted->candidateFeatures : nullptr;
         auto body = getLocalBounds().reduced (22);
         auto fineTunePanel = body.withTrimmedTop (82).withHeight (96).toFloat().reduced (1.0f);
         panel (g, fineTunePanel, "POST-ANALYSIS CORRECTION", cyan);
-        g.setColour (proc.isCompareFineTunePending() ? gold : juce::Colour (0xff82928d));
+        juce::String correctionStatus;
+        if (proc.isCompareFineTunePending()) correctionStatus = "ADJUSTED AUDIO · SCORE/TRACE PENDING MEASURE";
+        else if (measuredAdjusted && baselineResult)
+            correctionStatus = "ADJUSTED MEASURED  " + juce::String (measuredAdjusted->similarity.total * 100.0f, 1) + "%   /   DELTA "
+                             + juce::String ((measuredAdjusted->similarity.total - baselineResult->similarity.total) * 100.0f, 1) + " pt";
+        else correctionStatus = "MEASURED BASELINE · ZERO / UNMEASURED CORRECTION";
+        if (proc.isCompareFineTuneApplied()) correctionStatus += "   ·   APPLIED";
+        g.setColour (proc.isCompareFineTunePending() ? gold : (measuredAdjusted ? cyan : juce::Colour (0xff82928d)));
         g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
-        g.drawText (proc.isCompareFineTunePending() ? "ADJUSTED AUDIO · SCORE/TRACE PENDING MEASURE" : "MEASURED BASELINE · ZERO CORRECTION",
-                    fineTunePanel.withTrimmedLeft (fineTunePanel.getWidth() - 260.0f).withHeight (22.0f).reduced (4.0f, 0.0f),
+        g.drawText (correctionStatus,
+                    fineTunePanel.withTrimmedLeft (fineTunePanel.getWidth() - 390.0f).withHeight (22.0f).reduced (4.0f, 0.0f),
                     juce::Justification::centredRight, true);
         body.removeFromTop (180);
 
@@ -193,11 +228,12 @@ public:
         auto wavePlot = waveArea.reduced (12.0f, 28.0f);
         drawPlotGrid (g, wavePlot);
         drawWave (g, wavePlot, ref, led, 2.0f);
-        if (candidate) drawWave (g, wavePlot, *candidate, gold, 1.7f);
+        if (baselineFeatures) drawWave (g, wavePlot, *baselineFeatures, gold.withAlpha (0.52f), 1.35f);
+        if (adjustedFeatures) drawWave (g, wavePlot, *adjustedFeatures, cyan, 1.9f);
 
         auto spectrumPlot = spectrumArea.reduced (12.0f, 28.0f);
         drawPlotGrid (g, spectrumPlot);
-        drawSpectrum (g, spectrumPlot, ref, candidate, led, gold);
+        drawSpectrum (g, spectrumPlot, ref, baselineFeatures, adjustedFeatures, led, gold, cyan);
         drawMetrics (g, metricsArea.reduced (12.0f, 25.0f), led, gold);
     }
 
@@ -205,7 +241,7 @@ private:
     RetroMatchSynthAudioProcessor& proc;
     RetroLookAndFeel laf;
     juce::TextButton candidateA, candidateB, candidateC, synth, reference, mix, stop;
-    juce::TextButton baseline, adjusted, resetTune;
+    juce::TextButton baseline, adjusted, resetTune, measureTune, keepTune;
     std::array<juce::Slider, 7> fineTune;
     std::array<juce::Label, 7> fineTuneLabels;
     bool syncingFineTune = false;
@@ -225,6 +261,17 @@ private:
         candidateC.setToggleState (proc.selectedCandidate == 2, juce::dontSendNotification);
         baseline.setToggleState (baselineAudition, juce::dontSendNotification);
         adjusted.setToggleState (! baselineAudition, juce::dontSendNotification);
+        measureTune.setEnabled (proc.isCompareFineTunePending());
+        keepTune.setEnabled (! proc.getCompareFineTuneValues().isNeutral());
+    }
+
+    void syncFineTuneControlsFromProcessor()
+    {
+        const auto v = proc.getCompareFineTuneValues();
+        const std::array<float, 7> values {{ v.brightness, v.lowEnd, v.punch, v.tail, v.width, v.motion, v.finePitch }};
+        syncingFineTune = true;
+        for (size_t i = 0; i < fineTune.size(); ++i) fineTune[i].setValue (values[i], juce::dontSendNotification);
+        syncingFineTune = false;
     }
 
     CompareFineTune::Values fineTuneValues() const
@@ -253,9 +300,7 @@ private:
     {
         if (proc.selectCandidate (index))
         {
-            syncingFineTune = true;
-            for (auto& slider : fineTune) slider.setValue (0.0, juce::dontSendNotification);
-            syncingFineTune = false;
+            syncFineTuneControlsFromProcessor();
             baselineAudition = false;
             syncButtonState();
             repaint();
@@ -338,33 +383,44 @@ private:
     }
 
     static void drawSpectrum (juce::Graphics& g, juce::Rectangle<float> r, const SoundFeatures& ref,
-                              const SoundFeatures* candidate, juce::Colour a, juce::Colour b)
+                              const SoundFeatures* baselineFeatures, const SoundFeatures* adjustedFeatures,
+                              juce::Colour referenceColour, juce::Colour baselineColour, juce::Colour adjustedColour)
     {
         const float w = r.getWidth() / SoundFeatures::spectralBandCount;
         for (int i = 0; i < SoundFeatures::spectralBandCount; ++i)
         {
             const float x = r.getX() + i * w;
             const float rh = juce::jlimit (0.0f, 1.0f, ref.spectralBands[(size_t) i]) * r.getHeight();
-            g.setColour (a.withAlpha (0.72f));
-            g.fillRect (x, r.getBottom() - rh, juce::jmax (1.0f, w * 0.42f), rh);
+            g.setColour (referenceColour.withAlpha (0.68f));
+            g.fillRect (x, r.getBottom() - rh, juce::jmax (1.0f, w * 0.25f), rh);
 
-            if (candidate)
+            if (baselineFeatures)
             {
-                const float ch = juce::jlimit (0.0f, 1.0f, candidate->spectralBands[(size_t) i]) * r.getHeight();
-                g.setColour (b.withAlpha (0.84f));
-                g.fillRect (x + w * 0.47f, r.getBottom() - ch, juce::jmax (1.0f, w * 0.42f), ch);
+                const float bh = juce::jlimit (0.0f, 1.0f, baselineFeatures->spectralBands[(size_t) i]) * r.getHeight();
+                g.setColour (baselineColour.withAlpha (adjustedFeatures ? 0.46f : 0.82f));
+                g.fillRect (x + w * 0.34f, r.getBottom() - bh, juce::jmax (1.0f, w * 0.25f), bh);
+            }
+            if (adjustedFeatures)
+            {
+                const float ah = juce::jlimit (0.0f, 1.0f, adjustedFeatures->spectralBands[(size_t) i]) * r.getHeight();
+                g.setColour (adjustedColour.withAlpha (0.90f));
+                g.fillRect (x + w * 0.68f, r.getBottom() - ah, juce::jmax (1.0f, w * 0.25f), ah);
             }
         }
     }
 
     void drawMetrics (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour led, juce::Colour gold)
     {
-        const auto& s = proc.lastMatch.similarity;
-        const bool hasFxProbe = proc.lastMatch.effectProbeSimilarity >= 0.0f;
-        const std::array<std::pair<const char*, float>, 8> values {{
-            { "TOTAL", s.total }, { "SPECTRUM", s.spectrum }, { "TIMBRE", s.timbre }, { "TEMPORAL", s.temporal },
-            { "HARMONIC", s.harmonic }, { "ENVELOPE", s.envelope }, { "STEREO", s.stereo },
-            { hasFxProbe ? "FX PROBE" : "PITCH", hasFxProbe ? proc.lastMatch.effectProbeSimilarity : s.pitch }
+        const auto* baselineResult = proc.getSelectedCandidateBaseline();
+        const auto* adjustedResult = proc.getCompareFineTuneMeasuredResult();
+        const auto& base = baselineResult ? baselineResult->similarity : proc.lastMatch.similarity;
+        const auto& shown = adjustedResult ? adjustedResult->similarity : base;
+        struct Metric { const char* name; float before; float after; };
+        const std::array<Metric, 8> values {{
+            { "TOTAL", base.total, shown.total }, { "SPECTRUM", base.spectrum, shown.spectrum },
+            { "TIMBRE", base.timbre, shown.timbre }, { "TEMPORAL", base.temporal, shown.temporal },
+            { "HARMONIC", base.harmonic, shown.harmonic }, { "ENVELOPE", base.envelope, shown.envelope },
+            { "STEREO", base.stereo, shown.stereo }, { "PITCH", base.pitch, shown.pitch }
         }};
 
         const int columns = 4;
@@ -386,19 +442,29 @@ private:
             auto titleArea = content.removeFromTop (18.0f);
             g.setColour (juce::Colour (0xffd4dfdb));
             g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
-            g.drawText (values[(size_t) i].first, titleArea, juce::Justification::centredLeft);
+            g.drawText (values[(size_t) i].name, titleArea, juce::Justification::centredLeft);
 
             auto bar = content.removeFromBottom (8.0f);
             auto valueArea = content;
             g.setColour (accent);
             g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
-            g.drawText (juce::String (values[(size_t) i].second * 100.0f, 1) + "%", valueArea,
+            g.drawText (juce::String (values[(size_t) i].after * 100.0f, 1) + "%", valueArea,
                         juce::Justification::centredRight);
+
+            if (adjustedResult)
+            {
+                const float delta = (values[(size_t) i].after - values[(size_t) i].before) * 100.0f;
+                g.setColour (delta >= 0.0f ? juce::Colour (0xff8bd7b8) : juce::Colour (0xffd69a91));
+                g.setFont (juce::Font (juce::FontOptions (8.5f, juce::Font::bold)));
+                g.drawText ((delta >= 0.0f ? "+" : "") + juce::String (delta, 1) + " pt",
+                            valueArea, juce::Justification::centredLeft);
+            }
 
             g.setColour (juce::Colour (0xff0b1214));
             g.fillRoundedRectangle (bar, 3.0f);
             g.setColour (accent);
-            g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, values[(size_t) i].second)), 3.0f);
+            g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, values[(size_t) i].after)), 3.0f);
         }
     }
+
 };

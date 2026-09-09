@@ -62,6 +62,10 @@ int main()
     positive.width = 0.70f;
     positive.motion = 0.65f;
     positive.finePitch = 0.40f;
+    auto sameGeneration = positive;
+    if (! positive.nearlyEquals (sameGeneration)) return fail ("fine-tune generation equality rejected identical values");
+    sameGeneration.width += 0.02f;
+    if (positive.nearlyEquals (sameGeneration)) return fail ("fine-tune generation equality missed a changed knob");
     const auto adjusted = CompareFineTune::apply (baseline, positive);
 
     if (adjusted.cutoff <= baseline.cutoff) return fail ("brightness did not raise cutoff");

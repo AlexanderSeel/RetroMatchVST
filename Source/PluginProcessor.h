@@ -175,11 +175,35 @@ public:
                                                        SoundMatcher::CancelCallback cancel = {});
     bool selectCandidate (int index);
     void morphCandidates (int a, int b, float amount);
-    CompareFineTune::Values getCompareFineTuneValues() const noexcept { return compareFineTuneValues; }
+    CompareFineTune::Values getCompareFineTuneValues() const noexcept
+    {
+        return juce::isPositiveAndBelow (selectedCandidate, 3)
+             ? compareFineTuneValuesByCandidate[(size_t) selectedCandidate] : CompareFineTune::Values {};
+    }
+    const MatchResult* getSelectedCandidateBaseline() const noexcept
+    {
+        return juce::isPositiveAndBelow (selectedCandidate, 3) && candidateBank[(size_t) selectedCandidate].confidence > 0.0f
+             ? &candidateBank[(size_t) selectedCandidate] : nullptr;
+    }
+    const MatchResult* getCompareFineTuneMeasuredResult() const noexcept
+    {
+        if (! juce::isPositiveAndBelow (selectedCandidate, 3)) return nullptr;
+        const auto index = (size_t) selectedCandidate;
+        if (! compareFineTuneMeasuredByCandidate[index]) return nullptr;
+        return compareFineTuneValuesByCandidate[index].nearlyEquals (compareFineTuneMeasuredValuesByCandidate[index])
+             ? &*compareFineTuneMeasuredByCandidate[index] : nullptr;
+    }
     bool previewCompareFineTune (CompareFineTune::Values values);
     void resetCompareFineTune();
     bool showCompareFineTuneBaseline (bool baseline);
+    bool measureCompareFineTune();
+    bool keepCompareFineTune();
     bool isCompareFineTunePending() const noexcept { return compareFineTunePending; }
+    bool isCompareFineTuneApplied() const noexcept
+    {
+        return juce::isPositiveAndBelow (selectedCandidate, 3)
+             && compareFineTuneAppliedByCandidate[(size_t) selectedCandidate];
+    }
     VoiceParameters getCurrentVoiceParameters() const { return readParams(); }
     VoiceParameters getMainVoiceParameters() const
     {
@@ -237,8 +261,11 @@ private:
     std::atomic<float> outputPeakLeft { 0.0f };
     std::atomic<float> outputPeakRight { 0.0f };
     // Transient Compare correction state. It intentionally stays out of APVTS/session
-    // automation until the user explicitly commits a measured patch.
-    CompareFineTune::Values compareFineTuneValues {};
+    // automation until KEEP explicitly promotes the adjusted voice into the working patch.
+    std::array<CompareFineTune::Values, 3> compareFineTuneValuesByCandidate {};
+    std::array<CompareFineTune::Values, 3> compareFineTuneMeasuredValuesByCandidate {};
+    std::array<std::optional<MatchResult>, 3> compareFineTuneMeasuredByCandidate {};
+    std::array<bool, 3> compareFineTuneAppliedByCandidate {};
     bool compareFineTunePending = false;
     int detectedReferenceMidiNote = 60;
     float detectedReferenceHz = 0.0f;
@@ -255,6 +282,7 @@ private:
     void applyPresetParameters (const VoiceParameters&, const juce::String& name);
     void applyGeneratedRack (const MatchResult& mainResult, int selectedBankIndex);
     void updateCandidatePreview (const MatchResult&);
+    void clearCompareFineTuneState() noexcept;
     void invalidateMatchesAfterReferencePitchChange();
     void rebuildRoutingPlanFromState();
     void delayReferenceForLatency (juce::AudioBuffer<float>&);

@@ -177,9 +177,9 @@ After Quick/Refine/Gold has produced a measured candidate, **Visual Compare** sh
 - [x] Add an engine-side, non-destructive fine-tune mapping that operates on `VoiceParameters` and clones embedded Gold layers instead of mutating the candidate bank.
 - [x] Keep the zero position exactly neutral and clamp every correction to existing safe DSP ranges.
 - [x] Add a DSP regression proving the Brightness control changes rendered/measured spectral centroid in the expected direction.
-- [ ] Keep **Baseline** and **Adjusted** states side-by-side in the processor; selecting another A/B/C candidate starts from that candidate's own baseline.
-- [ ] Never turn a static patch into a moving patch implicitly: Motion scales existing MSEG/LFO/mod routes only.
-- [ ] Store fine-tune offsets outside the released APVTS automation order; only explicitly committed changes become the working patch.
+- [x] Keep **Baseline** and **Adjusted** states side-by-side in the processor; A/B/C now retain independent correction + measured-Adjusted state.
+- [x] Never turn a static patch into a moving patch implicitly: Motion scales existing MSEG/LFO/mod routes only.
+- [x] Store fine-tune offsets outside the released APVTS automation order; closing Compare restores baseline unless **KEEP / APPLY** explicitly commits the adjusted working patch.
 
 ### First knob set
 
@@ -197,26 +197,26 @@ Do **not** add generic Drive/Reverb/Delay macros to this first row: those alread
 
 ### Compare UX
 
-- [ ] Put the seven correction knobs directly below/alongside the current Reference-vs-Resynth plots, all bipolar and center-detented except where a more specific unit display is useful.
-- [ ] Keep existing **REFERENCE / SYNTH / MIX** audition and add **BASELINE / ADJUSTED** so the ear can compare the correction without losing the reference A/B.
-- [ ] While dragging, apply the adjusted parameters to the live synth immediately; do not perform expensive offline analysis in the audio callback or on every mouse tick.
-- [ ] Debounce/re-measure Adjusted off the audio thread after a drag settles; only then update the measured score and feature traces.
-- [ ] Overlay three states where useful: Reference, Baseline and Adjusted. Baseline should be a dim/ghost trace so the direction of the correction is obvious.
-- [ ] Show a compact residual strip for Spectrum, Timbre, Temporal/Envelope, Harmonic, Stereo and Pitch with signed before→after deltas.
-- [ ] Never estimate or cosmetically inflate similarity. Until a re-render completes, label the adjusted score **PENDING MEASURE** and keep the last measured value visually distinct.
-- [ ] **RESET** returns all knobs to zero and exactly restores the selected candidate baseline.
-- [ ] **KEEP / APPLY TO PATCH** commits the adjusted `VoiceParameters` as the editable patch while retaining the original measured candidate for comparison/history.
+- [x] Put the seven correction knobs directly below/alongside the current Reference-vs-Resynth plots, all bipolar and center-detented except where a more specific unit display is useful.
+- [x] Keep existing **REFERENCE / SYNTH / MIX** audition and add **BASELINE / ADJUSTED** so the ear can compare the correction without losing the reference A/B.
+- [x] While dragging, apply the adjusted parameters to the live synth immediately; do not perform expensive offline analysis in the audio callback or on every mouse tick.
+- [~] Re-measure Adjusted with the explicit **MEASURE** action using the offline matcher, then update measured score/feature traces. Automatic debounce after drag remains pending.
+- [x] Overlay three states where useful: Reference, Baseline and measured Adjusted; Baseline is a dim/ghost trace.
+- [x] Show measured before→after deltas for Spectrum, Timbre, Temporal, Envelope, Harmonic, Stereo and Pitch in the similarity grid.
+- [x] Never estimate or cosmetically inflate similarity. Until a re-render completes, label the adjusted score **PENDING MEASURE** and keep the baseline trace/score distinct.
+- [x] **RESET** returns all knobs to zero and exactly restores the selected candidate baseline.
+- [x] **KEEP / APPLY TO PATCH** commits the adjusted `VoiceParameters` as the editable patch while retaining the original candidate bank for comparison/history.
 - [ ] Optional **AUTO NUDGE** comes later: derive small suggested offsets from signed residuals, then re-render and accept only improvements. It must not become an unbounded second optimizer.
 
 ### Verification for Compare fine-tune
 
-- [ ] Zero-correction output matches the selected candidate baseline.
+- [x] Zero-correction output matches the selected candidate baseline.
 - [ ] Each correction moves its intended rendered feature in the expected direction on a deterministic fixture set.
-- [ ] Gold/full-rack corrections preserve layer topology and immutable baseline state.
+- [x] Gold/full-rack corrections preserve layer topology and immutable baseline state.
 - [ ] Reset restores the baseline after arbitrary knob moves.
-- [ ] Candidate A/B/C switching maintains independent correction state or explicitly resets it; no cross-candidate leakage.
-- [ ] Re-measure work never allocates or blocks inside `processBlock`.
-- [ ] Session/preset policy is explicit: temporary compare UI state is not serialized unless the user commits it.
+- [x] Candidate A/B/C switching maintains independent correction/measured state; no cross-candidate leakage.
+- [x] Re-measure work is invoked from Compare and never runs inside `processBlock`.
+- [x] Session/preset policy is explicit: temporary compare state is not serialized; only **KEEP / APPLY** leaves the adjusted live patch in normal APVTS/session state.
 
 ## Gold Match full-rack resynthesis
 

@@ -34,6 +34,17 @@ struct Values
             && std::abs (width) <= epsilon && std::abs (motion) <= epsilon
             && std::abs (finePitch) <= epsilon;
     }
+
+    bool nearlyEquals (const Values& other, float epsilon = 1.0e-5f) const noexcept
+    {
+        return std::abs (brightness - other.brightness) <= epsilon
+            && std::abs (lowEnd - other.lowEnd) <= epsilon
+            && std::abs (punch - other.punch) <= epsilon
+            && std::abs (tail - other.tail) <= epsilon
+            && std::abs (width - other.width) <= epsilon
+            && std::abs (motion - other.motion) <= epsilon
+            && std::abs (finePitch - other.finePitch) <= epsilon;
+    }
 };
 
 inline float signedScale (float value, float octaves) noexcept
