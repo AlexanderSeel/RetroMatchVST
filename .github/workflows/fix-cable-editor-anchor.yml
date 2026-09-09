@@ -1,0 +1,41 @@
+name: Fix Cable Editor migration anchor
+
+on:
+  push:
+    branches:
+      - plan/cable-editor-v1-20260909
+    paths:
+      - .github/workflows/fix-cable-editor-anchor.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: plan/cable-editor-v1-20260909
+          fetch-depth: 0
+      - name: Widen exact drawEdgeLabel anchor
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/apply-cable-editor-v1-20260909.py')
+          s = p.read_text(encoding='utf-8')
+          old = '    void drawEdgeLabel\n\'\'\','
+          new = '    void drawEdgeLabel (juce::Graphics& g, const GraphEdge& edge, juce::Colour colour)\n\'\'\','
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one anchor, got {s.count(old)}')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+          rm .github/workflows/fix-cable-editor-anchor.yml
+      - name: Commit anchor fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fix Cable Editor migration anchor"
+          git push origin HEAD:plan/cable-editor-v1-20260909
