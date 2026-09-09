@@ -168,6 +168,55 @@ A user can rearrange the patch visually, create/reconnect/remove only valid cabl
 
 The implementation should favor a small number of musically useful, deterministic routing primitives over a fully unrestricted modular environment. RetroMatch should remain fast enough for live use and understandable enough that a matched patch can still be edited like an instrument rather than debugged like a graph program.
 
+## 9. Post-analysis Compare fine-tune
+
+After Quick/Refine/Gold has produced a measured candidate, **Visual Compare** should become a controlled correction surface instead of only a read-only score screen. The raw analysed candidate remains immutable; every correction is an offset from that baseline so A/B and RESET are always trustworthy.
+
+### Correction model
+
+- [x] Add an engine-side, non-destructive fine-tune mapping that operates on `VoiceParameters` and clones embedded Gold layers instead of mutating the candidate bank.
+- [x] Keep the zero position exactly neutral and clamp every correction to existing safe DSP ranges.
+- [x] Add a DSP regression proving the Brightness control changes rendered/measured spectral centroid in the expected direction.
+- [ ] Keep **Baseline** and **Adjusted** states side-by-side in the processor; selecting another A/B/C candidate starts from that candidate's own baseline.
+- [ ] Never turn a static patch into a moving patch implicitly: Motion scales existing MSEG/LFO/mod routes only.
+- [ ] Store fine-tune offsets outside the released APVTS automation order; only explicitly committed changes become the working patch.
+
+### First knob set
+
+| Control | Musical intent | Primary DSP mapping | Compare metric to watch |
+| --- | --- | --- | --- |
+| **BRIGHTNESS** | darker ↔ brighter | logarithmic filter cutoff shift | spectral centroid / high-energy residual |
+| **LOW END** | lean ↔ heavier | bounded sub-oscillator balance | low-energy ratio / spectrum |
+| **PUNCH** | softer ↔ harder onset | amp + FM attack time | attack / transient score |
+| **TAIL** | shorter ↔ longer body | decay, sustain and release | temporal/envelope residual |
+| **WIDTH** | mono/tight ↔ wide | stereo width, existing unison spread, rack pan spread | stereo residual |
+| **MOTION** | steadier ↔ more animated | scale existing MSEG/LFO/mod depths | spectral-motion / temporal residual |
+| **FINE PITCH** | residual tuning correction | ±50 cents around analysed candidate | pitch residual |
+
+Do **not** add generic Drive/Reverb/Delay macros to this first row: those already have explicit editing surfaces and would make Compare a second synth editor. Add a correction only when it corresponds to a clearly visible/measurable mismatch.
+
+### Compare UX
+
+- [ ] Put the seven correction knobs directly below/alongside the current Reference-vs-Resynth plots, all bipolar and center-detented except where a more specific unit display is useful.
+- [ ] Keep existing **REFERENCE / SYNTH / MIX** audition and add **BASELINE / ADJUSTED** so the ear can compare the correction without losing the reference A/B.
+- [ ] While dragging, apply the adjusted parameters to the live synth immediately; do not perform expensive offline analysis in the audio callback or on every mouse tick.
+- [ ] Debounce/re-measure Adjusted off the audio thread after a drag settles; only then update the measured score and feature traces.
+- [ ] Overlay three states where useful: Reference, Baseline and Adjusted. Baseline should be a dim/ghost trace so the direction of the correction is obvious.
+- [ ] Show a compact residual strip for Spectrum, Timbre, Temporal/Envelope, Harmonic, Stereo and Pitch with signed before→after deltas.
+- [ ] Never estimate or cosmetically inflate similarity. Until a re-render completes, label the adjusted score **PENDING MEASURE** and keep the last measured value visually distinct.
+- [ ] **RESET** returns all knobs to zero and exactly restores the selected candidate baseline.
+- [ ] **KEEP / APPLY TO PATCH** commits the adjusted `VoiceParameters` as the editable patch while retaining the original measured candidate for comparison/history.
+- [ ] Optional **AUTO NUDGE** comes later: derive small suggested offsets from signed residuals, then re-render and accept only improvements. It must not become an unbounded second optimizer.
+
+### Verification for Compare fine-tune
+
+- [ ] Zero-correction output matches the selected candidate baseline.
+- [ ] Each correction moves its intended rendered feature in the expected direction on a deterministic fixture set.
+- [ ] Gold/full-rack corrections preserve layer topology and immutable baseline state.
+- [ ] Reset restores the baseline after arbitrary knob moves.
+- [ ] Candidate A/B/C switching maintains independent correction state or explicitly resets it; no cross-candidate leakage.
+- [ ] Re-measure work never allocates or blocks inside `processBlock`.
+- [ ] Session/preset policy is explicit: temporary compare UI state is not serialized unless the user commits it.
 
 ## Gold Match full-rack resynthesis
 
@@ -178,7 +227,6 @@ The implementation should favor a small number of musically useful, deterministi
 - Store the exact embedded rack in the winning candidate so selecting A/B/C reproduces what was measured.
 - Keep FX white-noise/impulse probing secondary to the musical reference score; never inflate the displayed similarity to meet a target.
 - Show method, depth and FULL RACK status in candidate cards and Compare.
-
 
 ### Rack-level evolution
 

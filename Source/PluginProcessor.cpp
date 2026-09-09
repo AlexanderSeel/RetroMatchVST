@@ -2118,6 +2118,8 @@ bool RetroMatchSynthAudioProcessor::selectCandidate (int index)
 {
     if (! juce::isPositiveAndBelow (index, 3) || candidateBank[(size_t) index].confidence <= 0.0f) return false;
     selectedCandidate = index;
+    compareFineTuneValues = {};
+    compareFineTunePending = false;
     const auto& selected = candidateBank[(size_t) index];
     auto setChoice = [this] (const char* id, int value)
     {
@@ -2127,6 +2129,60 @@ bool RetroMatchSynthAudioProcessor::selectCandidate (int index)
     if (selected.algorithm >= 0) setChoice ("resynthStrategy", juce::jlimit (0, 6, selected.algorithm));
     if (selected.complexity >= 0) setChoice ("resynthComplexity", juce::jlimit (0, 3, selected.complexity));
     applyGeneratedRack (selected, index);
+    return true;
+}
+
+bool RetroMatchSynthAudioProcessor::previewCompareFineTune (CompareFineTune::Values values)
+{
+    if (! juce::isPositiveAndBelow (selectedCandidate, 3)) return false;
+    const auto baseline = candidateBank[(size_t) selectedCandidate];
+    if (baseline.confidence <= 0.0f) return false;
+
+    values.clamp();
+    compareFineTuneValues = values;
+    compareFineTunePending = ! values.isNeutral();
+
+    auto preview = baseline;
+    preview.params = CompareFineTune::apply (baseline.params, values);
+    // Do not pretend this unmeasured preview owns new analysis data. applyGeneratedRack
+    // is reused only to make the actual main/layer/global-rack DSP audible.
+    applyGeneratedRack (preview, selectedCandidate);
+    lastMatch = baseline;
+    currentCandidateFeatures = baseline.candidateFeatures.duration > 0.0f
+                             ? std::optional<SoundFeatures> (baseline.candidateFeatures)
+                             : std::nullopt;
+    return true;
+}
+
+void RetroMatchSynthAudioProcessor::resetCompareFineTune()
+{
+    compareFineTuneValues = {};
+    compareFineTunePending = false;
+    if (juce::isPositiveAndBelow (selectedCandidate, 3)
+        && candidateBank[(size_t) selectedCandidate].confidence > 0.0f)
+        applyGeneratedRack (candidateBank[(size_t) selectedCandidate], selectedCandidate);
+}
+
+bool RetroMatchSynthAudioProcessor::showCompareFineTuneBaseline (bool baseline)
+{
+    if (! juce::isPositiveAndBelow (selectedCandidate, 3)) return false;
+    const auto measured = candidateBank[(size_t) selectedCandidate];
+    if (measured.confidence <= 0.0f) return false;
+
+    if (baseline)
+        applyGeneratedRack (measured, selectedCandidate);
+    else
+    {
+        auto adjusted = measured;
+        adjusted.params = CompareFineTune::apply (measured.params, compareFineTuneValues);
+        applyGeneratedRack (adjusted, selectedCandidate);
+    }
+
+    // A/B audition must never rewrite the measured score/trace.
+    lastMatch = measured;
+    currentCandidateFeatures = measured.candidateFeatures.duration > 0.0f
+                             ? std::optional<SoundFeatures> (measured.candidateFeatures)
+                             : std::nullopt;
     return true;
 }
 

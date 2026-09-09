@@ -13,11 +13,31 @@ public:
         setLookAndFeel (&laf);
         setOpaque (true);
 
-        for (auto* b : { &candidateA, &candidateB, &candidateC, &synth, &reference, &mix, &stop })
+        for (auto* b : { &candidateA, &candidateB, &candidateC, &synth, &reference, &mix, &stop, &baseline, &adjusted, &resetTune })
             addAndMakeVisible (*b);
 
         candidateA.setButtonText ("A"); candidateB.setButtonText ("B"); candidateC.setButtonText ("C");
         synth.setButtonText ("SYNTH"); reference.setButtonText ("REFERENCE"); mix.setButtonText ("MIX"); stop.setButtonText ("STOP");
+        baseline.setButtonText ("BASELINE"); adjusted.setButtonText ("ADJUSTED"); resetTune.setButtonText ("RESET");
+        baseline.setClickingTogglesState (true); adjusted.setClickingTogglesState (true);
+        baseline.setRadioGroupId (0x524d46); adjusted.setRadioGroupId (0x524d46);
+
+        static constexpr const char* tuneNames[] { "BRIGHT", "LOW END", "PUNCH", "TAIL", "WIDTH", "MOTION", "FINE PITCH" };
+        for (size_t i = 0; i < fineTune.size(); ++i)
+        {
+            addAndMakeVisible (fineTune[i]);
+            addAndMakeVisible (fineTuneLabels[i]);
+            fineTune[i].setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+            fineTune[i].setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 14);
+            fineTune[i].setRange (-1.0, 1.0, 0.01);
+            fineTune[i].setDoubleClickReturnValue (true, 0.0);
+            fineTune[i].setValue (0.0, juce::dontSendNotification);
+            fineTuneLabels[i].setText (tuneNames[i], juce::dontSendNotification);
+            fineTuneLabels[i].setJustificationType (juce::Justification::centred);
+            fineTuneLabels[i].setColour (juce::Label::textColourId, juce::Colour (0xffb8c8c3));
+            fineTuneLabels[i].setFont (juce::Font (juce::FontOptions (8.5f, juce::Font::bold)));
+            fineTune[i].onValueChange = [this] { applyFineTune(); };
+        }
 
         for (auto* b : { &candidateA, &candidateB, &candidateC })
         {
@@ -35,6 +55,30 @@ public:
         {
             proc.allEditorNotesOff();
             proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::synthOnly);
+            repaint();
+        };
+        baseline.onClick = [this]
+        {
+            baselineAudition = true;
+            proc.showCompareFineTuneBaseline (true);
+            syncButtonState();
+            repaint();
+        };
+        adjusted.onClick = [this]
+        {
+            baselineAudition = false;
+            proc.showCompareFineTuneBaseline (false);
+            syncButtonState();
+            repaint();
+        };
+        resetTune.onClick = [this]
+        {
+            syncingFineTune = true;
+            for (auto& slider : fineTune) slider.setValue (0.0, juce::dontSendNotification);
+            syncingFineTune = false;
+            baselineAudition = false;
+            proc.resetCompareFineTune();
+            syncButtonState();
             repaint();
         };
 
@@ -62,6 +106,19 @@ public:
         reference.setBounds (top.removeFromLeft (126).reduced (2));
         mix.setBounds (top.removeFromLeft (84).reduced (2));
         stop.setBounds (top.removeFromLeft (76).reduced (2));
+
+        auto tune = r.removeFromTop (96).reduced (2, 3);
+        auto tuneButtons = tune.removeFromRight (272);
+        baseline.setBounds (tuneButtons.removeFromTop (28).removeFromLeft (88).reduced (2));
+        adjusted.setBounds (tuneButtons.removeFromTop (28).removeFromLeft (88).reduced (2));
+        resetTune.setBounds (tuneButtons.removeFromTop (28).removeFromLeft (88).reduced (2));
+        const int cell = juce::jmax (54, tune.getWidth() / (int) fineTune.size());
+        for (size_t i = 0; i < fineTune.size(); ++i)
+        {
+            auto c = tune.removeFromLeft (i + 1 == fineTune.size() ? tune.getWidth() : cell);
+            fineTuneLabels[i].setBounds (c.removeFromTop (16));
+            fineTune[i].setBounds (c.reduced (2, 0));
+        }
     }
 
     void paint (juce::Graphics& g) override
@@ -116,7 +173,14 @@ public:
         const auto& ref = *proc.currentFeatures;
         const SoundFeatures* candidate = proc.currentCandidateFeatures ? &*proc.currentCandidateFeatures : nullptr;
         auto body = getLocalBounds().reduced (22);
-        body.removeFromTop (88);
+        auto fineTunePanel = body.withTrimmedTop (82).withHeight (96).toFloat().reduced (1.0f);
+        panel (g, fineTunePanel, "POST-ANALYSIS CORRECTION", cyan);
+        g.setColour (proc.isCompareFineTunePending() ? gold : juce::Colour (0xff82928d));
+        g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+        g.drawText (proc.isCompareFineTunePending() ? "ADJUSTED AUDIO · SCORE/TRACE PENDING MEASURE" : "MEASURED BASELINE · ZERO CORRECTION",
+                    fineTunePanel.withTrimmedLeft (fineTunePanel.getWidth() - 260.0f).withHeight (22.0f).reduced (4.0f, 0.0f),
+                    juce::Justification::centredRight, true);
+        body.removeFromTop (180);
 
         auto waveArea = body.removeFromTop (body.getHeight() * 34 / 100).toFloat().reduced (3.0f);
         auto spectrumArea = body.removeFromTop (body.getHeight() * 52 / 100).toFloat().reduced (3.0f);
@@ -141,6 +205,11 @@ private:
     RetroMatchSynthAudioProcessor& proc;
     RetroLookAndFeel laf;
     juce::TextButton candidateA, candidateB, candidateC, synth, reference, mix, stop;
+    juce::TextButton baseline, adjusted, resetTune;
+    std::array<juce::Slider, 7> fineTune;
+    std::array<juce::Label, 7> fineTuneLabels;
+    bool syncingFineTune = false;
+    bool baselineAudition = false;
 
     void timerCallback() override
     {
@@ -154,12 +223,40 @@ private:
         candidateA.setToggleState (proc.selectedCandidate == 0, juce::dontSendNotification);
         candidateB.setToggleState (proc.selectedCandidate == 1, juce::dontSendNotification);
         candidateC.setToggleState (proc.selectedCandidate == 2, juce::dontSendNotification);
+        baseline.setToggleState (baselineAudition, juce::dontSendNotification);
+        adjusted.setToggleState (! baselineAudition, juce::dontSendNotification);
+    }
+
+    CompareFineTune::Values fineTuneValues() const
+    {
+        CompareFineTune::Values v;
+        v.brightness = (float) fineTune[0].getValue();
+        v.lowEnd = (float) fineTune[1].getValue();
+        v.punch = (float) fineTune[2].getValue();
+        v.tail = (float) fineTune[3].getValue();
+        v.width = (float) fineTune[4].getValue();
+        v.motion = (float) fineTune[5].getValue();
+        v.finePitch = (float) fineTune[6].getValue();
+        return v;
+    }
+
+    void applyFineTune()
+    {
+        if (syncingFineTune) return;
+        baselineAudition = false;
+        proc.previewCompareFineTune (fineTuneValues());
+        syncButtonState();
+        repaint();
     }
 
     void select (int index)
     {
         if (proc.selectCandidate (index))
         {
+            syncingFineTune = true;
+            for (auto& slider : fineTune) slider.setValue (0.0, juce::dontSendNotification);
+            syncingFineTune = false;
+            baselineAudition = false;
             syncButtonState();
             repaint();
         }
