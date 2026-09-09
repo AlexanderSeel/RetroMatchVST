@@ -93,6 +93,7 @@ public:
             }
             if (const int output = hitTestModOutput (e.position); output >= 0)
             {
+                connectionValidationMessage.clear();
                 connecting = true;
                 connectionFromId = nodes[(size_t) output].id.toStdString();
                 connectionDragPoint = e.position;
@@ -888,8 +889,9 @@ private:
         else if (stage == 0) modelNode.type = PatchGraph::NodeType::source;
         else if (stage == 5) modelNode.type = PatchGraph::NodeType::mixer;
         else modelNode.type = PatchGraph::NodeType::processor;
-        if (inputPort) modelNode.ports.push_back (PatchGraph::audioInput (id == "GLOBALBUS"));
-        if (outputPort) modelNode.ports.push_back (PatchGraph::audioOutput());
+        const bool ownsAudioPorts = role != NodeRole::clock && role != NodeRole::modHub;
+        if (inputPort && ownsAudioPorts) modelNode.ports.push_back (PatchGraph::audioInput (id == "GLOBALBUS"));
+        if (outputPort && ownsAudioPorts) modelNode.ports.push_back (PatchGraph::audioOutput());
         if (modInputPort) modelNode.ports.push_back (PatchGraph::modulationInput());
         if (modOutputPort) modelNode.ports.push_back (PatchGraph::modulationOutput());
         if (role == NodeRole::modHub) modelNode.ports.push_back (PatchGraph::clockInput());
