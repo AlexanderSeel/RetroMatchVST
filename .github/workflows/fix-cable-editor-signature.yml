@@ -1,59 +1,30 @@
-name: Fix Cable Editor compile signature
-
-on:
-  push:
-    branches:
-      - plan/cable-editor-v1-20260909
-    paths:
-      - .github/workflows/fix-cable-editor-signature.yml
-
+name: Fix Cable Editor Signature
+on: [push]
 permissions:
   contents: write
-
 jobs:
   fix:
+    if: github.ref == 'refs/heads/plan/cable-editor-v1-20260909'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: plan/cable-editor-v1-20260909
           fetch-depth: 0
-      - name: Restore drawEdgeLabel signature
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('Source/UI/SignalLabPage.h')
-          s = p.read_text(encoding='utf-8')
-          old = '''            return false;
-        }
-        return false;
-    }
-
-    {
-        g.setColour (colour.withAlpha (0.84f));
-'''
-          new = '''            return false;
-        }
-        return false;
-    }
-
-    void drawEdgeLabel (juce::Graphics& g, const GraphEdge& edge, juce::Colour colour)
-    {
-        g.setColour (colour.withAlpha (0.84f));
-'''
-          if s.count(old) != 1:
-              raise SystemExit(f'expected one malformed drawEdgeLabel anchor, got {s.count(old)}')
-          p.write_text(s.replace(old, new, 1), encoding='utf-8')
-          PY
-      - name: Remove temporary workflow and validate
+      - name: Patch source
+        shell: bash
+        run: python3 -c "from pathlib import Path; p=Path('Source/UI/SignalLabPage.h'); s=p.read_text(); old='    {\\n        g.setColour (colour.withAlpha (0.84f));'; new='    void drawEdgeLabel (juce::Graphics& g, const GraphEdge& edge, juce::Colour colour)\\n    {\\n        g.setColour (colour.withAlpha (0.84f));'; assert s.count(old)==1, s.count(old); p.write_text(s.replace(old,new,1))"
+      - name: Validate and clean
+        shell: bash
         run: |
           rm .github/workflows/fix-cable-editor-signature.yml
           python3 scripts/static-check.py
           git diff --check
-      - name: Commit source fix
+      - name: Commit
+        shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git commit -m "Fix Cable Editor draw label compile error"
           git push origin HEAD:plan/cable-editor-v1-20260909
