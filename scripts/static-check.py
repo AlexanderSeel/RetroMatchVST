@@ -65,12 +65,14 @@ user_wavetable_page_path = ROOT / 'Source/UI/UserWavetablePage.h'
 tempo_sync_path = ROOT / 'Source/Engine/TempoSync.h'
 signal_page_path = ROOT / 'Source/UI/SignalLabPage.h'
 patch_graph_path = ROOT / 'Source/Engine/PatchGraph.h'
+dsp_routing_path = ROOT / 'Source/Engine/DspRoutingPlan.h'
 if not mseg_path.exists(): errors.append('Source/Engine/MSEG.h is missing')
 if not mseg_page_path.exists(): errors.append('Source/UI/MsegPage.h is missing')
 if not user_wavetable_page_path.exists(): errors.append('Source/UI/UserWavetablePage.h is missing')
 if not tempo_sync_path.exists(): errors.append('Source/Engine/TempoSync.h is missing')
 if not signal_page_path.exists(): errors.append('Source/UI/SignalLabPage.h is missing')
 if not patch_graph_path.exists(): errors.append('Source/Engine/PatchGraph.h is missing')
+if not dsp_routing_path.exists(): errors.append('Source/Engine/DspRoutingPlan.h is missing')
 
 processor = (ROOT / 'Source/PluginProcessor.cpp').read_text(encoding='utf-8')
 processor_h = (ROOT / 'Source/PluginProcessor.h').read_text(encoding='utf-8')
@@ -85,6 +87,7 @@ user_wavetable_page = user_wavetable_page_path.read_text(encoding='utf-8') if us
 tempo_sync = tempo_sync_path.read_text(encoding='utf-8') if tempo_sync_path.exists() else ''
 signal_page = signal_page_path.read_text(encoding='utf-8') if signal_page_path.exists() else ''
 patch_graph = patch_graph_path.read_text(encoding='utf-8') if patch_graph_path.exists() else ''
+dsp_routing = dsp_routing_path.read_text(encoding='utf-8') if dsp_routing_path.exists() else ''
 matcher = (ROOT / 'Source/Matching/SoundMatcher.cpp').read_text(encoding='utf-8')
 analyzer = (ROOT / 'Source/Analysis/SampleAnalyzer.cpp').read_text(encoding='utf-8')
 analyzer_h = (ROOT / 'Source/Analysis/SampleAnalyzer.h').read_text(encoding='utf-8')
@@ -133,6 +136,7 @@ required_tokens = {
     'interactive signal map': ['mouseWheelMove', 'mouseDrag', 'mouseDoubleClick', 'graphZoom', 'graphPan', 'INSTANCE 1 / MAIN'],
     'typed persistent patch graph': ['schemaVersion', 'PortType', 'validateConnection', 'wouldCreateAudioCycle', 'topologicalOrder', 'toValueTree', 'fromValueTree', 'modulationSafe'],
     'cable editor v1': ['findEdge', 'replaceEdge', 'removeEdge', 'showReconnectRouteMenu', 'deleteSelectedCable', 'undoCableEdit', 'redoCableEdit', 'KeyPress::deleteKey'],
+    'DSP routing compiler v1': ['maxLayerCount', 'layerOrder', 'CompileResult', 'AtomicPlan', 'memory_order_release', 'memory_order_acquire'],
 }
 texts = {
     'processor wavetable parameters': processor,
@@ -172,6 +176,7 @@ texts = {
     'interactive signal map': signal_page,
     'typed persistent patch graph': patch_graph + signal_page + processor_h,
     'cable editor v1': patch_graph + signal_page,
+    'DSP routing compiler v1': dsp_routing + engine_h + engine_cpp + processor + processor_h + signal_page,
 }
 for name, tokens in required_tokens.items():
     for token in tokens:

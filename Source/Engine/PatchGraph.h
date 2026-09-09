@@ -4,11 +4,12 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace PatchGraph
 {
-static constexpr int schemaVersion = 1;
+static constexpr int schemaVersion = 2;
 
 enum class PortType : int
 {
@@ -77,6 +78,7 @@ struct Edge
     juce::String toPort;
     PortType type = PortType::audio;
     bool editable = false;
+    int sequence = -1;
 };
 
 struct ViewState
@@ -399,6 +401,7 @@ public:
             child.setProperty ("toPort", edge.toPort, nullptr);
             child.setProperty ("type", (int) edge.type, nullptr);
             child.setProperty ("editable", edge.editable, nullptr);
+            child.setProperty ("sequence", edge.sequence, nullptr);
             edgeTree.appendChild (child, nullptr);
         }
         root.appendChild (edgeTree, nullptr);
@@ -460,6 +463,7 @@ public:
             edge.toPort = child["toPort"].toString();
             edge.type = (PortType) juce::jlimit (0, (int) PortType::control, (int) child.getProperty ("type", 0));
             edge.editable = (bool) child.getProperty ("editable", false);
+            edge.sequence = (int) child.getProperty ("sequence", -1);
             juce::String reason;
             if (! result.addEdge (std::move (edge), &reason)) appendRepair (reason);
         }
@@ -481,7 +485,8 @@ public:
         }
         for (const auto& edge : edges)
             out << "|e:" << edge.id << ":" << edge.fromNode << ":" << edge.fromPort << ":"
-                << edge.toNode << ":" << edge.toPort << ":" << (int) edge.type << ":" << (edge.editable ? 1 : 0);
+                << edge.toNode << ":" << edge.toPort << ":" << (int) edge.type << ":" << (edge.editable ? 1 : 0)
+                << ":" << edge.sequence;
         return out;
     }
 

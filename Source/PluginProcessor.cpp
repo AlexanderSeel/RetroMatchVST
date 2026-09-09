@@ -598,6 +598,13 @@ bool RetroMatchSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
     return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
+void RetroMatchSynthAudioProcessor::rebuildRoutingPlanFromState()
+{
+    const auto graph = getPatchGraphDocument();
+    const auto compiled = DspRouting::compile (graph);
+    routingPlanPublisher.publish (compiled.validation.ok ? compiled.plan : DspRouting::Plan {});
+}
+
 VoiceParameters RetroMatchSynthAudioProcessor::readParams (const juce::ValueTree& snapshot, bool routed) const
 {
     VoiceParameters p;
@@ -825,6 +832,7 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
     effectiveBpm.store (TempoSync::clampBpm (bpm), std::memory_order_relaxed);
 
     const auto mode = getReferenceAuditionMode();
+    engine.setRoutingPlan (routingPlanPublisher.snapshot());
     engine.setParameters (readParams());
     engine.render (b, renderMidi);
 
@@ -1882,6 +1890,7 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
     restoreGlobal ("resynthStrategy", preservedStrategy);
     restoreGlobal ("resynthComplexity", preservedComplexity);
     restoreLayers();
+    rebuildRoutingPlanFromState();
     analysisStartSeconds.store ((float) xml->getDoubleAttribute ("analysisStartSeconds", 0.0));
     analysisEndSeconds.store ((float) xml->getDoubleAttribute ("analysisEndSeconds", -1.0));
     { const juce::ScopedLock lock (midiMappingLock); midiMappings.clear(); for (int i = 0; i < xml->getIntAttribute ("midiMapCount", 0); ++i) midiMappings.push_back ({ xml->getStringAttribute ("midiMap" + juce::String (i) + "Id"), xml->getIntAttribute ("midiMap" + juce::String (i) + "CC", 0) }); }
@@ -1952,6 +1961,7 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
             lightPalette.store (juce::jlimit (0, 3, xml->getIntAttribute ("lightPalette", 0)));
             apvts.replaceState (stateWithPost10Defaults (*xml));
             restoreLayers();
+            rebuildRoutingPlanFromState();
             analysisStartSeconds.store ((float) xml->getDoubleAttribute ("analysisStartSeconds", 0.0));
             analysisEndSeconds.store ((float) xml->getDoubleAttribute ("analysisEndSeconds", -1.0));
             { const juce::ScopedLock lock (midiMappingLock); midiMappings.clear(); for (int i = 0; i < xml->getIntAttribute ("midiMapCount", 0); ++i) midiMappings.push_back ({ xml->getStringAttribute ("midiMap" + juce::String (i) + "Id"), xml->getIntAttribute ("midiMap" + juce::String (i) + "CC", 0) }); }

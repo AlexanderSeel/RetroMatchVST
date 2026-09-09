@@ -9,5 +9,6 @@ public:
                                                   double sampleRate,
                                                   float durationSeconds,
                                                   float targetFundamentalHz,
-                                                  int blockSize = 256);
+                                                  int blockSize = 256,
+                                                  DspRouting::Plan routingPlan = {});
 };

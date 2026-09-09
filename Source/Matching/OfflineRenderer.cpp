@@ -5,7 +5,8 @@ juce::AudioBuffer<float> OfflineRenderer::renderPatch (const VoiceParameters& pa
                                                         double sampleRate,
                                                         float durationSeconds,
                                                         float targetFundamentalHz,
-                                                        int blockSize)
+                                                        int blockSize,
+                                                        DspRouting::Plan routingPlan)
 {
     const float duration = juce::jlimit (0.45f, 12.0f, durationSeconds);
     const int totalSamples = juce::jmax (1, (int) std::ceil (duration * sampleRate));
@@ -18,6 +19,7 @@ juce::AudioBuffer<float> OfflineRenderer::renderPatch (const VoiceParameters& pa
     engine.setRandomSeed ((int64) 0x524d534f);
     engine.prepare (sampleRate, blockSize, 2, std::any_of (params.layers.begin(), params.layers.end(), [] (const auto& p) { return p != nullptr; }));
     engine.setRandomSeed ((int64) 0x524d534f);
+    engine.setRoutingPlan (routingPlan);
     engine.setParameters (params);
 
     float hz = targetFundamentalHz;

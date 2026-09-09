@@ -81,9 +81,12 @@ public:
     }
     void setPatchGraphDocument (const PatchGraph::Document& graph)
     {
+        const auto compiled = DspRouting::compile (graph);
+        if (! compiled.validation.ok) return;
         auto previous = apvts.state.getChildWithName ("PATCH_GRAPH");
         if (previous.isValid()) apvts.state.removeChild (previous, nullptr);
         apvts.state.appendChild (graph.toValueTree(), nullptr);
+        routingPlanPublisher.publish (compiled.plan);
     }
     void playMelody()
     {
@@ -202,6 +205,7 @@ public:
 
 private:
     SynthEngine engine;
+    DspRouting::AtomicPlan routingPlanPublisher;
     // True whole-instrument bus: runs once after main + all layer instances are combined.
     ModuleRack globalModuleRack;
     juce::MidiBuffer renderMidi;
@@ -242,6 +246,7 @@ private:
     void applyGeneratedRack (const MatchResult& mainResult, int selectedBankIndex);
     void updateCandidatePreview (const MatchResult&);
     void invalidateMatchesAfterReferencePitchChange();
+    void rebuildRoutingPlanFromState();
     void delayReferenceForLatency (juce::AudioBuffer<float>&);
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RetroMatchSynthAudioProcessor)
 };

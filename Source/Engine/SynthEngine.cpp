@@ -729,8 +729,11 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
     processEffects (audio);
     compensateLatency (audio);
     audio.applyGain (juce::jlimit (0.0f, 1.0f, current.mainLayerGain));
-    for (size_t i = 0; i < layerEngines.size(); ++i)
+    for (int orderSlot = 0; orderSlot < DspRouting::maxLayerCount; ++orderSlot)
     {
+        const int layerIndex = routingPlan.layerOrder[(size_t) orderSlot];
+        if (! juce::isPositiveAndBelow (layerIndex, (int) layerEngines.size())) continue;
+        const size_t i = (size_t) layerIndex;
         auto* layer = layerEngines[i].get();
         if (! layer) continue;
         if (! current.layers[i])

@@ -6,6 +6,7 @@
 #include "ReferenceWavetable.h"
 #include "MSEG.h"
 #include "ModuleRack.h"
+#include "DspRoutingPlan.h"
 #include "TempoSync.h"
 
 enum class ModSource : int
@@ -160,6 +161,8 @@ struct VoiceParameters
     float mainLayerGain = 1.0f;
 };
 
+static_assert (VoiceParameters::extraLayerCount == DspRouting::maxLayerCount);
+
 class HybridVoice : public juce::SynthesiserVoice
 {
 public:
@@ -231,6 +234,10 @@ public:
             if (layerEngines[i]) layerEngines[i]->setRandomSeed (baseSeed + (int64) (i + 1) * 7919);
     }
     void render (juce::AudioBuffer<float>&, juce::MidiBuffer&);
+    void setRoutingPlan (const DspRouting::Plan& plan) noexcept
+    {
+        routingPlan = plan.validPermutation() ? plan : DspRouting::Plan {};
+    }
     void reset();
     int getLatencySamples() const noexcept { return fixedLatencySamples; }
 
@@ -252,6 +259,7 @@ private:
     std::array<bool, VoiceParameters::extraLayerCount> layerActive {};
     juce::AudioBuffer<float> layerScratch;
     VoiceParameters current;
+    DspRouting::Plan routingPlan;
     ModuleRack moduleRack;
     ModuleRack wholeInstrumentRack;
     double sampleRate = 44100.0;

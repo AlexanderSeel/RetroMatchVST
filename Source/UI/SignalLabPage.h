@@ -23,6 +23,8 @@ public:
         lastPersistedGraphFingerprint = restored.fingerprint();
         for (const auto& node : restored.nodes)
             if (node.positionValid) restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };
+        for (const auto& edge : restored.edges)
+            if (edge.sequence >= 0) restoredEdgeSequences[edge.id.toStdString()] = edge.sequence;
         setWantsKeyboardFocus (true);
         startTimerHz (30);
     }
@@ -325,6 +327,7 @@ private:
         EdgeEditKind editKind = EdgeEditKind::none;
         int layer = -2, slot = -1;
         juce::String key, label;
+        int sequence = -1;
     };
 
     struct ToolbarButton { juce::Rectangle<float> bounds; juce::String label; ToolbarAction action = ToolbarAction::none; };
@@ -356,6 +359,7 @@ private:
     std::vector<ToolbarButton> toolbarButtons;
     std::map<std::string, juce::Point<float>> nodeOffsets;
     std::map<std::string, juce::Point<float>> restoredNodePositions;
+    std::map<std::string, int> restoredEdgeSequences;
     PatchGraph::Document graphModel;
     juce::String lastPersistedGraphFingerprint, pendingGraphFingerprint;
     juce::String graphValidationMessage, connectionValidationMessage;
@@ -500,9 +504,11 @@ private:
         graphPan = { state.graph.view.pan.x, state.graph.view.pan.y };
         graphZoom = state.graph.view.zoom;
         snapToGrid = state.graph.view.snapToGrid;
-        restoredNodePositions.clear(); nodeOffsets.clear();
+        restoredNodePositions.clear(); nodeOffsets.clear(); restoredEdgeSequences.clear();
         for (const auto& node : state.graph.nodes)
             if (node.positionValid) restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };
+        for (const auto& edge : state.graph.edges)
+            if (edge.sequence >= 0) restoredEdgeSequences[edge.id.toStdString()] = edge.sequence;
         lastPersistedGraphFingerprint = state.graph.fingerprint();
         pendingGraphFingerprint = lastPersistedGraphFingerprint;
         graphStateDirty = false;
@@ -696,6 +702,49 @@ private:
         });
     }
 
+
+    std::vector<int> currentCombineLayerOrder() const
+    {
+        std::vector<std::pair<int, int>> sequenced;
+        for (const auto& edge : edges)
+            if (edge.editKind == EdgeEditKind::layerCombine && edge.layer >= 0)
+                sequenced.emplace_back (edge.sequence >= 0 ? edge.sequence : edge.layer, edge.layer);
+        std::sort (sequenced.begin(), sequenced.end(), [] (const auto& a, const auto& b)
+        {
+            return a.first == b.first ? a.second < b.second : a.first < b.first;
+        });
+        std::vector<int> result;
+        result.reserve (sequenced.size());
+        for (const auto& [sequence, layer] : sequenced) { juce::ignoreUnused (sequence); result.push_back (layer); }
+        return result;
+    }
+
+    bool moveCombineLayer (int layer, int delta)
+    {
+        auto order = currentCombineLayerOrder();
+        const auto it = std::find (order.begin(), order.end(), layer);
+        if (it == order.end()) return false;
+        const int index = (int) std::distance (order.begin(), it);
+        const int target = index + delta;
+        if (! juce::isPositiveAndBelow (target, (int) order.size())) return false;
+
+        pushUndoState();
+        std::swap (order[(size_t) index], order[(size_t) target]);
+        for (int sequence = 0; sequence < (int) order.size(); ++sequence)
+        {
+            const auto key = "combine:" + juce::String (order[(size_t) sequence]);
+            restoredEdgeSequences[key.toStdString()] = sequence;
+            if (auto* model = graphModel.findEdge (key)) model->sequence = sequence;
+            for (auto& edge : edges)
+                if (edge.key == key) edge.sequence = sequence;
+        }
+        stageGraphStateForPersistence();
+        flushGraphStatePersistence();
+        selectedEdgeKey = ("combine:" + juce::String (layer)).toStdString();
+        repaint();
+        return true;
+    }
+
     void showCombineMenu (int layer)
     {
         if (layer < 0 || ! proc.hasLayer (layer)) return;
@@ -716,6 +765,13 @@ private:
         for (size_t i = 0; i < amounts.size(); ++i)
             amountMenu.addItem (200 + (int) i, juce::String (amounts[i], 2), true, std::abs (amount - amounts[i]) < 0.015f);
         menu.addSubMenu ("AMOUNT", amountMenu);
+
+        const auto currentOrder = currentCombineLayerOrder();
+        const auto orderIt = std::find (currentOrder.begin(), currentOrder.end(), layer);
+        const int orderIndex = orderIt == currentOrder.end() ? -1 : (int) std::distance (currentOrder.begin(), orderIt);
+        menu.addSeparator();
+        menu.addItem (8001, "MOVE EARLIER", orderIndex > 0);
+        menu.addItem (8002, "MOVE LATER", orderIndex >= 0 && orderIndex + 1 < (int) currentOrder.size());
         menu.addSeparator();
         menu.addItem (9000, "DISABLE LAYER / REMOVE FROM MIX");
 
@@ -724,6 +780,8 @@ private:
                             [safeThis, layer, prefix] (int result)
         {
             if (safeThis == nullptr || result == 0) return;
+            if (result == 8001) { safeThis->moveCombineLayer (layer, -1); return; }
+            if (result == 8002) { safeThis->moveCombineLayer (layer, 1); return; }
             safeThis->pushUndoState();
             if (result >= 100 && result < 105)
                 safeThis->setParameterValue (prefix + "Operation", (float) (result - 100));
@@ -1103,6 +1161,15 @@ private:
         modelEdge.fromNode = nodes[(size_t) from].id;
         modelEdge.toNode = nodes[(size_t) to].id;
         modelEdge.editable = editKind != EdgeEditKind::none;
+        int edgeSequence = -1;
+        if (editKind == EdgeEditKind::layerCombine && key.isNotEmpty())
+        {
+            const auto stableKey = key.toStdString();
+            const auto restored = restoredEdgeSequences.find (stableKey);
+            edgeSequence = restored != restoredEdgeSequences.end() ? restored->second : juce::jmax (0, layer);
+            restoredEdgeSequences[stableKey] = edgeSequence;
+            modelEdge.sequence = edgeSequence;
+        }
         if (kind == EdgeKind::audio)
         {
             modelEdge.fromPort = "audio.out"; modelEdge.toPort = "audio.in"; modelEdge.type = PatchGraph::PortType::audio;
@@ -1121,7 +1188,7 @@ private:
             graphValidationMessage = reason;
             return;
         }
-        edges.push_back ({ from, to, kind, editKind, layer, slot, key, label });
+        edges.push_back ({ from, to, kind, editKind, layer, slot, key, label, edgeSequence });
     }
 
     void drawGrid (juce::Graphics& g, juce::Colour led)
@@ -1502,8 +1569,12 @@ private:
                 const auto prefix = "layer" + juce::String (layer + 1);
                 const int operation = juce::jlimit (0, 4, (int) parameter (prefix + "Operation", 0.0f));
                 const juce::String opNames[] { "ADD", "MIX", "SUB", "MULT", "DIV" };
+                const auto combineKey = "combine:" + juce::String (layer);
+                const auto restoredSequence = restoredEdgeSequences.find (combineKey.toStdString());
+                const int displaySequence = restoredSequence != restoredEdgeSequences.end() ? restoredSequence->second : layer;
                 connect (combineNodes[i], globalBus, EdgeKind::audio, EdgeEditKind::layerCombine, layer, -1,
-                         "combine:" + juce::String (layer), "EDIT / " + opNames[operation] + " " + juce::String (parameter (prefix + "Amount", 1.0f), 2));
+                         combineKey, "ORDER " + juce::String (displaySequence + 1) + " / EDIT / " + opNames[operation] + " "
+                                     + juce::String (parameter (prefix + "Amount", 1.0f), 2));
             }
         }
         connect (globalBus, master, EdgeKind::audio);

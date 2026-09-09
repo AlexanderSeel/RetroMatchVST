@@ -2,6 +2,7 @@
 #include "../Source/Analysis/SampleAnalyzer.h"
 #include "../Source/Engine/MSEG.h"
 #include "../Source/Engine/PatchGraph.h"
+#include "../Source/Engine/DspRoutingPlan.h"
 #include "../Source/Engine/ReferenceWavetable.h"
 #include "../Source/Engine/PresetLibrary.h"
 #include "../Source/Matching/OfflineRenderer.h"
@@ -54,6 +55,44 @@ bool runMelodyTests();
 int main (int argc, char** argv)
 {
     if (! runMelodyTests()) return 1;
+    {
+        PatchGraph::Document graph;
+        auto addAudioNode = [&] (juce::String id, PatchGraph::NodeType type, bool input, bool output, bool multipleInput = false)
+        {
+            PatchGraph::Node node; node.id = std::move (id); node.type = type;
+            if (input) node.ports.push_back (PatchGraph::audioInput (multipleInput));
+            if (output) node.ports.push_back (PatchGraph::audioOutput());
+            if (! graph.addNode (std::move (node))) return false;
+            return true;
+        };
+        if (! addAudioNode ("L0:S5", PatchGraph::NodeType::mixer, false, true)
+            || ! addAudioNode ("L1:S5", PatchGraph::NodeType::mixer, false, true)
+            || ! addAudioNode ("GLOBALBUS", PatchGraph::NodeType::processor, true, true, true)
+            || ! addAudioNode ("MASTER", PatchGraph::NodeType::master, true, false))
+            return fail ("routing compiler graph fixture could not be built");
+
+        PatchGraph::Edge layer0 { "combine:0", "L0:S5", "audio.out", "GLOBALBUS", "audio.in", PatchGraph::PortType::audio, true };
+        PatchGraph::Edge layer1 { "combine:1", "L1:S5", "audio.out", "GLOBALBUS", "audio.in", PatchGraph::PortType::audio, true };
+        layer0.sequence = 1; layer1.sequence = 0;
+        if (! graph.addEdge (layer0) || ! graph.addEdge (layer1)
+            || ! graph.addEdge ({ "global:master", "GLOBALBUS", "audio.out", "MASTER", "audio.in", PatchGraph::PortType::audio, false }))
+            return fail ("routing compiler graph edges were rejected");
+
+        const auto compiled = DspRouting::compile (graph);
+        if (! compiled.validation.ok || compiled.plan.layerOrder[0] != 1 || compiled.plan.layerOrder[1] != 0)
+            return fail ("routing compiler ignored persisted layer-combine order");
+
+        const auto restored = PatchGraph::Document::fromValueTree (graph.toValueTree());
+        const auto restoredCompiled = DspRouting::compile (restored);
+        if (! restoredCompiled.validation.ok || restoredCompiled.plan.layerOrder[0] != 1 || restoredCompiled.plan.layerOrder[1] != 0)
+            return fail ("routing compiler order did not survive graph state round-trip");
+
+        DspRouting::AtomicPlan published;
+        published.publish (restoredCompiled.plan);
+        const auto snapshot = published.snapshot();
+        if (snapshot.layerOrder != restoredCompiled.plan.layerOrder || ! snapshot.graphAuthored)
+            return fail ("atomic routing plan publication changed the compiled permutation");
+    }
     {
         VoiceParameters fullRack;
         fullRack.osc1Wave = 1; fullRack.osc2Mix = 0.0f; fullRack.release = 0.03f;
@@ -171,6 +210,30 @@ int main (int argc, char** argv)
         const auto dividedBySilence = OfflineRenderer::renderPatch (combined, 22050, 0.5f, 220);
         if (! finiteAudio (dividedBySilence) || dividedBySilence.getMagnitude (0, dividedBySilence.getNumSamples()) > 1)
             return fail ("division by silence must remain bounded");
+
+        auto orderProbe = makeFactoryPreset (0);
+        orderProbe.layers.fill (nullptr);
+        auto orderLayerA = std::make_shared<VoiceParameters> (makeFactoryPreset (2));
+        auto orderLayerB = std::make_shared<VoiceParameters> (makeFactoryPreset (4));
+        orderLayerA->layers.fill (nullptr); orderLayerB->layers.fill (nullptr);
+        orderProbe.layers[0] = orderLayerA; orderProbe.layers[1] = orderLayerB;
+        orderProbe.mainLayerGain = 0.72f;
+        orderProbe.layerGain[0] = 0.56f; orderProbe.layerGain[1] = 0.48f;
+        orderProbe.layerOperation[0] = 2; orderProbe.layerAmount[0] = 0.88f;
+        orderProbe.layerOperation[1] = 3; orderProbe.layerAmount[1] = 0.82f;
+        DspRouting::Plan canonicalOrder;
+        auto swappedOrder = canonicalOrder;
+        std::swap (swappedOrder.layerOrder[0], swappedOrder.layerOrder[1]);
+        swappedOrder.graphAuthored = true;
+        const auto canonicalAudio = OfflineRenderer::renderPatch (orderProbe, 22050, 0.5f, 220, 128, canonicalOrder);
+        const auto reorderedAudio = OfflineRenderer::renderPatch (orderProbe, 22050, 0.5f, 220, 128, swappedOrder);
+        if (! finiteAudio (canonicalAudio) || ! finiteAudio (reorderedAudio)
+            || canonicalAudio.getMagnitude (0, canonicalAudio.getNumSamples()) < 1.0e-5f
+            || reorderedAudio.getMagnitude (0, reorderedAudio.getNumSamples()) < 1.0e-5f)
+            return fail ("compiled layer routing produced silent or non-finite audio");
+        if (maxDifference (canonicalAudio, reorderedAudio) < 1.0e-4f)
+            return fail ("compiled layer-combine order did not create a real sonic change");
+
         for (int i = 0; i < (int) factoryPresetCatalog.size(); ++i)
         {
             const auto audio = OfflineRenderer::renderPatch (makeFactoryPreset (i), 22050, 0.65f, 220);
