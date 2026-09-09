@@ -199,7 +199,7 @@ private:
             const float startX = plot.getX() + (float) (page.synthStart.getValue() / duration) * plot.getWidth(), endX = plot.getX() + (float) (page.synthEnd.getValue() / duration) * plot.getWidth();
             g.setColour (led.withAlpha (0.13f)); g.fillRect (startX, plot.getY(), std::max (0.0f, endX - startX), plot.getHeight());
             g.setColour (findColour (RetroLookAndFeel::secondaryLed)); g.drawLine (startX, bounds.getY() + 16, startX, plot.getBottom() + 2, 2.0f); g.drawLine (endX, bounds.getY() + 16, endX, plot.getBottom() + 2, 2.0f);
-            g.setColour (led); g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold))); g.drawText ("SAMPLE PREVIEW  /  drag START + END", bounds.getX() + 10, bounds.getY() + 3, bounds.getWidth() - 20, 14, juce::Justification::centredLeft);
+            g.setColour (led); g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold))); g.drawText ("SAMPLE PREVIEW  /  drag START + END", juce::Rectangle<float> (bounds.getX() + 10.0f, bounds.getY() + 3.0f, bounds.getWidth() - 20.0f, 14.0f), juce::Justification::centredLeft);
         }
         void mouseDown (const juce::MouseEvent& e) override { dragging = nearest (e.x); }
         void mouseDrag (const juce::MouseEvent& e) override

@@ -362,11 +362,7 @@ private:
         compareMeasureRunning = true;
         autoMeasureArmed = false;
         auto* job = new FineTuneMeasureJob (juce::Component::SafePointer<MatchCompareDialog> (this), std::move (*request));
-        if (! compareMeasurePool.addJob (job, true))
-        {
-            delete job;
-            compareMeasureRunning = false;
-        }
+        compareMeasurePool.addJob (job, true);
     }
 
     void completeFineTuneMeasurement (int candidateIndex, CompareFineTune::Values values, MatchResult measured)

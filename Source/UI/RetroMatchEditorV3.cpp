@@ -379,7 +379,7 @@ void RetroMatchSynthAudioProcessorEditor::StereoMeter::paint (juce::Graphics& g)
     auto meterLabels = bounds.removeFromBottom (17.0f).reduced (10.0f, 0.0f);
     g.setColour (juce::Colour (0xffa7b8b2));
     g.setFont (juce::Font (juce::FontOptions (8.0f, juce::Font::bold)));
-    auto left = meterLabels.removeFromLeft ((int) meterLabels.getWidth() / 2);
+    auto left = meterLabels.removeFromLeft (meterLabels.getWidth() * 0.5f);
     g.drawText ("L", left, juce::Justification::centred);
     g.drawText ("R", meterLabels, juce::Justification::centred);
 }

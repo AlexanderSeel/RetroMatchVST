@@ -1030,10 +1030,10 @@ private:
         options.escapeKeyTriggersCloseButton = true;
         options.useNativeTitleBar = false;
         options.resizable = true;
-        if (auto* window = options.launchAsync())
+        if (auto* dialogWindow = options.launchAsync())
         {
-            window->setResizeLimits (900, 540, 2400, 1600);
-            window->centreWithSize (1320, 760);
+            dialogWindow->setResizeLimits (900, 540, 2400, 1600);
+            dialogWindow->centreWithSize (1320, 760);
         }
     }
 

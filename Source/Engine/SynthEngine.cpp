@@ -617,6 +617,10 @@ void SynthEngine::setParameters (const VoiceParameters& p)
 
 void SynthEngine::processBuiltInEffects (juce::AudioBuffer<float>& audio)
 {
+    const auto n = audio.getNumSamples();
+    const auto channels = audio.getNumChannels();
+    const int quality = qualityIndex (current.oversamplingQuality);
+
     const auto processDrive = [&] (auto& block)
     {
         if (current.drive <= 0.0001f) return;
