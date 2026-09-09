@@ -258,6 +258,7 @@ private:
     std::array<std::unique_ptr<SynthEngine>, VoiceParameters::extraLayerCount> layerEngines;
     std::array<bool, VoiceParameters::extraLayerCount> layerActive {};
     juce::AudioBuffer<float> layerScratch;
+    juce::AudioBuffer<float> parallelFxScratch;
     VoiceParameters current;
     DspRouting::Plan routingPlan;
     ModuleRack moduleRack;
@@ -273,5 +274,6 @@ private:
     int fixedLatencySamples = 0;
 
     void processEffects (juce::AudioBuffer<float>& audio);
+    void processBuiltInEffects (juce::AudioBuffer<float>& audio);
     void compensateLatency (juce::AudioBuffer<float>& audio);
 };

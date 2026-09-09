@@ -564,6 +564,7 @@ void SynthEngine::prepare (double sr, int samplesPerBlock, int channels, bool wi
     latencyCompensation.setMaximumDelayInSamples (juce::jmax (1, fixedLatencySamples + 8));
     latencyCompensation.prepare (spec);
     layerScratch.setSize (safeChannels, safeBlockSize);
+    parallelFxScratch.setSize (safeChannels, safeBlockSize);
     moduleRack.prepare (sr, samplesPerBlock, channels);
     wholeInstrumentRack.prepare (sr, samplesPerBlock, channels);
     if (withLayers)
@@ -614,13 +615,8 @@ void SynthEngine::setParameters (const VoiceParameters& p)
     reverb.setParameters (rp);
 }
 
-void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
+void SynthEngine::processBuiltInEffects (juce::AudioBuffer<float>& audio)
 {
-    const auto n = audio.getNumSamples();
-    const auto channels = audio.getNumChannels();
-    const int quality = qualityIndex (current.oversamplingQuality);
-
-    moduleRack.process (audio, current.fxModules, 0, current.tempoBpm);
     const auto processDrive = [&] (auto& block)
     {
         if (current.drive <= 0.0001f) return;
@@ -701,6 +697,40 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
         }
     }
 
+}
+
+void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
+{
+    const bool parallel = routingPlan.parallelFx[0];
+    const bool scratchReady = parallelFxScratch.getNumChannels() >= audio.getNumChannels()
+                           && parallelFxScratch.getNumSamples() >= audio.getNumSamples();
+
+    if (! parallel || ! scratchReady)
+    {
+        moduleRack.process (audio, current.fxModules, 0, current.tempoBpm);
+        processBuiltInEffects (audio);
+        moduleRack.process (audio, current.fxModules, 1, current.tempoBpm);
+        audio.applyGain (juce::Decibels::decibelsToGain (current.outputGainDb));
+        return;
+    }
+
+    // Deterministic split: both branches start with the exact same dry block.
+    // Branch A owns PRE rack processing, branch B owns the legacy built-in FX core.
+    for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+        parallelFxScratch.copyFrom (ch, 0, audio, ch, 0, audio.getNumSamples());
+
+    moduleRack.process (audio, current.fxModules, 0, current.tempoBpm);
+    processBuiltInEffects (parallelFxScratch);
+
+    // Correlated-unity compensation: 0.5 + 0.5 prevents a dry/dry split from
+    // producing the +6 dB jump that a raw sum would introduce.
+    for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+    {
+        auto* a = audio.getWritePointer (ch);
+        const auto* b = parallelFxScratch.getReadPointer (ch);
+        for (int i = 0; i < audio.getNumSamples(); ++i) a[i] = 0.5f * (a[i] + b[i]);
+    }
+
     moduleRack.process (audio, current.fxModules, 1, current.tempoBpm);
     audio.applyGain (juce::Decibels::decibelsToGain (current.outputGainDb));
 }
@@ -750,6 +780,9 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
         p.oversamplingQuality = current.oversamplingQuality;
         p.inheritTempoFrom (current);
         layer->setParameters (p);
+        DspRouting::Plan layerRouting;
+        layerRouting.parallelFx[0] = routingPlan.parallelFx[i + 1];
+        layer->setRoutingPlan (layerRouting);
         layerActive[i] = true;
         layerScratch.setSize (audio.getNumChannels(), audio.getNumSamples(), false, false, true);
         layerScratch.clear();

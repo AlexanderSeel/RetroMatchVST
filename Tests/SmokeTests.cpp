@@ -65,7 +65,9 @@ int main (int argc, char** argv)
             if (! graph.addNode (std::move (node))) return false;
             return true;
         };
-        if (! addAudioNode ("L0:S5", PatchGraph::NodeType::mixer, false, true)
+        PatchGraph::Node mainFx; mainFx.id = "L-1:S4"; mainFx.type = PatchGraph::NodeType::processor; mainFx.routingMode = 1;
+        if (! graph.addNode (mainFx)
+            || ! addAudioNode ("L0:S5", PatchGraph::NodeType::mixer, false, true)
             || ! addAudioNode ("L1:S5", PatchGraph::NodeType::mixer, false, true)
             || ! addAudioNode ("GLOBALBUS", PatchGraph::NodeType::processor, true, true, true)
             || ! addAudioNode ("MASTER", PatchGraph::NodeType::master, true, false))
@@ -81,17 +83,21 @@ int main (int argc, char** argv)
         const auto compiled = DspRouting::compile (graph);
         if (! compiled.validation.ok || compiled.plan.layerOrder[0] != 1 || compiled.plan.layerOrder[1] != 0)
             return fail ("routing compiler ignored persisted layer-combine order");
+        if (! compiled.plan.parallelFx[0])
+            return fail ("routing compiler ignored main FX parallel topology");
 
         const auto restored = PatchGraph::Document::fromValueTree (graph.toValueTree());
         const auto restoredCompiled = DspRouting::compile (restored);
         if (! restoredCompiled.validation.ok || restoredCompiled.plan.layerOrder[0] != 1 || restoredCompiled.plan.layerOrder[1] != 0)
             return fail ("routing compiler order did not survive graph state round-trip");
+        if (! restoredCompiled.plan.parallelFx[0])
+            return fail ("parallel FX topology did not survive graph state round-trip");
 
         DspRouting::AtomicPlan published;
         published.publish (restoredCompiled.plan);
         const auto snapshot = published.snapshot();
-        if (snapshot.layerOrder != restoredCompiled.plan.layerOrder || ! snapshot.graphAuthored)
-            return fail ("atomic routing plan publication changed the compiled permutation");
+        if (snapshot.layerOrder != restoredCompiled.plan.layerOrder || snapshot.parallelFx != restoredCompiled.plan.parallelFx || ! snapshot.graphAuthored)
+            return fail ("atomic routing plan publication changed the compiled topology");
     }
     {
         VoiceParameters fullRack;
@@ -166,6 +172,22 @@ int main (int argc, char** argv)
         tone.fxModules[0].stage = 1;
         if (maxDifference (pre, OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220)) < 0.001f)
             return fail ("pre/post FX routing had no effect");
+
+        auto parallelProbe = tone;
+        parallelProbe.fxModules[0] = { 1, 0, false, 0.42f, 0.25f, 0.10f, 1.0f };
+        parallelProbe.fxModules[1] = { 3, 1, false, 0.52f, 0.55f, 0.40f, 0.85f };
+        parallelProbe.drive = 0.48f; parallelProbe.chorusMix = 0.22f; parallelProbe.delayMix = 0.12f;
+        DspRouting::Plan serialPlan, parallelPlan;
+        parallelPlan.parallelFx[0] = true; parallelPlan.graphAuthored = true;
+        const auto serialFx = OfflineRenderer::renderPatch (parallelProbe, 22050, 0.6f, 220, 128, serialPlan);
+        const auto parallelFx = OfflineRenderer::renderPatch (parallelProbe, 22050, 0.6f, 220, 128, parallelPlan);
+        if (! finiteAudio (parallelFx) || parallelFx.getMagnitude (0, parallelFx.getNumSamples()) <= 1.0e-5f)
+            return fail ("parallel FX routing generated invalid or silent audio");
+        if (maxDifference (serialFx, parallelFx) < 0.001f)
+            return fail ("serial and compensated parallel FX routing sounded identical");
+        if (parallelFx.getMagnitude (0, parallelFx.getNumSamples()) > serialFx.getMagnitude (0, serialFx.getNumSamples()) * 3.0f + 0.05f)
+            return fail ("parallel FX split/merge produced an unsafe level jump");
+
         tone.fxModules = {}; tone.drive = 0;
         tone.moduleModSlots[0] = { (int) ModSource::lfo2, (int) ModDestination::amplitude, 0.9f };
         const auto slow = OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220);

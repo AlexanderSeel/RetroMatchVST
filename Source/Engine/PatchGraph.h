@@ -9,7 +9,7 @@
 
 namespace PatchGraph
 {
-static constexpr int schemaVersion = 2;
+static constexpr int schemaVersion = 3;
 
 enum class PortType : int
 {
@@ -60,6 +60,7 @@ struct Node
     Position position;
     bool positionValid = false;
     bool locked = false;
+    int routingMode = 0;
 
     const Port* findPort (const juce::String& portId) const noexcept
     {
@@ -376,6 +377,7 @@ public:
             child.setProperty ("x", node.position.x, nullptr);
             child.setProperty ("y", node.position.y, nullptr);
             child.setProperty ("locked", node.locked, nullptr);
+            child.setProperty ("routingMode", node.routingMode, nullptr);
             for (const auto& port : node.ports)
             {
                 juce::ValueTree p ("PORT");
@@ -436,6 +438,7 @@ public:
             node.positionValid = (bool) child.getProperty ("positionValid", false);
             node.position = { (float) child.getProperty ("x", 0.0f), (float) child.getProperty ("y", 0.0f) };
             node.locked = (bool) child.getProperty ("locked", false);
+            node.routingMode = juce::jlimit (0, 1, (int) child.getProperty ("routingMode", 0));
             for (const auto& portChild : child)
             {
                 if (! portChild.hasType ("PORT")) continue;
@@ -478,7 +481,8 @@ public:
         for (const auto& node : nodes)
         {
             out << "|n:" << node.id << ":" << (int) node.type << ":" << (node.positionValid ? 1 : 0)
-                << ":" << juce::String (node.position.x, 3) << ":" << juce::String (node.position.y, 3) << ":" << (node.locked ? 1 : 0);
+                << ":" << juce::String (node.position.x, 3) << ":" << juce::String (node.position.y, 3) << ":" << (node.locked ? 1 : 0)
+                << ":" << node.routingMode;
             for (const auto& port : node.ports)
                 out << "/p:" << port.id << ":" << (int) port.type << ":" << (int) port.direction
                     << ":" << (port.acceptsMultiple ? 1 : 0) << ":" << (port.modulationSafe ? 1 : 0);

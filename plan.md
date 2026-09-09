@@ -85,7 +85,7 @@ Each node gets a stable ID, type and capabilities, for example:
 - [x] Click cable to select; Delete removes editable routes/layer combines; right-click or double-click opens detailed editing.
 - [ ] Hover highlights the complete upstream/downstream path.
 - [x] Distinct visual language for audio, modulation and clock cables.
-- [ ] Quick actions: **Insert after**, **Split parallel**, **Merge**, **Disconnect**, **Restore default route**.
+- [~] Quick actions: FX-node right-click now provides a DSP-backed **SERIAL / PARALLEL** split primitive; generic Insert/Merge/Disconnect/Restore actions remain pending.
 - [ ] Context menu on nodes: Edit, Bypass, Solo, Mute, Duplicate, Randomize, Lock position.
 - [x] Undo/redo for supported graph operations: node layout, modulation cable create/edit/reconnect/delete and layer-combine edits.
 
@@ -96,7 +96,7 @@ The visual graph must create a real sonic change, not just redraw lines.
 ### First safe routing targets
 
 - [ ] Reorder supported pre/post FX sections.
-- [ ] Parallel filter/FX branches with explicit split/merge gain compensation.
+- [~] Parallel FX branching is implemented per synth instance: PRE rack and built-in FX core split from the same dry input, merge at compensated 50/50 gain, then POST rack runs once. Arbitrary multi-node branches remain pending.
 - [ ] Move selected utility processing before/after filter and FX where DSP ownership allows it.
 - [x] Expose layer combine order/operation through the graph. Layer combine cables now persist an explicit sequence and expose **MOVE EARLIER / MOVE LATER**.
 - [x] Route MOD/MSEG/LFO outputs to supported modulation destinations from the patch map.
@@ -105,9 +105,9 @@ The visual graph must create a real sonic change, not just redraw lines.
 
 - [x] Compile the validated graph to a lightweight immutable processing plan outside the audio thread. Compiler v1 turns persisted layer-combine sequences into a fixed seven-layer permutation.
 - [x] Swap processing plans atomically at block boundaries. The seven-layer permutation is packed into one `uint32_t` atomic snapshot; the audio callback does not read `ValueTree` state or allocate.
-- [~] Preallocate node/process buffers in `prepareToPlay` or graph-plan preparation. Compiler v1 reuses the existing preallocated layer engines and `layerScratch`; general split/merge buffers are still pending.
+- [~] Preallocate node/process buffers in `prepareToPlay` or graph-plan preparation. Layer engines plus the new per-engine parallel-FX scratch are preallocated; arbitrary multi-node graph buffers remain pending.
 - [~] Preserve latency accounting for oversampled/nonlinear nodes. Layer-order routing keeps the existing fixed latency path unchanged; arbitrary routed latency compensation is still pending.
-- [ ] Add dry/wet and gain normalization around parallel branches to avoid surprise level jumps.
+- [~] Add dry/wet and gain normalization around parallel branches. The first FX split uses deterministic 0.5/0.5 correlated-unity compensation; configurable branch gain/dry-wet remains pending.
 - [ ] Add safety limiting for intentionally supported feedback structures.
 
 ## 5. Sound-design playground
@@ -138,7 +138,7 @@ The matcher should be able to exploit the richer graph rather than only paramete
 - [x] Serialize graph version, nodes, edges, positions and UI viewport into `.rmsynth` and DAW state.
 - [x] Migrate legacy sessions without graph state to the canonical graph rebuilt from their restored synth state.
 - [x] Temporary meters/hover/selection and undo history are not serialized.
-- [x] Add graph schema versioning independent of plug-in version. Schema v2 adds optional layer-combine sequence metadata; v1/legacy edges default to canonical order.
+- [x] Add graph schema versioning independent of plug-in version. Schema v3 adds optional processor `routingMode`; v2 adds layer-combine sequence metadata; older sessions default to canonical serial routing.
 - [x] Validate and repair malformed graph state instead of crashing; invalid nodes/edges are skipped during ValueTree restore.
 
 ## 8. Verification
@@ -147,7 +147,7 @@ The matcher should be able to exploit the richer graph rather than only paramete
 - [x] Unit tests for allowed/forbidden connections.
 - [x] Topological-sort and cycle-detection tests.
 - [x] DSP tests proving routing changes produce different but finite/non-silent output. Compiler v1 compares canonical and reordered non-commutative layer-combine renders.
-- [ ] Parallel split/merge loudness regression tests.
+- [~] Parallel split/merge loudness regression tests: the first FX routing regression verifies finite/non-silent output, audible serial-vs-parallel change and a bounded level jump; broader fixture coverage remains pending.
 - [x] Session round-trip tests for typed graph + custom node layout/view state, including v2 combine sequence persistence.
 - [ ] Stress test continuous graph editing while audio is running.
 - [ ] VST3/AU/Standalone builds and pluginval/auval coverage.
@@ -161,7 +161,7 @@ A user can rearrange the patch visually, create/reconnect/remove only valid cabl
 1. **Canvas interaction** — node drag, grid, zoom controls, fit/auto arrange. *(started on main)*
 2. **Persistent graph data model** — stable IDs, typed ports, edge serialization, validation. *(implemented; typed schema v2 persisted in session/preset state)*
 3. **Cable editor** — connection creation/reconnection/deletion + undo. *(v1 implemented for DSP-backed modulation and layer-combine cables; fixed audio topology remains protected)*
-4. **DSP compiler v1** — safe serial/parallel audio routing and layer combine topology. *(layer-combine ordering + immutable atomic plan implemented; serial FX routing and parallel split/merge remain next)*
+4. **DSP compiler v2** — safe serial/parallel audio routing and layer combine topology. *(layer ordering + atomic plan + per-instance compensated FX parallel routing implemented; arbitrary branch utilities remain next)*
 5. **Modulation cable routing** — expose supported destinations through the graph. *(implemented for current modulation-safe destinations)*
 6. **Sound-design utilities/macros/scenes**.
 7. **Resynthesis topology search**.

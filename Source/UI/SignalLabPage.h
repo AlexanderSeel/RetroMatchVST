@@ -22,7 +22,10 @@ public:
         snapToGrid = restored.view.snapToGrid;
         lastPersistedGraphFingerprint = restored.fingerprint();
         for (const auto& node : restored.nodes)
+        {
             if (node.positionValid) restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };
+            if (node.routingMode != 0) restoredNodeRoutingModes[node.id.toStdString()] = node.routingMode;
+        }
         for (const auto& edge : restored.edges)
             if (edge.sequence >= 0) restoredEdgeSequences[edge.id.toStdString()] = edge.sequence;
         setWantsKeyboardFocus (true);
@@ -80,6 +83,7 @@ public:
             {
                 selectedNodeId = nodes[(size_t) node].id.toStdString();
                 if (nodes[(size_t) node].role == NodeRole::modHub) showModHubMenu (nodes[(size_t) node].layer);
+                else if (nodes[(size_t) node].role == NodeRole::stage && nodes[(size_t) node].stage == 4) showFxTopologyMenu (nodes[(size_t) node]);
                 repaint();
             }
             return;
@@ -318,6 +322,7 @@ private:
         bool modInputPort = false, modOutputPort = false;
         NodeRole role = NodeRole::stage;
         int stage = -1;
+        int routingMode = 0;
     };
 
     struct GraphEdge
@@ -359,6 +364,7 @@ private:
     std::vector<ToolbarButton> toolbarButtons;
     std::map<std::string, juce::Point<float>> nodeOffsets;
     std::map<std::string, juce::Point<float>> restoredNodePositions;
+    std::map<std::string, int> restoredNodeRoutingModes;
     std::map<std::string, int> restoredEdgeSequences;
     PatchGraph::Document graphModel;
     juce::String lastPersistedGraphFingerprint, pendingGraphFingerprint;
@@ -504,9 +510,12 @@ private:
         graphPan = { state.graph.view.pan.x, state.graph.view.pan.y };
         graphZoom = state.graph.view.zoom;
         snapToGrid = state.graph.view.snapToGrid;
-        restoredNodePositions.clear(); nodeOffsets.clear(); restoredEdgeSequences.clear();
+        restoredNodePositions.clear(); nodeOffsets.clear(); restoredNodeRoutingModes.clear(); restoredEdgeSequences.clear();
         for (const auto& node : state.graph.nodes)
+        {
             if (node.positionValid) restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };
+            if (node.routingMode != 0) restoredNodeRoutingModes[node.id.toStdString()] = node.routingMode;
+        }
         for (const auto& edge : state.graph.edges)
             if (edge.sequence >= 0) restoredEdgeSequences[edge.id.toStdString()] = edge.sequence;
         lastPersistedGraphFingerprint = state.graph.fingerprint();
@@ -793,6 +802,45 @@ private:
             else if (result == 9000)
                 safeThis->setParameterValue (prefix + "Enabled", 0.0f);
             safeThis->repaint();
+        });
+    }
+
+    void setFxTopologyMode (const GraphNode& node, int mode)
+    {
+        if (node.role != NodeRole::stage || node.stage != 4) return;
+        mode = juce::jlimit (0, 1, mode);
+        pushUndoState();
+        restoredNodeRoutingModes[node.id.toStdString()] = mode;
+        if (auto* model = graphModel.findNode (node.id)) model->routingMode = mode;
+        for (auto& live : nodes)
+            if (live.id == node.id)
+            {
+                live.routingMode = mode;
+                live.detail = mode == 1 ? "PARALLEL PRE || CORE > POST" : "SERIAL PRE > CORE > POST";
+            }
+        stageGraphStateForPersistence();
+        flushGraphStatePersistence();
+        selectedNodeId = node.id.toStdString();
+        connectionValidationMessage = mode == 1 ? "FX topology: compensated PARALLEL PRE || CORE > POST"
+                                                : "FX topology: canonical SERIAL PRE > CORE > POST";
+        repaint();
+    }
+
+    void showFxTopologyMenu (const GraphNode& node)
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("FX ROUTING / REAL DSP TOPOLOGY");
+        menu.addItem (100, "SERIAL  PRE > BUILT-IN CORE > POST", true, node.routingMode == 0);
+        menu.addItem (101, "PARALLEL  PRE || BUILT-IN CORE > POST  (50/50)", true, node.routingMode == 1);
+        menu.addSeparator();
+        menu.addItem (200, "Parallel split uses preallocated scratch + unity-correlated gain compensation", false, false);
+        juce::Component::SafePointer<SignalLabPage> safeThis (this);
+        const auto id = node.id;
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safeThis, id] (int result)
+        {
+            if (safeThis == nullptr || (result != 100 && result != 101)) return;
+            const int index = safeThis->findNodeIndex (id.toStdString());
+            if (index >= 0) safeThis->setFxTopologyMode (safeThis->nodes[(size_t) index], result - 100);
         });
     }
 
@@ -1125,12 +1173,15 @@ private:
         node.title = title; node.detail = detail; node.tab = tab; node.layer = layer; node.colour = colour;
         node.inputPort = inputPort; node.outputPort = outputPort; node.role = role; node.stage = stage;
         node.modInputPort = modInputPort; node.modOutputPort = modOutputPort;
+        if (const auto routing = restoredNodeRoutingModes.find (stableId); routing != restoredNodeRoutingModes.end())
+            node.routingMode = juce::jlimit (0, 1, routing->second);
 
         PatchGraph::Node modelNode;
         modelNode.id = id;
         modelNode.title = title;
         modelNode.position = { node.worldBounds.getX(), node.worldBounds.getY() };
         modelNode.positionValid = true;
+        modelNode.routingMode = node.routingMode;
         if (role == NodeRole::master) modelNode.type = PatchGraph::NodeType::master;
         else if (role == NodeRole::clock) modelNode.type = PatchGraph::NodeType::clock;
         else if (role == NodeRole::modHub) modelNode.type = PatchGraph::NodeType::modulationRouter;
@@ -1460,9 +1511,9 @@ private:
         g.setFont (juce::Font (juce::FontOptions (compactHeader ? 9.5f : 9.0f, juce::Font::bold)));
         const bool daw = parameter ("tempoSource", 1.0f) >= 0.5f;
         juce::String status = compactHeader
-            ? "PATCH MAP / DRAG MOD = ADD / CABLE END = RECONNECT / DEL = REMOVE     CLOCK "
+            ? "PATCH MAP / RIGHT-CLICK FX = SERIAL/PARALLEL / DRAG MOD = ADD / DEL = REMOVE     CLOCK "
                 + juce::String (proc.getEffectiveBpm(), 1) + " " + (daw ? "DAW" : "MANUAL")
-            : "PATCH MAP / DRAG MOD JACK = ADD / DRAG CABLE END = RECONNECT / DEL = REMOVE / CTRL-CMD+Z = UNDO    CLOCK: "
+            : "PATCH MAP / RIGHT-CLICK FX = SERIAL/PARALLEL / DRAG MOD = ADD / DEL = REMOVE / CTRL-CMD+Z = UNDO    CLOCK: "
                 + juce::String (proc.getEffectiveBpm(), 1) + " BPM " + (daw ? "DAW" : "MANUAL");
         auto statusColour = led;
         if (connectionValidationMessage.isNotEmpty())
@@ -1511,7 +1562,11 @@ private:
             const int op = layer < 0 ? -1 : (int) parameter ("layer" + juce::String (layer + 1) + "Operation", 0.0f);
             const juce::String opNames[] { "ADD", "MIX", "SUBTRACT", "MULTIPLY", "DIVIDE" };
             const juce::String combineDetail = layer < 0 ? "MASTER START" : opNames[juce::jlimit (0, 4, op)] + " / " + juce::String (parameter ("layer" + juce::String (layer + 1) + "Amount", 1.0f), 2);
-            const juce::String details[] { instanceDetail, "sources + tables", "algorithm + ops", "cutoff + ADSR", "pre + built-in + post", combineDetail };
+            const auto fxKey = (prefix + ":S4").toStdString();
+            const auto fxModeIt = restoredNodeRoutingModes.find (fxKey);
+            const int fxMode = fxModeIt != restoredNodeRoutingModes.end() ? juce::jlimit (0, 1, fxModeIt->second) : 0;
+            const juce::String fxDetail = fxMode == 1 ? "PARALLEL PRE || CORE > POST" : "SERIAL PRE > CORE > POST";
+            const juce::String details[] { instanceDetail, "sources + tables", "algorithm + ops", "cutoff + ADSR", fxDetail, combineDetail };
             std::array<int, 6> rowNodes {};
             for (int stage = 0; stage < 6; ++stage)
             {

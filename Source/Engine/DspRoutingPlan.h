@@ -10,10 +10,12 @@
 namespace DspRouting
 {
 static constexpr int maxLayerCount = 7;
+static constexpr int maxInstanceCount = maxLayerCount + 1;
 
 struct Plan
 {
     std::array<int, maxLayerCount> layerOrder {{ 0, 1, 2, 3, 4, 5, 6 }};
+    std::array<bool, maxInstanceCount> parallelFx {};
     bool graphAuthored = false;
 
     bool validPermutation() const noexcept
@@ -84,7 +86,16 @@ inline CompileResult compile (const PatchGraph::Document& graph)
     for (int layer = 0; layer < maxLayerCount; ++layer)
         if (! emitted[(size_t) layer]) result.plan.layerOrder[out++] = layer;
 
-    result.plan.graphAuthored = ! ordered.empty();
+    for (int instance = 0; instance < maxInstanceCount; ++instance)
+    {
+        const int layer = instance - 1;
+        const auto nodeId = "L" + juce::String (layer) + ":S4";
+        if (const auto* fxNode = graph.findNode (nodeId); fxNode != nullptr)
+            result.plan.parallelFx[(size_t) instance] = fxNode->routingMode == 1;
+    }
+
+    result.plan.graphAuthored = ! ordered.empty()
+                             || std::any_of (result.plan.parallelFx.begin(), result.plan.parallelFx.end(), [] (bool value) { return value; });
     if (! result.plan.validPermutation())
         result.validation = PatchGraph::ValidationResult::failure ("Compiled layer routing is not a valid permutation");
     return result;
@@ -114,6 +125,8 @@ private:
         std::uint32_t value = plan.graphAuthored ? 0x80000000u : 0u;
         for (int i = 0; i < maxLayerCount; ++i)
             value |= (std::uint32_t) (plan.layerOrder[(size_t) i] & 0x7) << (i * 3);
+        for (int i = 0; i < maxInstanceCount; ++i)
+            if (plan.parallelFx[(size_t) i]) value |= 1u << (21 + i);
         return value;
     }
 
@@ -123,6 +136,8 @@ private:
         plan.graphAuthored = (value & 0x80000000u) != 0;
         for (int i = 0; i < maxLayerCount; ++i)
             plan.layerOrder[(size_t) i] = (int) ((value >> (i * 3)) & 0x7u);
+        for (int i = 0; i < maxInstanceCount; ++i)
+            plan.parallelFx[(size_t) i] = (value & (1u << (21 + i))) != 0;
         return plan.validPermutation() ? plan : Plan {};
     }
 };
