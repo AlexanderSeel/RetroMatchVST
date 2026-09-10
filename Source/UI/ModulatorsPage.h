@@ -57,12 +57,15 @@ public:
         for (int i = 0; i < 3; ++i)
         {
             auto column = lfos.removeFromLeft (i == 2 ? lfos.getWidth() : columnWidth).reduced (6, 3);
-            const int plotHeight = juce::jmax (78, column.getHeight() - 130);
+            // At the minimum LFO-card height reserve 132 px after the preview:
+            // 4 gap + 28 shape + 16 label + >=56 rotary/value + 28 sync.
+            // The preview yields space first so interactive controls never collapse.
+            const int plotHeight = juce::jmax (72, column.getHeight() - 132);
             plots[(size_t) i] = column.removeFromTop (plotHeight);
             column.removeFromTop (4);
             shapes[(size_t) i].setBounds (column.removeFromTop (28).reduced (2));
             rateLabels[(size_t) i].setBounds (column.removeFromTop (16));
-            auto knobBand = column.removeFromTop (juce::jmax (54, column.getHeight() - 28));
+            auto knobBand = column.removeFromTop (juce::jmax (56, column.getHeight() - 28));
             const int knobWidth = juce::jmin (96, knobBand.getWidth());
             rates[(size_t) i].setBounds (knobBand.withSizeKeepingCentre (knobWidth, knobBand.getHeight()));
             syncs[(size_t) i]->setBounds (column.removeFromTop (28).reduced (2));
