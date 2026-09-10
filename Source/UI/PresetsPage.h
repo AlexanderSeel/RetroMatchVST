@@ -54,7 +54,8 @@ public:
         };
         save.onClick = [this] { choose (true); }; open.onClick = [this] { choose (false); };
 
-        addAndMakeVisible (search); search.setTextToShowWhenEmpty ("Search presets...", juce::Colours::grey);
+        addAndMakeVisible (search); search.setTextToShowWhenEmpty ("Search name, type, Core, Motion, Dimension...", juce::Colours::grey);
+        search.setTooltip ("Searches factory preset name, category and authored character metadata. Try Core, Motion, Dimension, MSEG or instance counts.");
         addAndMakeVisible (category); category.addItem ("All types", 1);
         juce::StringArray types;
         for (const auto& preset : factoryPresetCatalog) types.addIfNotAlreadyThere (preset.category);
@@ -122,6 +123,12 @@ private:
     juce::File directory() const { return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("RetroMatch/Presets"); }
     juce::File favoritesFile() const { return directory().getChildFile ("favorites.txt"); }
 
+    static juce::String factoryCharacterForRow (int row)
+    {
+        if (row < 10 || row >= (int) factoryPresetCatalog.size()) return "ANCHOR";
+        return juce::String (FactoryPresetDesign::characterName ((row - 10) % FactoryPresetDesign::variationsPerFamily)).toUpperCase();
+    }
+
     void loadFavorites()
     {
         favoriteKeys.clear();
@@ -179,8 +186,9 @@ private:
             const bool factory = i < (int) factoryPresetCatalog.size();
             const auto name = factory ? factoryPresetCatalog[(size_t) i].name : userFiles[i - (int) factoryPresetCatalog.size()].getFileNameWithoutExtension();
             const auto type = factory ? factoryPresetCatalog[(size_t) i].category : juce::String ("User");
+            const auto metadata = factory ? factoryPresetCatalog[(size_t) i].description + " " + factoryCharacterForRow (i) : juce::String ("user custom");
             const bool categoryMatch = category.getSelectedId() == 1 || type == category.getText();
-            const bool searchMatch = (name + " " + type).containsIgnoreCase (search.getText());
+            const bool searchMatch = (name + " " + type + " " + metadata).containsIgnoreCase (search.getText().trim());
             if (categoryMatch && searchMatch && (! favoritesOnly.getToggleState() || isFavorite (i))) visibleRows.push_back (i);
         }
         std::stable_sort (visibleRows.begin(), visibleRows.end(), [] (int a, int b)
@@ -217,7 +225,9 @@ private:
             g.drawText ("*", width - 34, 3, 24, 22, juce::Justification::centred);
         }
         g.setColour (juce::Colours::grey); g.setFont (10);
-        g.drawText (factory ? "FACTORY / " + juce::String (factoryPresetCatalog[(size_t) row].category) : "USER PRESET", 8, 24, width - 16, 15, juce::Justification::centredLeft);
+        const auto rowMeta = factory ? "FACTORY / " + juce::String (factoryPresetCatalog[(size_t) row].category) + " / " + factoryCharacterForRow (row)
+                                     : juce::String ("USER PRESET");
+        g.drawText (rowMeta, 8, 24, width - 16, 15, juce::Justification::centredLeft);
     }
 
     void selectedRowsChanged (int row) override
@@ -290,7 +300,7 @@ private:
         if (row < (int) factoryPresetCatalog.size())
         {
             const auto& info = factoryPresetCatalog[(size_t) row];
-            description.setText (fav + "FACTORY / " + info.category + " / " + info.name + "\n\n"
+            description.setText (fav + "FACTORY / " + info.category + " / " + factoryCharacterForRow (row) + " / " + info.name + "\n\n"
                                  + describePatch (makeFactoryPreset (row), info.description), false);
         }
         else
