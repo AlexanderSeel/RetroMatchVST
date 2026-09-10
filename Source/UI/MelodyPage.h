@@ -1,6 +1,7 @@
 #pragma once
 #include "../PluginProcessor.h"
 #include "RetroLookAndFeel.h"
+#include "SequencerPanel.h"
 #include <optional>
 
 class MelodyPage final : public juce::Component, private juce::Timer
@@ -8,7 +9,7 @@ class MelodyPage final : public juce::Component, private juce::Timer
 public:
     explicit MelodyPage (RetroMatchSynthAudioProcessor& p) : proc (p), roll (*this)
     {
-        for (auto* button : std::array<juce::Button*, 15> { &analyze, &play, &samplePlay, &stop, &save, &drag, &lower, &higher, &remove, &midiFromSynth, &midiFull, &octaveDown, &octaveUp, &quantize, &undoEdit }) addAndMakeVisible (*button);
+        for (auto* button : std::array<juce::Button*, 16> { &analyze, &play, &samplePlay, &stop, &save, &drag, &lower, &higher, &remove, &midiFromSynth, &midiFull, &octaveDown, &octaveUp, &quantize, &undoEdit, &sequencer }) addAndMakeVisible (*button);
         addAndMakeVisible (mode); addAndMakeVisible (tempo); addAndMakeVisible (quantizeGrid); addAndMakeVisible (hint); addAndMakeVisible (roll);
         for (auto* slider : { &synthStart, &synthEnd, &midiStart, &midiEnd })
         { addAndMakeVisible (*slider); slider->setRange (0.0, 60.0, 0.01); slider->setSliderStyle (juce::Slider::LinearHorizontal); slider->setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 20); slider->setTextValueSuffix (" s"); }
@@ -33,10 +34,10 @@ public:
             worker = std::make_unique<Worker> (file, mode.getSelectedId() == 2, tempo.getValue(), midiStart.getValue(), midiEnd.getValue());
             worker->startThread(); analyze.setButtonText ("CANCEL"); proc.melodyTransport.stop();
         };
-        play.onClick = [this] { proc.playMelody(); };
-        samplePlay.onClick = [this] { proc.melodyTransport.stop(); proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::referenceOnly); proc.noteOnFromEditor (proc.getReferenceBaseMidiNote(), 0.82f); };
-        play.setTooltip ("Play the extracted notes through the current synth and enabled layers.");
-        stop.onClick = [this] { proc.melodyTransport.stop(); proc.allEditorNotesOff(); proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::synthOnly); };
+        play.onClick = [this] { disableSequencerForDirectPlayback(); proc.playMelody(); };
+        samplePlay.onClick = [this] { disableSequencerForDirectPlayback(); proc.melodyTransport.stop(); proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::referenceOnly); proc.noteOnFromEditor (proc.getReferenceBaseMidiNote(), 0.82f); };
+        play.setTooltip ("Play the extracted notes through the current synth and enabled layers. This disables the live sequencer so the two transports cannot fight for MIDI.");
+        stop.onClick = [this] { disableSequencerForDirectPlayback(); proc.melodyTransport.stop(); proc.allEditorNotesOff(); proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::synthOnly); };
         save.onClick = [this] { chooseMidi(); };
         drag.begin = [this]
         {
@@ -54,10 +55,12 @@ public:
         octaveUp.onClick = [this] { transposeAll (12); };
         quantize.onClick = [this] { quantizeClip(); };
         undoEdit.onClick = [this] { undoLastEdit(); };
+        sequencer.onClick = [this] { showSequencer(); };
         octaveDown.setTooltip ("Transpose every extracted note down one octave without changing the synth patch.");
         octaveUp.setTooltip ("Transpose every extracted note up one octave without changing the synth patch.");
         quantize.setTooltip ("Snap extracted note starts and durations to the selected musical grid.");
         undoEdit.setTooltip ("Restore the MelodyClip state from immediately before the last note/clip edit.");
+        sequencer.setTooltip ("Open the live 64-step sequencer / arpeggiator. Its versioned pattern state is stored with the plug-in session/preset state.");
         tempo.onValueChange = [this] { clip.bpm = tempo.getValue(); if (! clip.notes.empty()) proc.setMelodyClip (clip); };
         applyRegion.onClick = [this]
         {
@@ -112,7 +115,7 @@ public:
         area.removeFromTop (4); auto transforms = area.removeFromTop (30);
         octaveDown.setBounds (transforms.removeFromLeft (78).reduced (2)); octaveUp.setBounds (transforms.removeFromLeft (78).reduced (2));
         quantizeGrid.setBounds (transforms.removeFromLeft (88).reduced (2)); quantize.setBounds (transforms.removeFromLeft (104).reduced (2));
-        undoEdit.setBounds (transforms.removeFromLeft (88).reduced (2));
+        undoEdit.setBounds (transforms.removeFromLeft (88).reduced (2)); sequencer.setBounds (transforms.removeFromLeft (108).reduced (2));
         hint.setBounds (area.removeFromBottom (62)); area.removeFromTop (8); roll.setBounds (area);
     }
     void paint (juce::Graphics& g) override
@@ -234,8 +237,25 @@ private:
     DragButton drag;
     juce::TextButton lower { "NOTE -" }, higher { "NOTE +" }, remove { "DELETE NOTE" };
     juce::TextButton midiFromSynth { "MIDI = SYNTH" }, midiFull { "FULL TRACK MIDI" };
-    juce::TextButton octaveDown { "OCT -" }, octaveUp { "OCT +" }, quantize { "QUANTIZE" }, undoEdit { "UNDO" };
+    juce::TextButton octaveDown { "OCT -" }, octaveUp { "OCT +" }, quantize { "QUANTIZE" }, undoEdit { "UNDO" }, sequencer { "SEQ / ARP" };
     juce::ComboBox mode, quantizeGrid; juce::Slider tempo, synthStart, synthEnd, midiStart, midiEnd; juce::TextButton applyRegion { "APPLY SYNTH" }; juce::Label synthLabel, midiLabel, hint; PianoRoll roll;
+
+    void disableSequencerForDirectPlayback()
+    {
+        auto settings = proc.melodyTransport.getSequencerSettings();
+        if (! settings.enabled) return;
+        settings.enabled = false;
+        proc.melodyTransport.setSequencerSettings (settings);
+        auto state = proc.apvts.state.getChildWithName ("SEQUENCER");
+        if (state.isValid()) state.setProperty ("enabled", false, nullptr);
+    }
+    void showSequencer()
+    {
+        auto panel = std::make_unique<SequencerPanel> (proc);
+        auto* top = getTopLevelComponent();
+        const auto anchor = top != nullptr ? top->getLocalArea (&sequencer, sequencer.getLocalBounds()) : sequencer.getScreenBounds();
+        juce::CallOutBox::launchAsynchronously (std::move (panel), anchor, top);
+    }
     void refreshClip()
     {
         previousState = proc.apvts.state.getChildWithName ("MELODY"); clip = proc.getMelodyClip(); selected = -1;
@@ -258,7 +278,7 @@ private:
         { const auto& n = clip.notes[(size_t) selected]; text += juce::MidiMessage::getMidiNoteName (n.pitch, true, true, 3) + " at " + juce::String (n.start, 2) + " s / confidence " + juce::String (n.confidence * 100, 0) + "%. "; }
         text += clip.truncated ? "Analysis safety limit reached (6 h / 16384 notes). " : "";
         if (undoClip.has_value()) text += "UNDO restores the previous edit. ";
-        text += "Click a note to correct/delete it. Clip tools transpose or quantize all extracted notes; FULL TRACK MIDI analyzes the whole source in chunks.";
+        text += "Click a note to correct/delete it. Clip tools transpose/quantize extracted notes; SEQ / ARP opens the live pattern engine.";
         hint.setText (text, juce::dontSendNotification);
     }
     void rememberUndo()
@@ -367,6 +387,7 @@ private:
         octaveDown.setEnabled (ready); octaveUp.setEnabled (ready); quantizeGrid.setEnabled (ready); quantize.setEnabled (ready);
         undoEdit.setEnabled (ready && undoClip.has_value());
         play.setToggleState (proc.melodyTransport.isPlaying(), juce::dontSendNotification);
+        sequencer.setToggleState (proc.melodyTransport.getSequencerSettings().enabled, juce::dontSendNotification);
         roll.repaint();
     }
 };
