@@ -6,6 +6,17 @@ namespace GeneratedRackGainPolicy
 {
 constexpr float defaultCoherentBudget = 0.92f;
 
+inline bool hasActiveAdditiveLayer (const VoiceParameters& rack) noexcept
+{
+    for (size_t i = 0; i < rack.layers.size(); ++i)
+        if (rack.layers[i] != nullptr
+            && rack.layerOperation[i] == 0
+            && juce::jlimit (0.0f, 1.0f, rack.layerGain[i]) > 1.0e-6f
+            && juce::jlimit (0.0f, 1.0f, rack.layerAmount[i]) > 1.0e-6f)
+            return true;
+    return false;
+}
+
 inline float coherentContribution (const VoiceParameters& rack) noexcept
 {
     float contribution = juce::jlimit (0.0f, 1.0f, rack.mainLayerGain);
@@ -23,9 +34,12 @@ inline float coherentContribution (const VoiceParameters& rack) noexcept
 // Generated additive resynthesis racks can contain up to eight coherent voices.
 // Scale the summing controls as one group so the designed main/companion balance
 // remains intact while the worst-case coherent sum retains explicit headroom.
-// This helper is intentionally opt-in: user-authored layer racks are not changed.
+// Single-voice patches remain untouched; callers opt generated racks into this policy.
 inline float apply (VoiceParameters& rack, float budget = defaultCoherentBudget) noexcept
 {
+    if (! hasActiveAdditiveLayer (rack))
+        return 1.0f;
+
     budget = juce::jlimit (0.05f, 1.0f, budget);
     const float contribution = coherentContribution (rack);
     if (contribution <= budget || contribution <= 1.0e-6f)
