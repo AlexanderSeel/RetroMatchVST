@@ -1,5 +1,6 @@
 #pragma once
 #include "../PluginProcessor.h"
+#include "../Matching/GeneratedRackGainPolicy.h"
 #include "RetroLookAndFeel.h"
 
 class SynthInstanceVisual final : public juce::Component
@@ -54,6 +55,9 @@ public:
         addAndMakeVisible (editMain); editMain.setButtonText ("EDIT INSTANCE 1 / MAIN"); editMain.onClick = [this] { editInstance (-1); };
         addAndMakeVisible (add); add.setButtonText ("+ ADD CURRENT SYNTH INSTANCE");
         add.onClick = [this] { for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) if (! proc.hasLayer (i)) { proc.captureLayer (i); break; } refresh(); };
+        addAndMakeVisible (safeSum); safeSum.setButtonText ("SAFE SUM"); safeSum.onClick = [this] { applySafeSum(); };
+        safeSum.setTooltip ("Reduce Main + additive layer gains as one group only when their worst-case coherent contribution exceeds the generated-rack headroom budget. Layer balance is preserved; non-additive Mix/Subtract/Multiply/Divide rows are untouched.");
+        addAndMakeVisible (rackStatus); rackStatus.setJustificationType (juce::Justification::centredRight); rackStatus.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
         addAndMakeVisible (mainGain); mainGain.setSliderStyle (juce::Slider::LinearHorizontal); mainGain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 24);
         mainGain.setNumDecimalPlacesToDisplay (2); mainGain.setTooltip ("Instance 1 / Main level"); mainAttachment = std::make_unique<SliderAttachment> (proc.apvts, "mainLayerGain", mainGain);
         mainGain.textFromValueFunction = [] (double value) { return juce::String (value, 2); }; mainGain.updateText();
@@ -95,6 +99,7 @@ public:
         auto method = r.removeFromTop (30); strategyLabel.setBounds (method.removeFromLeft (150)); strategy.setBounds (method.removeFromLeft (260).reduced (2)); complexityLabel.setBounds (method.removeFromLeft (110)); complexity.setBounds (method.reduced (2));
         editMain.setBounds (r.removeFromTop (30).reduced (2));
         auto controls = r.removeFromTop (30); add.setBounds (controls.removeFromLeft (controls.getWidth() * 2 / 3).reduced (2)); mainGain.setBounds (controls.reduced (2));
+        auto safety = r.removeFromTop (28); safeSum.setBounds (safety.removeFromLeft (105).reduced (2)); rackStatus.setBounds (safety.reduced (2));
         mainVisual.setBounds (r.removeFromTop (65)); r.removeFromTop (6); viewport.setBounds (r); layoutRows();
     }
 private:
@@ -110,8 +115,8 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
         std::array<std::unique_ptr<SliderAttachment>, 4> attachments;
     };
-    juce::Label hint, resynthLabel, strategyLabel, complexityLabel;
-    juce::ComboBox resynthInstances, strategy, complexity; juce::TextButton add, editMain; juce::Slider mainGain; SynthInstanceVisual mainVisual;
+    juce::Label hint, resynthLabel, strategyLabel, complexityLabel, rackStatus;
+    juce::ComboBox resynthInstances, strategy, complexity; juce::TextButton add, editMain, safeSum; juce::Slider mainGain; SynthInstanceVisual mainVisual;
     std::unique_ptr<SliderAttachment> mainAttachment;
     std::unique_ptr<ComboAttachment> resynthAttachment, strategyAttachment, complexityAttachment;
     juce::Component content; juce::Viewport viewport;
@@ -123,17 +128,52 @@ private:
             if (auto* tabs = dynamic_cast<juce::TabbedComponent*> (c)) { tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("SYNTH")); break; }
         refresh();
     }
+    void setParameterPlain (const juce::String& id, float value)
+    {
+        if (auto* parameter = proc.apvts.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+    }
+    void applySafeSum()
+    {
+        auto rack = proc.getCurrentVoiceParameters();
+        const float before = GeneratedRackGainPolicy::coherentContribution (rack);
+        const float scale = GeneratedRackGainPolicy::apply (rack);
+        if (scale >= 0.99999f)
+        {
+            hint.setText ("SAFE SUM: additive rack is already inside the coherent headroom budget.", juce::dontSendNotification);
+            return;
+        }
+
+        setParameterPlain ("mainLayerGain", rack.mainLayerGain);
+        for (size_t i = 0; i < rack.layers.size(); ++i)
+            if (rack.layers[i] != nullptr && rack.layerOperation[i] == 0)
+                setParameterPlain ("layer" + juce::String ((int) i + 1) + "Gain", rack.layerGain[i]);
+        hint.setText ("SAFE SUM: coherent contribution reduced from " + juce::String (before, 2) + " to "
+                      + juce::String (GeneratedRackGainPolicy::coherentContribution (rack), 2)
+                      + " while preserving additive layer ratios.", juce::dontSendNotification);
+        refresh();
+    }
     void timerCallback() override { refresh(); }
     void refresh()
     {
         bool available = false;
+        int activeInstances = 1;
         for (size_t i = 0; i < rows.size(); ++i)
         {
             const bool present = proc.hasLayer ((int) i); auto& row = rows[i]; row.panel.setVisible (present); available |= ! present;
             const juce::uint32 colours[] { 0xffffbd65, 0xffc9a0ff, 0xff78f1c4, 0xffff91b8, 0xffa6cf75, 0xff94aaff, 0xffff9673 };
             row.name.setColour (juce::Label::textColourId, juce::Colour (colours[i])); row.edit.setToggleState (proc.getEditingLayer() == (int) i, juce::dontSendNotification);
             row.name.setText ("SYNTH " + juce::String ((int) i + 2) + " / " + proc.getLayerName ((int) i), juce::dontSendNotification); row.visual.repaint();
+            const auto enabledId = "layer" + juce::String ((int) i + 1) + "Enabled";
+            if (present && proc.apvts.getRawParameterValue (enabledId)->load() >= 0.5f) ++activeInstances;
         }
+        const auto rack = proc.getCurrentVoiceParameters();
+        const float contribution = GeneratedRackGainPolicy::coherentContribution (rack);
+        const bool overBudget = GeneratedRackGainPolicy::hasActiveAdditiveLayer (rack) && contribution > GeneratedRackGainPolicy::defaultCoherentBudget + 1.0e-5f;
+        rackStatus.setText (juce::String (activeInstances) + " ACTIVE  /  COHERENT SUM " + juce::String (contribution, 2)
+                            + (overBudget ? "  /  SAFE SUM RECOMMENDED" : "  /  HEADROOM OK"), juce::dontSendNotification);
+        rackStatus.setColour (juce::Label::textColourId, overBudget ? findColour (RetroLookAndFeel::secondaryLed) : findColour (RetroLookAndFeel::primaryLed));
+        safeSum.setEnabled (overBudget);
         add.setEnabled (available); mainVisual.repaint(); layoutRows();
     }
     void layoutRows()
