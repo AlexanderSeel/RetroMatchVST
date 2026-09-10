@@ -2,6 +2,10 @@
 
 #include "../PluginProcessor.h"
 #include "RetroLookAndFeel.h"
+#include <algorithm>
+#include <memory>
+#include <utility>
+#include <vector>
 
 class SequencerPanel final : public juce::Component, private juce::Timer
 {
@@ -9,10 +13,13 @@ public:
     explicit SequencerPanel (RetroMatchSynthAudioProcessor& processor) : proc (processor)
     {
         setSize (820, 410);
-        addAndMakeVisible (title);
+        addAndMakeVisible (title); addAndMakeVisible (status);
         title.setText ("STEP SEQUENCER / ARPEGGIATOR", juce::dontSendNotification);
         title.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
         title.setColour (juce::Label::textColourId, findColour (RetroLookAndFeel::primaryLed));
+        status.setJustificationType (juce::Justification::centredRight);
+        status.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+        status.setColour (juce::Label::textColourId, findColour (RetroLookAndFeel::secondaryLed));
 
         for (auto* c : std::array<juce::Component*, 12> { &enabled, &mode, &division, &bpm, &length, &swing, &latch,
                                                            &previousPage, &nextPage, &randomize, &reverse, &clear })
@@ -66,7 +73,7 @@ public:
         mode.setTooltip ("Arp modes use held MIDI notes. PATTERN uses ROOT + per-step pitch/octave and runs without held notes.");
         division.setTooltip ("Internal sequencer clock division. Host clock wiring is intentionally deferred until transport position is supplied to the core.");
         swing.setTooltip ("Alternating swing while preserving each two-step pair duration.");
-        latch.setTooltip ("Keep held arpeggiator notes active after key release. CLEAR also clears the pattern editor, not the latched note pool.");
+        latch.setTooltip ("Keep held arpeggiator notes active after key release.");
         probability.setTooltip ("Independent note trigger probability for this step.");
         microTiming.setTooltip ("Bounded offset within the nominal step, +/-45% maximum.");
         macro1.setTooltip ("Step modulation lane 1 value (stored now; destination routing comes with modulation-lane wiring).");
@@ -80,8 +87,7 @@ public:
         length.onValueChange = [this]
         {
             commitSettings();
-            const int pages = pageCount();
-            page = juce::jlimit (0, pages - 1, page);
+            page = juce::jlimit (0, pageCount() - 1, page);
             selectedStep = juce::jmin (selectedStep, settings.length - 1);
             refreshStepEditor(); refreshStepButtons();
         };
@@ -172,6 +178,8 @@ private:
     juce::TextButton previousPage, nextPage, randomize, reverse, rotateLeft, rotateRight, clear;
     std::array<juce::TextButton, stepsPerPage> stepButtons;
     juce::Slider pitch, octave, velocity, gate, probability, ratchet, microTiming, macro1, macro2;
+    std::vector<std::unique_ptr<juce::Label>> labels;
+    std::vector<std::pair<juce::Slider*, juce::Label*>> sliderLabels;
 
     static void configureStepSlider (juce::Slider& slider, double minimum, double maximum, double interval, const juce::String& suffix)
     {
@@ -204,9 +212,6 @@ private:
         for (auto& pair : sliderLabels) if (pair.first == &slider) return pair.second;
         return nullptr;
     }
-
-    std::vector<std::unique_ptr<juce::Label>> labels;
-    std::vector<std::pair<juce::Slider*, juce::Label*>> sliderLabels;
 
     int pageCount() const { return juce::jmax (1, (settings.length + stepsPerPage - 1) / stepsPerPage); }
 
@@ -252,7 +257,8 @@ private:
     {
         updating = true;
         const auto& step = stepState[(size_t) juce::jlimit (0, RetroMatchSequencer::maxSteps - 1, selectedStep)];
-        stepLabel.setText ("STEP " + juce::String (selectedStep + 1) + "  /  " + (step.rest ? juce::String ("REST") : juce::String (step.semitone >= 0 ? "+" : "") + juce::String (step.semitone) + " st"), juce::dontSendNotification);
+        const auto pitchText = juce::String (step.semitone >= 0 ? "+" : "") + juce::String (step.semitone) + " st";
+        stepLabel.setText ("STEP " + juce::String (selectedStep + 1) + "  /  " + (step.rest ? juce::String ("REST") : pitchText), juce::dontSendNotification);
         rest.setToggleState (step.rest, juce::dontSendNotification); tie.setToggleState (step.tie, juce::dontSendNotification); glide.setToggleState (step.glide, juce::dontSendNotification);
         pitch.setValue (step.semitone, juce::dontSendNotification); octave.setValue (step.octave, juce::dontSendNotification);
         velocity.setValue (step.velocity * 100.0f, juce::dontSendNotification); gate.setValue (step.gate * 100.0f, juce::dontSendNotification);
@@ -274,7 +280,8 @@ private:
             if (! visible) continue;
             const auto& step = stepState[(size_t) index];
             const juce::String value = step.rest ? "--" : (juce::String (step.semitone >= 0 ? "+" : "") + juce::String (step.semitone));
-            button.setButtonText ((playingStep == index && proc.melodyTransport.isSequencerRunning() ? ">" : "") + juce::String (index + 1) + "\n" + value);
+            const juce::String playMarker = playingStep == index && proc.melodyTransport.isSequencerRunning() ? ">" : "";
+            button.setButtonText (playMarker + juce::String (index + 1) + "\n" + value);
             button.setToggleState (index == selectedStep, juce::dontSendNotification);
         }
         previousPage.setEnabled (page > 0); nextPage.setEnabled (page + 1 < pageCount());
@@ -290,12 +297,8 @@ private:
 
     void clearPattern()
     {
-        for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i)
-        {
-            stepState[(size_t) i] = {};
-            stepState[(size_t) i].rest = true;
-            proc.melodyTransport.setSequencerStep (i, stepState[(size_t) i]);
-        }
+        proc.melodyTransport.clearSequencerPattern();
+        for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i) stepState[(size_t) i] = proc.melodyTransport.getSequencerStep (i);
         saveState(); refreshStepEditor(); refreshStepButtons();
     }
 
