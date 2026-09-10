@@ -1,6 +1,7 @@
 #include "SoundMatcher.h"
 #include "OfflineRenderer.h"
 #include "EffectChainProbe.h"
+#include "GeneratedRackGainPolicy.h"
 
 namespace
 {
@@ -247,6 +248,9 @@ bool SoundMatcher::referenceSelfTerminates (const SoundFeatures& reference)
 
 void SoundMatcher::enforceReferenceLifecycle (const SoundFeatures& reference, VoiceParameters& params)
 {
+    // Layered generated racks pass through this invariant even for sustained references.
+    // Single-voice candidates are explicitly ignored by the gain policy.
+    GeneratedRackGainPolicy::apply (params);
     if (! isSelfTerminatingReference (reference)) return;
     enforceSelfTerminatingTree (params, reference);
 }
