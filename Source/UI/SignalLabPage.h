@@ -11,6 +11,21 @@
 
 class SignalLabPage final : public juce::Component, private juce::Timer
 {
+    class LargePatchMapWindow final : public juce::DialogWindow
+    {
+    public:
+        explicit LargePatchMapWindow (float desktopScale)
+            : juce::DialogWindow ("RM-01 / LARGE PATCH MAP",
+                                  juce::Colour (0xff101719), true, true, desktopScale)
+        {
+        }
+
+        void closeButtonPressed() override
+        {
+            exitModalState (0);
+        }
+    };
+
     static constexpr float kReadableGraphZoom = 0.50f;
 
 public:
@@ -1037,8 +1052,7 @@ private:
         // every dialog resize so its toolbar/viewport never live outside the visible window.
         auto* content = new SignalLabPage (proc, true);
         const float desktopScale = juce::Component::getApproximateScaleFactorForComponent (this);
-        auto* dialogWindow = new juce::DialogWindow ("RM-01 / LARGE PATCH MAP",
-                                                     juce::Colour (0xff101719), true, true, desktopScale);
+        auto* dialogWindow = new LargePatchMapWindow (desktopScale);
         dialogWindow->setUsingNativeTitleBar (false);
         dialogWindow->setResizable (true, false);
         dialogWindow->setResizeLimits (900, 540, 2400, 1600);
