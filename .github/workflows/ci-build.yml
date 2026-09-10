@@ -79,10 +79,13 @@ jobs:
           -DRETROMATCH_BUILD_TESTS=ON
           -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
       - name: Build AU, VST3 and Standalone
-        run: cmake --build build --config Release --target RetroMatchSynth_AU RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
+        # CI artifacts are intentionally unsigned. JUCE retains its own VST3 ad-hoc
+        # verification/signing helper where required for manifest generation; disabling
+        # Xcode-managed signing avoids looking for a non-existent keychain identity.
+        run: cmake --build build --config Release --target RetroMatchSynth_AU RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel -- CODE_SIGNING_ALLOWED=NO
       - name: Build and run DSP tests
         run: |
-          cmake --build build --config Release --target RetroMatchTests RetroMatchFineTuneTests RetroMatchOneShotTests --parallel
+          cmake --build build --config Release --target RetroMatchTests RetroMatchFineTuneTests RetroMatchOneShotTests --parallel -- CODE_SIGNING_ALLOWED=NO
           ctest --test-dir build -C Release --output-on-failure
       - name: Upload macOS binaries
         uses: actions/upload-artifact@v7
