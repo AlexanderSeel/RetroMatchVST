@@ -131,6 +131,30 @@ if(RETROMATCH_BUILD_TESTS)
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
   add_test(NAME RetroMatchFineTune COMMAND RetroMatchFineTuneTests)
+
+  juce_add_console_app(RetroMatchOneShotTests PRODUCT_NAME "RetroMatch One-Shot Tests")
+  juce_generate_juce_header(RetroMatchOneShotTests)
+  target_sources(RetroMatchOneShotTests PRIVATE
+    Tests/OneShotEnvelopeTests.cpp
+    Source/Engine/SynthEngine.cpp
+    Source/Engine/ReferenceWavetable.cpp
+    Source/Analysis/SampleAnalyzer.cpp
+    Source/Matching/OfflineRenderer.cpp
+    Source/Matching/SimilarityScorer.cpp
+    Source/Matching/SoundMatcher.cpp)
+  target_compile_definitions(RetroMatchOneShotTests PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0)
+  target_link_libraries(RetroMatchOneShotTests PRIVATE
+    juce::juce_data_structures
+    juce::juce_audio_basics
+    juce::juce_audio_formats
+    juce::juce_dsp
+    juce::juce_core
+    PUBLIC
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+  add_test(NAME RetroMatchOneShot COMMAND RetroMatchOneShotTests)
 endif()
 
 option(RETROMATCH_BUILD_UI_TESTS "Build offscreen editor snapshot/lifecycle probe" OFF)

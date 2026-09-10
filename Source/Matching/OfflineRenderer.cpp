@@ -6,7 +6,8 @@ juce::AudioBuffer<float> OfflineRenderer::renderPatch (const VoiceParameters& pa
                                                         float durationSeconds,
                                                         float targetFundamentalHz,
                                                         int blockSize,
-                                                        DspRouting::Plan routingPlan)
+                                                        DspRouting::Plan routingPlan,
+                                                        bool holdNote)
 {
     const float duration = juce::jlimit (0.45f, 12.0f, durationSeconds);
     const int totalSamples = juce::jmax (1, (int) std::ceil (duration * sampleRate));
@@ -26,9 +27,13 @@ juce::AudioBuffer<float> OfflineRenderer::renderPatch (const VoiceParameters& pa
     if (hz < 25.0f || hz > 5000.0f) hz = 261.6256f;
     const int midiNote = juce::jlimit (0, 127, (int) std::round (69.0 + 12.0 * std::log2 (hz / 440.0)));
 
-    const float gateSeconds = juce::jlimit (0.15f, duration * 0.85f,
-                                            duration - juce::jmin (duration * 0.35f, params.release * 0.85f + 0.05f));
-    const int noteOffSample = juce::jlimit (1, totalSamples - 1, (int) (gateSeconds * sampleRate));
+    int noteOffSample = -1;
+    if (! holdNote)
+    {
+        const float gateSeconds = juce::jlimit (0.15f, duration * 0.85f,
+                                                duration - juce::jmin (duration * 0.35f, params.release * 0.85f + 0.05f));
+        noteOffSample = juce::jlimit (1, totalSamples - 1, (int) (gateSeconds * sampleRate));
+    }
 
     for (int start = 0; start < totalSamples; start += blockSize)
     {

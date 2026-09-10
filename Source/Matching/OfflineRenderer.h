@@ -10,5 +10,6 @@ public:
                                                   float durationSeconds,
                                                   float targetFundamentalHz,
                                                   int blockSize = 256,
-                                                  DspRouting::Plan routingPlan = {});
+                                                  DspRouting::Plan routingPlan = {},
+                                                  bool holdNote = false);
 };

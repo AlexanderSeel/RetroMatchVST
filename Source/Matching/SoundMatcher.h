@@ -34,6 +34,7 @@ struct MatchResult
     float confidence = 0.0f;
     int evaluatedCandidates = 0;
     float effectProbeSimilarity = -1.0f;
+    float tailSilenceSimilarity = -1.0f; // one-shot held-note tail score; -1 when not applicable
     int algorithm = -1;      // selected resynthesis strategy when the result owns one
     int complexity = -1;     // selected 1-3 / 4 / 6 / 8 rack depth when the result owns one
     bool fullRackScore = false; // similarity was measured after all embedded layers rendered
@@ -60,6 +61,17 @@ public:
                                   CancelCallback cancel = {});
 
 private:
+    // Core entry points are the pre-policy implementation compiled through
+    // SoundMatcherCore.inc. Public entry points above add reference lifecycle policy.
+    static MatchResult initialFitCore (const SoundFeatures& f);
+    static MatchResult evaluateFitCore (const SoundFeatures& reference, const VoiceParameters& params,
+                                        const MatchSettings& settings = {});
+    static MatchResult refineFitCore (const SoundFeatures& reference,
+                                      const VoiceParameters& seed,
+                                      const MatchSettings& settings = {},
+                                      ProgressCallback progress = {},
+                                      CancelCallback cancel = {});
+
     static VoiceParameters mutate (const VoiceParameters& source, juce::Random& random, float amount, bool allowTopology);
     static void clamp (VoiceParameters& p);
     static void applyLocks (VoiceParameters& candidate, const VoiceParameters& seed, const MatchSettings& settings);
