@@ -15,12 +15,16 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Validate patch script
+      - name: Validate patch scripts
         shell: pwsh
-        run: python -m py_compile scripts/apply-phase-a-truth-constraints-20260910.py
+        run: |
+          python -m py_compile scripts/apply-phase-a-truth-constraints-20260910.py
+          python -m py_compile scripts/apply-phase-a-truth-constraints-v2-20260910.py
       - name: Apply truth-matching constraints
         shell: pwsh
-        run: python scripts/apply-phase-a-truth-constraints-20260910.py
+        run: |
+          python scripts/apply-phase-a-truth-constraints-20260910.py
+          python scripts/apply-phase-a-truth-constraints-v2-20260910.py
       - name: Static source integrity
         shell: pwsh
         run: python scripts/static-check.py
@@ -42,8 +46,10 @@ jobs:
           git config user.name "Alexander Seel"
           git config user.email "mr.alexander.seel@gmail.com"
           rm -rf build-phase-a2
-          git rm .github/workflows/apply-phase-a-truth-constraints-20260910.yml scripts/apply-phase-a-truth-constraints-20260910.py
+          git rm .github/workflows/apply-phase-a-truth-constraints-20260910.yml scripts/apply-phase-a-truth-constraints-20260910.py scripts/apply-phase-a-truth-constraints-v2-20260910.py
           git add -A
           git diff --cached --check
           git commit -m "Constrain nonlinear matching to reference evidence"
           git push origin HEAD:main
+
+# Revision 2 also constrains the sustained/general matcher topology trial.
