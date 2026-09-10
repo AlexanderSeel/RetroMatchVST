@@ -20,6 +20,11 @@ bool finiteAudio (const juce::AudioBuffer<float>& audio)
             if (! std::isfinite (audio.getSample (ch, i))) return false;
     return true;
 }
+
+bool near (float a, float b, float epsilon = 1.0e-6f)
+{
+    return std::abs (a - b) <= epsilon;
+}
 }
 
 int main()
@@ -47,11 +52,11 @@ int main()
     baseline.layerPan[0] = 0.4f;
 
     const auto neutral = CompareFineTune::apply (baseline, {});
-    if (std::abs (neutral.cutoff - baseline.cutoff) > 1.0e-6f
-        || std::abs (neutral.attack - baseline.attack) > 1.0e-6f
-        || std::abs (neutral.stereoWidth - baseline.stereoWidth) > 1.0e-6f
+    if (! near (neutral.cutoff, baseline.cutoff)
+        || ! near (neutral.attack, baseline.attack)
+        || ! near (neutral.stereoWidth, baseline.stereoWidth)
         || ! neutral.layers[0]
-        || std::abs (neutral.layers[0]->cutoff - baseline.layers[0]->cutoff) > 1.0e-6f)
+        || ! near (neutral.layers[0]->cutoff, baseline.layers[0]->cutoff))
         return fail ("neutral compare fine-tune changed the baseline");
 
     CompareFineTune::Values positive;
@@ -69,11 +74,16 @@ int main()
     const auto adjusted = CompareFineTune::apply (baseline, positive);
 
     if (adjusted.cutoff <= baseline.cutoff) return fail ("brightness did not raise cutoff");
-    if (adjusted.subMix <= baseline.subMix) return fail ("low-end did not raise sub balance");
+    if (adjusted.subMix <= baseline.subMix) return fail ("low-end did not raise main-voice sub balance");
     if (adjusted.attack >= baseline.attack) return fail ("punch did not shorten attack");
-    if (adjusted.release <= baseline.release) return fail ("tail did not lengthen release");
+    if (adjusted.release <= baseline.release || adjusted.decay <= baseline.decay)
+        return fail ("tail did not lengthen decay/release");
+    if (! near (adjusted.sustain, baseline.sustain))
+        return fail ("tail changed sustain instead of musical tail time");
     if (adjusted.stereoWidth <= baseline.stereoWidth || adjusted.layerPan[0] <= baseline.layerPan[0])
         return fail ("width did not widen voice/layer image");
+    if (! near (adjusted.unisonSpread, baseline.unisonSpread))
+        return fail ("width changed unison detune/spread timbre");
     if (adjusted.modGraphSlots[0].amount <= baseline.modGraphSlots[0].amount
         || adjusted.msegDepth <= baseline.msegDepth)
         return fail ("motion did not scale existing modulation");
@@ -81,6 +91,58 @@ int main()
         return fail ("fine-pitch mapping is incorrect");
     if (! adjusted.layers[0] || adjusted.layers[0].get() == baseline.layers[0].get())
         return fail ("full-rack fine-tune did not clone immutable layer state");
+    if (! near (adjusted.layers[0]->subMix, baseline.layers[0]->subMix))
+        return fail ("low-end multiplied sub oscillators across companion layers");
+    if (! near (adjusted.layers[0]->sustain, baseline.layers[0]->sustain))
+        return fail ("tail reintroduced sustain in a companion layer");
+    if (! near (adjusted.layers[0]->unisonSpread, baseline.layers[0]->unisonSpread))
+        return fail ("width changed companion unison timbre");
+    if (std::abs (adjusted.layers[0]->masterTuneCents - 20.0f) > 0.01f)
+        return fail ("fine pitch did not keep the full rack in tune");
+
+    // Compare corrections must never alter nonlinear colour. A user can edit drive/fold/FX
+    // elsewhere, but BRIGHTNESS/LOW END/PUNCH/TAIL/WIDTH/MOTION/PITCH must not secretly do it.
+    auto colouredBaseline = baseline;
+    colouredBaseline.drive = 0.21f;
+    colouredBaseline.wavefold = 0.17f;
+    colouredBaseline.distortionMode = 2;
+    colouredBaseline.distortionMix = 0.37f;
+    colouredBaseline.fxModules[0].type = 3;
+    colouredBaseline.fxModules[0].amount = 0.26f;
+    colouredBaseline.fxModules[0].mix = 0.31f;
+    auto colouredLayer = std::make_shared<VoiceParameters> (*colouredBaseline.layers[0]);
+    colouredLayer->drive = 0.13f;
+    colouredLayer->wavefold = 0.09f;
+    colouredBaseline.layers[0] = colouredLayer;
+    const auto colouredAdjusted = CompareFineTune::apply (colouredBaseline, positive);
+    if (! near (colouredAdjusted.drive, colouredBaseline.drive)
+        || ! near (colouredAdjusted.wavefold, colouredBaseline.wavefold)
+        || colouredAdjusted.distortionMode != colouredBaseline.distortionMode
+        || ! near (colouredAdjusted.distortionMix, colouredBaseline.distortionMix)
+        || colouredAdjusted.fxModules[0].type != colouredBaseline.fxModules[0].type
+        || ! near (colouredAdjusted.fxModules[0].amount, colouredBaseline.fxModules[0].amount)
+        || ! near (colouredAdjusted.fxModules[0].mix, colouredBaseline.fxModules[0].mix)
+        || ! colouredAdjusted.layers[0]
+        || ! near (colouredAdjusted.layers[0]->drive, colouredBaseline.layers[0]->drive)
+        || ! near (colouredAdjusted.layers[0]->wavefold, colouredBaseline.layers[0]->wavefold))
+        return fail ("Compare macro altered nonlinear colour/FX state");
+
+    // A one-shot baseline stays a one-shot even with maximum positive TAIL.
+    VoiceParameters oneShot = baseline;
+    oneShot.sustain = 0.0f;
+    for (auto& sustain : oneShot.fmOpSustain) sustain = 0.0f;
+    auto oneShotLayer = std::make_shared<VoiceParameters> (*baseline.layers[0]);
+    oneShotLayer->sustain = 0.0f;
+    for (auto& sustain : oneShotLayer->fmOpSustain) sustain = 0.0f;
+    oneShot.layers[0] = oneShotLayer;
+    CompareFineTune::Values maxTail;
+    maxTail.tail = 1.0f;
+    const auto tailedOneShot = CompareFineTune::apply (oneShot, maxTail);
+    if (! near (tailedOneShot.sustain, 0.0f) || ! tailedOneShot.layers[0]
+        || ! near (tailedOneShot.layers[0]->sustain, 0.0f))
+        return fail ("TAIL turned a self-terminating patch into a sustained patch");
+    for (const auto sustain : tailedOneShot.fmOpSustain)
+        if (! near (sustain, 0.0f)) return fail ("TAIL reintroduced FM sustain");
 
     CompareFineTune::Values staticMotion;
     staticMotion.motion = 1.0f;
