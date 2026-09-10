@@ -62,6 +62,10 @@ struct Node
     bool positionValid = false;
     bool locked = false;
     int routingMode = 0;
+    bool solo = false;
+    // Declared processing latency in samples. Mutable graph state is compiled
+    // before publication; the audio thread never reads Document directly.
+    int latencySamples = 0;
 
     const Port* findPort (const juce::String& portId) const noexcept
     {
@@ -161,6 +165,17 @@ public:
             if (reason != nullptr) *reason = "Duplicate node ID: " + node.id;
             return false;
         }
+        if (node.latencySamples < 0 || node.latencySamples > (1 << 20))
+        {
+            if (reason != nullptr) *reason = "Node latency is outside the supported range: " + node.id;
+            return false;
+        }
+        if (node.positionValid && (! std::isfinite (node.position.x) || ! std::isfinite (node.position.y)
+                                   || std::abs (node.position.x) > 100000.0f || std::abs (node.position.y) > 100000.0f))
+        {
+            if (reason != nullptr) *reason = "Node position is outside the supported range: " + node.id;
+            return false;
+        }
 
         std::set<std::string> portIds;
         for (const auto& port : node.ports)
@@ -215,6 +230,87 @@ public:
         }
         node->position = position;
         node->positionValid = true;
+        return true;
+    }
+
+    bool setNodeRoutingMode (const juce::String& nodeId, int mode, juce::String* reason = nullptr)
+    {
+        if (mode < 0 || mode > 1)
+        {
+            if (reason != nullptr) *reason = "Unsupported routing mode: " + juce::String (mode);
+            return false;
+        }
+        Document candidate = *this;
+        auto* node = candidate.findNode (nodeId);
+        if (node == nullptr)
+        {
+            if (reason != nullptr) *reason = "Node not found: " + nodeId;
+            return false;
+        }
+        if (node->type != NodeType::processor)
+        {
+            if (reason != nullptr) *reason = "Only processor nodes own serial/parallel FX routing";
+            return false;
+        }
+        node->routingMode = mode;
+        const auto validation = candidate.validate();
+        if (! validation.ok)
+        {
+            if (reason != nullptr) *reason = validation.message;
+            return false;
+        }
+        *this = std::move (candidate);
+        return true;
+    }
+
+    bool setNodeLatencySamples (const juce::String& nodeId, int samples, juce::String* reason = nullptr)
+    {
+        if (samples < 0 || samples > (1 << 20))
+        {
+            if (reason != nullptr) *reason = "Node latency is outside the supported range";
+            return false;
+        }
+        Document candidate = *this;
+        auto* node = candidate.findNode (nodeId);
+        if (node == nullptr)
+        {
+            if (reason != nullptr) *reason = "Node not found: " + nodeId;
+            return false;
+        }
+        node->latencySamples = samples;
+        const auto validation = candidate.validate();
+        if (! validation.ok)
+        {
+            if (reason != nullptr) *reason = validation.message;
+            return false;
+        }
+        *this = std::move (candidate);
+        return true;
+    }
+
+    bool setNodeSolo (const juce::String& nodeId, bool enabled, juce::String* reason = nullptr)
+    {
+        Document candidate = *this;
+        auto* node = candidate.findNode (nodeId);
+        if (node == nullptr)
+        {
+            if (reason != nullptr) *reason = "Node not found: " + nodeId;
+            return false;
+        }
+        if (node->type != NodeType::source)
+        {
+            if (reason != nullptr) *reason = "Only source nodes can be soloed";
+            return false;
+        }
+        for (auto& item : candidate.nodes) item.solo = false;
+        node->solo = enabled;
+        const auto validation = candidate.validate();
+        if (! validation.ok)
+        {
+            if (reason != nullptr) *reason = validation.message;
+            return false;
+        }
+        *this = std::move (candidate);
         return true;
     }
 
@@ -606,6 +702,11 @@ public:
 
     ValidationResult validate() const
     {
+        if (! std::isfinite (view.pan.x) || ! std::isfinite (view.pan.y)
+            || std::abs (view.pan.x) > 100000.0f || std::abs (view.pan.y) > 100000.0f
+            || ! std::isfinite (view.zoom) || view.zoom < 0.05f || view.zoom > 8.0f)
+            return ValidationResult::failure ("Patch graph view state is not finite or bounded");
+
         Document rebuilt;
         rebuilt.view = view;
         rebuilt.version = version;
@@ -632,6 +733,11 @@ public:
             if (hasAudioOutput && node.type != NodeType::master && ! canReachMaster (node.id))
                 return ValidationResult::failure ("Audio node does not resolve to MASTER OUT: " + node.id);
         }
+        int soloCount = 0;
+        for (const auto& node : nodes)
+            soloCount += node.solo ? 1 : 0;
+        if (soloCount > 1)
+            return ValidationResult::failure ("Patch graph contains more than one solo source");
         if (hasAudioNode && ! hasMaster)
             return ValidationResult::failure ("Audio graph has no MASTER OUT node");
         return ValidationResult::success();
@@ -681,6 +787,28 @@ public:
         return order;
     }
 
+    int maxAudioLatencySamples() const noexcept
+    {
+        const auto order = topologicalOrder (PortType::audio);
+        std::map<std::string, int> accumulated;
+        int maximum = 0;
+        for (const auto& nodeId : order)
+        {
+            const auto* node = findNode (nodeId);
+            if (node == nullptr) continue;
+
+            int inputLatency = 0;
+            for (const auto& edge : edges)
+                if (edge.type == PortType::audio && edge.toNode == nodeId)
+                    inputLatency = juce::jmax (inputLatency, accumulated[edge.fromNode.toStdString()]);
+
+            const int pathLatency = inputLatency + node->latencySamples;
+            accumulated[nodeId.toStdString()] = pathLatency;
+            maximum = juce::jmax (maximum, pathLatency);
+        }
+        return maximum;
+    }
+
     juce::ValueTree toValueTree() const
     {
         juce::ValueTree root ("PATCH_GRAPH");
@@ -702,6 +830,8 @@ public:
             child.setProperty ("y", node.position.y, nullptr);
             child.setProperty ("locked", node.locked, nullptr);
             child.setProperty ("routingMode", node.routingMode, nullptr);
+            child.setProperty ("solo", node.solo, nullptr);
+            child.setProperty ("latencySamples", node.latencySamples, nullptr);
             for (const auto& port : node.ports)
             {
                 juce::ValueTree p ("PORT");
@@ -763,6 +893,8 @@ public:
             node.position = { (float) child.getProperty ("x", 0.0f), (float) child.getProperty ("y", 0.0f) };
             node.locked = (bool) child.getProperty ("locked", false);
             node.routingMode = juce::jlimit (0, 1, (int) child.getProperty ("routingMode", 0));
+            node.solo = (bool) child.getProperty ("solo", false);
+            node.latencySamples = juce::jlimit (0, 1 << 20, (int) child.getProperty ("latencySamples", 0));
             for (const auto& portChild : child)
             {
                 if (! portChild.hasType ("PORT")) continue;
@@ -806,7 +938,7 @@ public:
         {
             out << "|n:" << node.id << ":" << (int) node.type << ":" << (node.positionValid ? 1 : 0)
                 << ":" << juce::String (node.position.x, 3) << ":" << juce::String (node.position.y, 3) << ":" << (node.locked ? 1 : 0)
-                << ":" << node.routingMode;
+                << ":" << node.routingMode << ":" << node.latencySamples << ":" << (node.solo ? 1 : 0);
             for (const auto& port : node.ports)
                 out << "/p:" << port.id << ":" << (int) port.type << ":" << (int) port.direction
                     << ":" << (port.acceptsMultiple ? 1 : 0) << ":" << (port.modulationSafe ? 1 : 0);

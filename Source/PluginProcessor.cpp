@@ -11,6 +11,7 @@
 #include "Matching/GeneratedRackGainPolicy.h"
 #include "Matching/ResynthesisAdvisor.h"
 #include "Matching/MatchSafetyPolicy.h"
+#include "Engine/PresetPackSafety.h"
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -1338,6 +1339,11 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
 {
     if (! MatchSafetyPolicy::compatible (result.params))
         return;
+    // Results with a populated safety score were rendered candidates. Never
+    // apply one that failed telemetry; hand-authored/live snapshots use the
+    // sentinel score and remain governed by parameter compatibility alone.
+    if (result.technicalSafetyScore >= 0.0f && ! result.technicallySafe)
+        return;
 
     auto set = [this] (const juce::String& id, float x)
     {
@@ -1432,6 +1438,8 @@ void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainR
     // Validate the complete rack before touching APVTS or the stored layer bank.
     // Gold must never leave a half-applied main/layer combination behind.
     if (! MatchSafetyPolicy::compatible (mainResult.params))
+        return;
+    if (mainResult.technicalSafetyScore >= 0.0f && ! mainResult.technicallySafe)
         return;
 
     selectEditingLayer (-1);
@@ -1875,8 +1883,83 @@ void RetroMatchSynthAudioProcessor::randomizePreset()
     applyPresetParameters (patch, "Designed / " + juce::String (factoryPresetCatalog[(size_t) presetIndex].name) + " / " + juce::String::toHexString (seed).substring (0, 6));
 }
 
+bool RetroMatchSynthAudioProcessor::applyDirectedVariation (VariationDirection direction, float intensity, int64 seed)
+{
+    const auto source = readParams();
+    if (! magicOriginSnapshot.isValid()) magicOriginSnapshot = snapshotCurrent();
+    auto variant = SoundMatcher::makeDirectedVariation (source, direction, seed, intensity, matchSettings);
+    if (currentFeatures)
+        SoundMatcher::enforceReferenceLifecycle (*currentFeatures, variant);
+    if (! MatchSafetyPolicy::compatible (variant)) return false;
+
+    if (currentFeatures)
+    {
+        const auto measured = SoundMatcher::evaluateFit (*currentFeatures, variant, matchSettings);
+        if (measured.technicalSafetyScore >= 0.0f && ! measured.technicallySafe)
+            return false;
+    }
+
+    static constexpr const char* names[] {
+        "Cinematic", "Atmospheric", "Organic", "Orchestral", "Staccato", "Percussive",
+        "Techno", "Warm Analog", "Dark", "Bright", "Wide", "Intimate", "Rhythmic",
+        "Fragile", "Aggressive", "Glitch"
+    };
+    const auto index = juce::jlimit (0, (int) std::size (names) - 1, (int) direction);
+    applyPresetParameters (variant, "Magic / " + juce::String (names[index]));
+    currentCandidateFeatures.reset();
+    lastMatch = {};
+    return true;
+}
+
+void RetroMatchSynthAudioProcessor::captureMagicOrigin()
+{
+    magicOriginSnapshot = snapshotCurrent();
+}
+
+bool RetroMatchSynthAudioProcessor::restoreMagicOrigin()
+{
+    if (! magicOriginSnapshot.isValid()) return false;
+    applyEditingSnapshot (magicOriginSnapshot);
+    lastMatch = {};
+    currentCandidateFeatures.reset();
+    return true;
+}
+
+bool RetroMatchSynthAudioProcessor::validateReleaseState (juce::String* reason) const
+{
+    const auto parameters = readParams ({}, true);
+    if (! MatchSafetyPolicy::compatible (parameters))
+    {
+        if (reason != nullptr) *reason = "Patch parameters failed recursive finite/bounded safety validation";
+        return false;
+    }
+
+    const auto graph = getPatchGraphDocument();
+    const auto compiled = DspRouting::compile (graph);
+    if (! compiled.validation.ok)
+    {
+        if (reason != nullptr) *reason = "Patch graph is not release-safe: " + compiled.validation.message;
+        return false;
+    }
+
+    for (int i = 0; i < VoiceParameters::extraLayerCount; ++i)
+    {
+        if (const auto layer = savedLayers[(size_t) i].load(); layer != nullptr
+            && ! MatchSafetyPolicy::compatible (*layer))
+        {
+            if (reason != nullptr) *reason = "Layer " + juce::String (i + 1) + " failed recursive safety validation";
+            return false;
+        }
+    }
+    return true;
+}
+
 bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
 {
+    juce::String safetyReason;
+    if (! validateReleaseState (&safetyReason))
+        return false;
+
     const auto main = editingMain.load();
     const auto storedReference = main ? main->referenceWavetable : referenceWavetable;
     const auto storedUser = main ? main->userWavetable : userWavetable;
@@ -1903,6 +1986,13 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
 {
     auto xml = juce::XmlDocument::parse (file);
     if (! xml || ! xml->hasTagName (apvts.state.getType())) return false;
+    const auto importedReference = xml->hasAttribute ("referenceWavetable")
+        ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable")) : nullptr;
+    const auto importedUser = xml->hasAttribute ("userWavetable")
+        ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("userWavetable")) : nullptr;
+    if (! MatchSafetyPolicy::compatibleTable (importedReference)
+        || ! MatchSafetyPolicy::compatibleTable (importedUser))
+        return false;
     melodyTransport.stop();
     const float preservedMaster = apvts.getRawParameterValue ("masterOutputGain")->load();
     const float preservedStrategy = apvts.getRawParameterValue ("resynthStrategy")->load();
@@ -1922,10 +2012,8 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
     analysisEndSeconds.store ((float) xml->getDoubleAttribute ("analysisEndSeconds", -1.0));
     { const juce::ScopedLock lock (midiMappingLock); midiMappings.clear(); for (int i = 0; i < xml->getIntAttribute ("midiMapCount", 0); ++i) midiMappings.push_back ({ xml->getStringAttribute ("midiMap" + juce::String (i) + "Id"), xml->getIntAttribute ("midiMap" + juce::String (i) + "CC", 0) }); }
 
-    referenceWavetable = xml->hasAttribute ("referenceWavetable")
-        ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable")) : nullptr;
-    userWavetable = xml->hasAttribute ("userWavetable")
-        ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("userWavetable")) : nullptr;
+    referenceWavetable = importedReference;
+    userWavetable = importedUser;
     userWavetableName = userWavetable ? xml->getStringAttribute ("userWavetableName", "Embedded wavetable") : juce::String {};
     userWavetableDescription = userWavetable ? xml->getStringAttribute ("userWavetableDescription", "Embedded 5 x 2048 table") : juce::String {};
     return true;
@@ -1984,6 +2072,13 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
     {
         if (xml->hasTagName (apvts.state.getType()))
         {
+            const auto importedReference = xml->hasAttribute ("referenceWavetable")
+                ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable")) : nullptr;
+            const auto importedUser = xml->hasAttribute ("userWavetable")
+                ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("userWavetable")) : nullptr;
+            if (! MatchSafetyPolicy::compatibleTable (importedReference)
+                || ! MatchSafetyPolicy::compatibleTable (importedUser))
+                return;
             melodyTransport.stop();
             lightPalette.store (juce::jlimit (0, 3, xml->getIntAttribute ("lightPalette", 0)));
             apvts.replaceState (stateWithPost10Defaults (*xml));
@@ -1992,10 +2087,8 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
             analysisStartSeconds.store ((float) xml->getDoubleAttribute ("analysisStartSeconds", 0.0));
             analysisEndSeconds.store ((float) xml->getDoubleAttribute ("analysisEndSeconds", -1.0));
             { const juce::ScopedLock lock (midiMappingLock); midiMappings.clear(); for (int i = 0; i < xml->getIntAttribute ("midiMapCount", 0); ++i) midiMappings.push_back ({ xml->getStringAttribute ("midiMap" + juce::String (i) + "Id"), xml->getIntAttribute ("midiMap" + juce::String (i) + "CC", 0) }); }
-            referenceWavetable = xml->hasAttribute ("referenceWavetable")
-                ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("referenceWavetable")) : nullptr;
-            userWavetable = xml->hasAttribute ("userWavetable")
-                ? ReferenceWavetableData::fromBase64 (xml->getStringAttribute ("userWavetable")) : nullptr;
+            referenceWavetable = importedReference;
+            userWavetable = importedUser;
             userWavetableName = userWavetable ? xml->getStringAttribute ("userWavetableName", "Embedded wavetable") : juce::String {};
             userWavetableDescription = userWavetable ? xml->getStringAttribute ("userWavetableDescription", "Embedded 5 x 2048 table") : juce::String {};
             referenceAuditionMode.store (juce::jlimit (0, 2, xml->getIntAttribute ("referenceAuditionMode", 0)));

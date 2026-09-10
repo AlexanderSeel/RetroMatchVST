@@ -57,6 +57,26 @@ struct MatchResult
     juce::String explanation;
 };
 
+enum class VariationDirection : int
+{
+    cinematic,
+    atmospheric,
+    organic,
+    orchestral,
+    staccato,
+    percussive,
+    techno,
+    warmAnalog,
+    dark,
+    bright,
+    wide,
+    intimate,
+    rhythmic,
+    fragile,
+    aggressive,
+    glitch
+};
+
 class SoundMatcher
 {
 public:
@@ -67,6 +87,39 @@ public:
     static VoiceParameters makeVariation (const VoiceParameters& source, int64 seed, float amount = 0.15f)
     {
         juce::Random random (seed); return mutate (source, random, juce::jlimit (0.0f, 1.0f, amount), true);
+    }
+    static VoiceParameters makeDirectedVariation (const VoiceParameters& source, VariationDirection direction,
+                                                  int64 seed, float intensity = 0.35f,
+                                                  const MatchSettings& lockSettings = {})
+    {
+        auto result = makeVariation (source, seed, juce::jlimit (0.0f, 1.0f, intensity) * 0.45f);
+        const float amount = juce::jlimit (0.0f, 1.0f, intensity);
+        auto scale = [amount] (float value, float centre, float low, float high, float weight)
+        {
+            return juce::jlimit (low, high, centre + (value - centre) * (1.0f + amount * weight));
+        };
+        switch (direction)
+        {
+            case VariationDirection::cinematic: result.reverbMix = juce::jmax (result.reverbMix, amount * 0.55f); result.delayMix = juce::jmax (result.delayMix, amount * 0.22f); break;
+            case VariationDirection::atmospheric: result.reverbMix = juce::jmax (result.reverbMix, amount * 0.42f); result.lfoAmp = juce::jmax (result.lfoAmp, amount * 0.45f); break;
+            case VariationDirection::organic: result.lfoRate = scale (result.lfoRate, 1.5f, 0.02f, 8.0f, 0.45f); result.fmMix *= 1.0f - amount * 0.35f; break;
+            case VariationDirection::orchestral: result.attack = scale (result.attack, 0.12f, 0.001f, 2.0f, 0.6f); result.reverbMix = juce::jmax (result.reverbMix, amount * 0.30f); break;
+            case VariationDirection::staccato: result.attack = juce::jlimit (0.001f, 0.25f, result.attack * (1.0f - amount * 0.65f)); result.release = juce::jlimit (0.01f, 2.0f, result.release * (1.0f - amount * 0.45f)); break;
+            case VariationDirection::percussive: result.sustain *= 1.0f - amount * 0.75f; result.fmAmount = juce::jmax (result.fmAmount, amount * 0.18f); break;
+            case VariationDirection::techno: result.resonance = juce::jmax (result.resonance, amount * 0.42f); result.lfoCutoff = juce::jmax (result.lfoCutoff, amount * 1.2f); break;
+            case VariationDirection::warmAnalog: result.wavefold *= 1.0f - amount * 0.65f; result.cutoff = scale (result.cutoff, 9000.0f, 120.0f, 19000.0f, -0.35f); break;
+            case VariationDirection::dark: result.cutoff = juce::jlimit (120.0f, 19000.0f, result.cutoff * (1.0f - amount * 0.55f)); break;
+            case VariationDirection::bright: result.cutoff = juce::jlimit (120.0f, 19000.0f, result.cutoff * (1.0f + amount * 0.55f)); break;
+            case VariationDirection::wide: result.stereoWidth = juce::jlimit (0.0f, 2.0f, result.stereoWidth + amount * 0.65f); break;
+            case VariationDirection::intimate: result.stereoWidth = juce::jlimit (0.0f, 2.0f, result.stereoWidth * (1.0f - amount * 0.45f)); break;
+            case VariationDirection::rhythmic: result.mseg.enabled = true; result.mseg.loopEnabled = true; result.msegTarget = (int) ModDestination::amplitude; result.msegDepth = juce::jmax (result.msegDepth, amount * 0.35f); break;
+            case VariationDirection::fragile: result.noiseMix = juce::jmax (result.noiseMix, amount * 0.08f); result.outputGainDb = juce::jmin (result.outputGainDb, -6.0f); break;
+            case VariationDirection::aggressive: result.fmAmount = juce::jmax (result.fmAmount, amount * 0.25f); result.drive = juce::jmax (result.drive, amount * 0.22f); break;
+            case VariationDirection::glitch: result.wavetableWarp = juce::jlimit (-1.0f, 1.0f, result.wavetableWarp + amount * 0.35f); result.ringMix = juce::jmax (result.ringMix, amount * 0.16f); break;
+        }
+        applyLocks (result, source, lockSettings);
+        clamp (result);
+        return result;
     }
     static MatchResult evaluateFit (const SoundFeatures& reference, const VoiceParameters& params,
                                     const MatchSettings& settings = {});

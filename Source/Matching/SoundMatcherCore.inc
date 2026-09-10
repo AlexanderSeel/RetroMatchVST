@@ -647,11 +647,23 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
         if ((int) elite.size() > juce::jmax (2, settings.populationSize)) elite.resize ((size_t) settings.populationSize);
     };
 
+    // Algorithm profiles are hypotheses, not authoritative topology choices.
+    // Measure the untouched seed as the control and only let a profile become
+    // the refinement parent when its rendered identity is at least as good.
+    // This is especially important for reference-derived wavetable choices:
+    // a valid extracted table can still be a worse explanation than the
+    // measured VA/FM seed for a particular source.
+    const auto baselineSeed = evaluateFit (reference, seed, settings);
     auto profiledSeed = seed;
     applyAlgorithmProfile (profiledSeed, settings.algorithm, reference);
-    insertElite (evaluateFit (reference, profiledSeed, settings));
-    int evaluated = 1;
-    const int total = juce::jmax (1, 1 + settings.topologyTrials + settings.iterations);
+    auto profiledResult = evaluateFit (reference, profiledSeed, settings);
+    if (baselineSeed.similarity.total >= profiledResult.similarity.total)
+        profiledSeed = seed;
+
+    insertElite (baselineSeed);
+    insertElite (std::move (profiledResult));
+    int evaluated = 2;
+    const int total = juce::jmax (2, 2 + settings.topologyTrials + settings.iterations);
     auto report = [&] { if (progress) progress (juce::jlimit (0.0f, 1.0f, evaluated / (float) total)); };
     report();
 

@@ -16,6 +16,8 @@ struct Plan
 {
     std::array<int, maxLayerCount> layerOrder {{ 0, 1, 2, 3, 4, 5, 6 }};
     std::array<bool, maxInstanceCount> parallelFx {};
+    int maxLatencySamples = 0;
+    int soloLayer = -1;
     bool graphAuthored = false;
 
     bool validPermutation() const noexcept
@@ -27,6 +29,13 @@ struct Plan
             seen[(size_t) layer] = true;
         }
         return true;
+    }
+
+    bool valid() const noexcept
+    {
+        return validPermutation()
+            && maxLatencySamples >= 0 && maxLatencySamples <= (1 << 20)
+            && soloLayer >= -1 && soloLayer < maxLayerCount;
     }
 };
 
@@ -92,11 +101,24 @@ inline CompileResult compile (const PatchGraph::Document& graph)
         const auto nodeId = "L" + juce::String (layer) + ":S4";
         if (const auto* fxNode = graph.findNode (nodeId); fxNode != nullptr)
             result.plan.parallelFx[(size_t) instance] = fxNode->routingMode == 1;
+
+        const auto sourceId = "L" + juce::String (layer) + ":S0";
+        if (const auto* sourceNode = graph.findNode (sourceId); sourceNode != nullptr && sourceNode->solo)
+        {
+            if (result.plan.soloLayer >= 0)
+            {
+                result.validation = PatchGraph::ValidationResult::failure ("Multiple solo sources in compiled graph", sourceId);
+                return result;
+            }
+            result.plan.soloLayer = layer;
+        }
     }
 
     result.plan.graphAuthored = ! ordered.empty()
                              || std::any_of (result.plan.parallelFx.begin(), result.plan.parallelFx.end(), [] (bool value) { return value; });
-    if (! result.plan.validPermutation())
+    result.plan.graphAuthored = result.plan.graphAuthored || result.plan.soloLayer >= 0;
+    result.plan.maxLatencySamples = juce::jlimit (0, 1 << 20, graph.maxAudioLatencySamples());
+    if (! result.plan.valid())
         result.validation = PatchGraph::ValidationResult::failure ("Compiled layer routing is not a valid permutation");
     return result;
 }
@@ -108,7 +130,7 @@ public:
 
     void publish (const Plan& plan) noexcept
     {
-        const auto safe = plan.validPermutation() ? plan : Plan {};
+        const auto safe = plan.valid() ? plan : Plan {};
         packed.store (pack (safe), std::memory_order_release);
     }
 
@@ -118,27 +140,32 @@ public:
     }
 
 private:
-    std::atomic<std::uint32_t> packed { 0 };
+    std::atomic<std::uint64_t> packed { 0 };
 
-    static std::uint32_t pack (const Plan& plan) noexcept
+    static std::uint64_t pack (const Plan& plan) noexcept
     {
-        std::uint32_t value = plan.graphAuthored ? 0x80000000u : 0u;
+        std::uint64_t value = 0;
         for (int i = 0; i < maxLayerCount; ++i)
-            value |= (std::uint32_t) (plan.layerOrder[(size_t) i] & 0x7) << (i * 3);
+            value |= (std::uint64_t) (plan.layerOrder[(size_t) i] & 0x7) << (i * 3);
         for (int i = 0; i < maxInstanceCount; ++i)
             if (plan.parallelFx[(size_t) i]) value |= 1u << (21 + i);
+        value |= (std::uint64_t) juce::jlimit (0, 1 << 20, plan.maxLatencySamples) << 29;
+        value |= (std::uint64_t) (juce::jlimit (-1, maxLayerCount - 1, plan.soloLayer) + 1) << 49;
+        if (plan.graphAuthored) value |= 1ull << 52;
         return value;
     }
 
-    static Plan unpack (std::uint32_t value) noexcept
+    static Plan unpack (std::uint64_t value) noexcept
     {
         Plan plan;
-        plan.graphAuthored = (value & 0x80000000u) != 0;
+        plan.graphAuthored = (value & (1ull << 52)) != 0;
         for (int i = 0; i < maxLayerCount; ++i)
-            plan.layerOrder[(size_t) i] = (int) ((value >> (i * 3)) & 0x7u);
+            plan.layerOrder[(size_t) i] = (int) ((value >> (i * 3)) & 0x7ull);
         for (int i = 0; i < maxInstanceCount; ++i)
-            plan.parallelFx[(size_t) i] = (value & (1u << (21 + i))) != 0;
-        return plan.validPermutation() ? plan : Plan {};
+            plan.parallelFx[(size_t) i] = (value & (1ull << (21 + i))) != 0;
+        plan.maxLatencySamples = (int) ((value >> 29) & 0xfffffull);
+        plan.soloLayer = (int) ((value >> 49) & 0x7ull) - 1;
+        return plan.valid() ? plan : Plan {};
     }
 };
 }

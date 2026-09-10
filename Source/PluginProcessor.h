@@ -235,8 +235,13 @@ public:
     }
 
     bool savePreset (const juce::File&);
+    bool validateReleaseState (juce::String* reason = nullptr) const;
     void loadFactoryPreset (int index);
     void randomizePreset();
+    bool applyDirectedVariation (VariationDirection direction, float intensity, int64 seed);
+    void captureMagicOrigin();
+    bool restoreMagicOrigin();
+    bool hasMagicOrigin() const noexcept { return magicOriginSnapshot.isValid(); }
     juce::String getPresetName() const { return apvts.state.getProperty ("patchName", "Custom patch").toString(); }
     bool loadPreset (const juce::File&);
     bool exportPreviewWav (const juce::File&, float seconds = 2.5f) const;
@@ -288,6 +293,7 @@ private:
     std::atomic<int> editingLayer { -1 };
     std::atomic<std::shared_ptr<const VoiceParameters>> editingMain;
     juce::ValueTree editingMainSnapshot;
+    juce::ValueTree magicOriginSnapshot;
     juce::ValueTree snapshotCurrent() const;
     juce::ValueTree canonicalState();
     void applyEditingSnapshot (const juce::ValueTree&);

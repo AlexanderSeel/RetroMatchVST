@@ -257,7 +257,8 @@ public:
     void render (juce::AudioBuffer<float>&, juce::MidiBuffer&);
     void setRoutingPlan (const DspRouting::Plan& plan) noexcept
     {
-        routingPlan = plan.validPermutation() ? plan : DspRouting::Plan {};
+        routingPlan = plan.valid() ? plan : DspRouting::Plan {};
+        setSoloLayer (routingPlan.soloLayer);
     }
     void setStageCapture (RenderStageSnapshots* capture) noexcept { stageCapture = capture; }
     void setSoloLayer (int layer) noexcept

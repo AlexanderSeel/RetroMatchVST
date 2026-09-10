@@ -855,11 +855,35 @@ private:
         juce::PopupMenu menu;
         menu.addSectionHeader (node.title);
         menu.addItem (1, locked ? "UNLOCK POSITION" : "LOCK POSITION", true, locked);
+        const auto* modelNode = graphModel.findNode (node.id);
+        const int latency = modelNode != nullptr ? modelNode->latencySamples : 0;
+        juce::PopupMenu latencyMenu;
+        static constexpr int latencyPresets[] { 0, 64, 128, 256, 512 };
+        for (const int samples : latencyPresets)
+            latencyMenu.addItem (100 + samples, juce::String (samples) + " samples", true, latency == samples);
+        menu.addSubMenu ("DECLARED LATENCY", latencyMenu);
         juce::Component::SafePointer<SignalLabPage> safeThis (this);
         const auto id = node.id;
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safeThis, id] (int result)
         {
-            if (safeThis != nullptr && result == 1) safeThis->toggleNodeLock (id);
+            if (safeThis == nullptr) return;
+            if (result == 1)
+            {
+                safeThis->toggleNodeLock (id);
+                return;
+            }
+            if (result < 100 || result > 612) return;
+            const int samples = result - 100;
+            juce::String reason;
+            if (! safeThis->graphModel.setNodeLatencySamples (id, samples, &reason))
+            {
+                safeThis->graphValidationMessage = reason;
+                safeThis->repaint();
+                return;
+            }
+            safeThis->stageGraphStateForPersistence();
+            safeThis->flushGraphStatePersistence();
+            safeThis->repaint();
         });
     }
 
@@ -867,11 +891,10 @@ private:
     {
         if (layer >= 0 && ! proc.hasLayer (layer)) return;
         juce::PopupMenu menu;
-        const bool selected = layer >= 0 && proc.getSoloLayer() == layer;
+        const bool selected = proc.getSoloLayer() == layer;
         const bool soloActive = proc.getSoloLayer() >= 0;
         menu.addSectionHeader (layer < 0 ? "MAIN INSTANCE" : "INSTANCE " + juce::String (layer + 2));
-        menu.addItem (1, selected || (layer < 0 && soloActive) ? "CLEAR SOLO" : "SOLO THIS INSTANCE",
-                      layer >= 0 || soloActive, selected);
+        menu.addItem (1, selected ? "CLEAR SOLO" : "SOLO THIS INSTANCE", ! selected || soloActive, selected);
         menu.addItem (2, "CLEAR ALL SOLO", true, soloActive);
         const auto nodeId = "L" + juce::String (layer) + ":S0";
         const bool locked = restoredNodeLocks.find (nodeId.toStdString()) != restoredNodeLocks.end();
@@ -880,8 +903,27 @@ private:
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safeThis, layer, nodeId] (int result)
         {
             if (safeThis == nullptr) return;
-            if (result == 1) safeThis->proc.setSoloLayer (layer < 0 || safeThis->proc.getSoloLayer() == layer ? -1 : layer);
-            else if (result == 2) safeThis->proc.setSoloLayer (-1);
+            if (result == 1)
+            {
+                const int requested = safeThis->proc.getSoloLayer() == layer ? -1 : layer;
+                juce::String reason;
+                if (safeThis->graphModel.setNodeSolo (nodeId, requested >= 0, &reason))
+                {
+                    safeThis->proc.setPatchGraphDocument (safeThis->graphModel);
+                    safeThis->proc.setSoloLayer (requested);
+                }
+                else safeThis->graphValidationMessage = reason;
+            }
+            else if (result == 2)
+            {
+                juce::String reason;
+                if (safeThis->graphModel.setNodeSolo (nodeId, false, &reason))
+                {
+                    safeThis->proc.setPatchGraphDocument (safeThis->graphModel);
+                    safeThis->proc.setSoloLayer (-1);
+                }
+                else safeThis->graphValidationMessage = reason;
+            }
             else if (result == 3) safeThis->toggleNodeLock (nodeId);
             safeThis->repaint();
         });
@@ -943,8 +985,14 @@ private:
         if (node.role != NodeRole::stage || node.stage != 4) return;
         mode = juce::jlimit (0, 1, mode);
         pushUndoState();
+        juce::String routingReason;
+        if (! graphModel.setNodeRoutingMode (node.id, mode, &routingReason))
+        {
+            graphValidationMessage = routingReason;
+            repaint();
+            return;
+        }
         restoredNodeRoutingModes[node.id.toStdString()] = mode;
-        if (auto* model = graphModel.findNode (node.id)) model->routingMode = mode;
         for (auto& live : nodes)
             if (live.id == node.id)
             {
