@@ -128,6 +128,21 @@ int main (int argc, char** argv)
         const auto globalDrivenSignature = EffectChainProbe::probe (probeGlobal);
         if (globalDrivenSignature.nonlinear <= globalDrySignature.nonlinear)
             return fail ("two-tone FX probe ignored post-sum global saturation");
+
+        SoundFeatures dynamicsReference;
+        dynamicsReference.rms = 0.25f;
+        dynamicsReference.peak = 0.50f; // crest = 2 -> (2 - 1) / 3.5
+        dynamicsReference.transientScore = 0.0f;
+        dynamicsReference.sustainLevel = 1.0f;
+        const auto dynamicsA = EffectChainProbe::referenceTarget (dynamicsReference);
+        if (std::abs (dynamicsA.dynamics - (1.0f / 3.5f)) > 1.0e-5f)
+            return fail ("FX probe reference dynamics did not use peak/RMS crest factor");
+
+        dynamicsReference.transientScore = 1.0f;
+        dynamicsReference.sustainLevel = 0.0f;
+        const auto dynamicsB = EffectChainProbe::referenceTarget (dynamicsReference);
+        if (std::abs (dynamicsA.dynamics - dynamicsB.dynamics) > 1.0e-6f)
+            return fail ("FX probe reference dynamics still depends on transient/sustain surrogate metadata");
     }
     {
         SoundFeatures guitar;

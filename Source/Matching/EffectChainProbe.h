@@ -19,6 +19,13 @@ struct EffectProbeSignature
 class EffectChainProbe
 {
 public:
+    static float crestDynamics (float peak, float rms) noexcept
+    {
+        if (peak <= 1.0e-6f || rms <= 1.0e-6f) return 0.0f;
+        const float crest = peak / juce::jmax (1.0e-5f, rms);
+        return juce::jlimit (0.0f, 1.0f, (crest - 1.0f) / 3.5f);
+    }
+
     static EffectProbeSignature referenceTarget (const SoundFeatures& f)
     {
         EffectProbeSignature s;
@@ -46,7 +53,7 @@ public:
         s.nonlinear = juce::jlimit (0.0f, 1.0f,
                                    f.inharmonicity * 1.55f + f.zeroCrossingRate * 0.40f
                                  + juce::jmax (0.0f, f.highEnergyRatio - 0.10f) * (1.0f - f.spectralFlatness) * 0.80f);
-        s.dynamics = juce::jlimit (0.0f, 1.0f, f.transientScore * 0.68f + (1.0f - f.sustainLevel) * 0.32f);
+        s.dynamics = crestDynamics (f.peak, f.rms);
         return s;
     }
 
@@ -148,8 +155,7 @@ public:
         for (auto& energy : s.detailedBands) energy = (float) (energy / detailedSum);
 
         const float activeRms = std::sqrt ((float) (activeSq / noiseSamples));
-        const float crest = peak / juce::jmax (1.0e-5f, activeRms);
-        s.dynamics = juce::jlimit (0.0f, 1.0f, (crest - 1.0f) / 3.5f);
+        s.dynamics = crestDynamics (peak, activeRms);
 
         // Pass 2: an impulse followed by silence. This exposes echoes, reverb decay and
         // stereo spreading independently from the synthesized note envelope.
