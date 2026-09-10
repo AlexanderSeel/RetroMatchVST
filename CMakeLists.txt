@@ -172,6 +172,29 @@ if(RETROMATCH_BUILD_TESTS)
     juce::juce_recommended_warning_flags)
   add_test(NAME RetroMatchRenderTelemetry COMMAND RetroMatchTelemetryTests)
 
+  juce_add_console_app(RetroMatchPhaseATests PRODUCT_NAME "RetroMatch Phase A Safety Tests")
+  juce_generate_juce_header(RetroMatchPhaseATests)
+  target_sources(RetroMatchPhaseATests PRIVATE
+    Tests/PhaseASafetyTests.cpp
+    Tests/ReferenceFixtureCorpus.cpp
+    Source/Engine/SynthEngine.cpp
+    Source/Engine/ReferenceWavetable.cpp
+    Source/Analysis/SampleAnalyzer.cpp
+    Source/Matching/OfflineRenderer.cpp)
+  target_compile_definitions(RetroMatchPhaseATests PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0)
+  target_link_libraries(RetroMatchPhaseATests PRIVATE
+    juce::juce_data_structures
+    juce::juce_audio_basics
+    juce::juce_audio_formats
+    juce::juce_dsp
+    juce::juce_core
+    PUBLIC
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+  add_test(NAME RetroMatchPhaseASafety COMMAND RetroMatchPhaseATests)
+
   add_executable(RetroMatchSequencerTests
     Tests/SequencerCoreTests.cpp
     Source/Sequencer/StepSequencer.cpp)
