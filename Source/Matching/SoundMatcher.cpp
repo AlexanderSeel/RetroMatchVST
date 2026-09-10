@@ -131,8 +131,13 @@ void enforceSelfTerminatingTree (VoiceParameters& p, const SoundFeatures& refere
     for (auto& layer : p.layers)
     {
         if (! layer) continue;
-        layer = std::make_shared<VoiceParameters> (*layer);
-        enforceSelfTerminatingTree (*layer, reference, depth + 1);
+
+        // Stored rack layers are shared_ptr<const VoiceParameters>. Normalise a mutable
+        // clone first, then publish it back as const so candidate trees remain immutable
+        // to their consumers and no shared layer is modified through another candidate.
+        auto mutableLayer = std::make_shared<VoiceParameters> (*layer);
+        enforceSelfTerminatingTree (*mutableLayer, reference, depth + 1);
+        layer = std::move (mutableLayer);
     }
 }
 
