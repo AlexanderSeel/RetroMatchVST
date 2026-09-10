@@ -1,2 +1,3 @@
-CI verification trigger for commit 92d2c196d9b38198e6926fbf7faaa11618fba207.
-Source fixes: JUCE ThreadPool addJob void API, SynthEngine parallel FX local block state, and MSVC warning cleanup.
+CI verification trigger for main after the one-shot reference-lifecycle integration.
+Current source fix: recursive lifecycle normalization now mutates a private VoiceParameters copy before assigning it back to the immutable shared_ptr<const VoiceParameters> rack layer.
+Validate Windows and macOS native plug-in builds plus DSP tests.
