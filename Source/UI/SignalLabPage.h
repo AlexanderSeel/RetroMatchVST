@@ -29,7 +29,17 @@ public:
         for (const auto& edge : restored.edges)
             if (edge.sequence >= 0) restoredEdgeSequences[edge.id.toStdString()] = edge.sequence;
         setWantsKeyboardFocus (true);
+        bigViewNeedsFit = mapOnlyMode;
         startTimerHz (30);
+    }
+
+    void resized() override
+    {
+        if (mapOnlyMode)
+        {
+            bigViewNeedsFit = true;
+            repaint();
+        }
     }
 
     void paint (juce::Graphics& g) override
@@ -373,7 +383,7 @@ private:
     float graphZoom = 0.82f;
     juce::Point<float> graphPan { 18.0f, 18.0f };
     bool panning = false, draggingNode = false, snapToGrid = true, connecting = false;
-    bool restoringHistory = false, dragHistoryCaptured = false;
+    bool restoringHistory = false, dragHistoryCaptured = false, bigViewNeedsFit = false;
     juce::Point<float> panDragStart, panAtDragStart, nodeDragStartWorld, nodeOffsetAtDragStart, connectionDragPoint;
     std::string selectedNodeId, draggingNodeId, selectedEdgeKey, connectionFromId, hoverTargetId;
     int reconnectLayer = -2, reconnectSlot = -1, reconnectSource = (int) ModSource::none;
@@ -1021,20 +1031,21 @@ private:
     void showPatchMapOverlay()
     {
         if (mapOnlyMode) return;
+
+        // LaunchOptions sizes the top-level window around a fixed-size content component.
+        // For the large map we need the opposite relationship: the SignalLabPage must follow
+        // every dialog resize so its toolbar/viewport never live outside the visible window.
         auto* content = new SignalLabPage (proc, true);
-        content->setSize (1320, 760);
-        juce::DialogWindow::LaunchOptions options;
-        options.content.setOwned (content);
-        options.dialogTitle = "RM-01 / LARGE PATCH MAP";
-        options.dialogBackgroundColour = juce::Colour (0xff101719);
-        options.escapeKeyTriggersCloseButton = true;
-        options.useNativeTitleBar = false;
-        options.resizable = true;
-        if (auto* dialogWindow = options.launchAsync())
-        {
-            dialogWindow->setResizeLimits (900, 540, 2400, 1600);
-            dialogWindow->centreWithSize (1320, 760);
-        }
+        const float desktopScale = juce::Component::getApproximateScaleFactorForComponent (this);
+        auto* dialogWindow = new juce::DialogWindow ("RM-01 / LARGE PATCH MAP",
+                                                     juce::Colour (0xff101719), true, true, desktopScale);
+        dialogWindow->setUsingNativeTitleBar (false);
+        dialogWindow->setResizable (true, false);
+        dialogWindow->setResizeLimits (900, 540, 2400, 1600);
+        dialogWindow->setContentOwned (content, false);
+        dialogWindow->centreWithSize (1320, 760);
+        dialogWindow->setVisible (true);
+        dialogWindow->enterModalState (true, nullptr, true);
     }
 
     void setZoomAround (juce::Point<float> screenPoint, float requestedZoom)
@@ -1047,13 +1058,12 @@ private:
         repaint();
     }
 
-    void fitToView()
+    void applyFitToView()
     {
         if (nodes.empty() || graphViewport.isEmpty())
         {
             graphZoom = 0.82f;
             graphPan = { 18.0f, 18.0f };
-            repaint();
             return;
         }
         auto world = nodes.front().worldBounds;
@@ -1063,6 +1073,11 @@ private:
         const float sy = graphViewport.getHeight() / juce::jmax (1.0f, world.getHeight());
         graphZoom = juce::jlimit (kReadableGraphZoom, 1.65f, juce::jmin (sx, sy));
         graphPan = graphViewport.getCentre() - graphViewport.getPosition() - world.getCentre() * graphZoom;
+    }
+
+    void fitToView()
+    {
+        applyFitToView();
         stageGraphStateForPersistence();
         repaint();
     }
@@ -1477,7 +1492,7 @@ private:
     void drawToolbar (juce::Graphics& g, juce::Rectangle<float> header, juce::Colour led, juce::Colour accent)
     {
         toolbarButtons.clear();
-        const bool compactHeader = header.getHeight() > 40.0f;
+        const bool compactHeader = mapOnlyMode || header.getHeight() > 40.0f;
         const bool veryNarrow = header.getWidth() < 620.0f;
         const float gap = veryNarrow ? 3.0f : 4.0f;
         const float h = compactHeader ? 22.0f : 20.0f;
@@ -1534,7 +1549,7 @@ private:
     {
         g.setColour (juce::Colour (0xff03080b)); g.fillRoundedRectangle (bounds, 7);
         g.setColour (juce::Colour (0xff506166)); g.drawRoundedRectangle (bounds, 7, 1);
-        const float headerHeight = bounds.getWidth() < 980.0f ? 56.0f : 30.0f;
+        const float headerHeight = mapOnlyMode ? 58.0f : (bounds.getWidth() < 980.0f ? 56.0f : 30.0f);
         auto header = bounds.removeFromTop (headerHeight);
         graphViewport = bounds.reduced (4);
 
@@ -1638,6 +1653,12 @@ private:
                                    juce::String (proc.getEffectiveBpm(), 1) + " BPM", "MOD", -2, accent,
                                    false, true, NodeRole::clock);
         for (const auto mod : modNodes) connect (clock, mod, EdgeKind::clock);
+
+        if (mapOnlyMode && bigViewNeedsFit)
+        {
+            applyFitToView();
+            bigViewNeedsFit = false;
+        }
 
         drawToolbar (g, header, led, accent);
         g.saveState(); g.reduceClipRegion (graphViewport.toNearestInt());
