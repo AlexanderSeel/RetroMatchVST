@@ -97,6 +97,44 @@ int main()
     if (badScore.tailSilenceSimilarity >= goodScore.tailSilenceSimilarity - 0.40f)
         return fail ("sustained and self-terminating candidates were not separated by tail scoring");
 
+    auto layeredCandidate = seed;
+    layeredCandidate.sustain = 0.66f;
+    layeredCandidate.mseg.enabled = true;
+    layeredCandidate.mseg.loopEnabled = true;
+    layeredCandidate.delayMix = 0.35f;
+    layeredCandidate.reverbMix = 0.30f;
+    layeredCandidate.globalFxModules[0].type = 8;
+    layeredCandidate.globalFxModules[0].mix = 0.45f;
+    auto child = std::make_shared<VoiceParameters> (layeredCandidate);
+    child->layers.fill (nullptr);
+    child->sustain = 0.74f;
+    child->mseg.enabled = true;
+    child->mseg.loopEnabled = true;
+    child->delayMix = 0.40f;
+    child->reverbMix = 0.32f;
+    child->fxModules[0].type = 9;
+    child->fxModules[0].mix = 0.50f;
+    layeredCandidate.layers[0] = std::move (child);
+
+    SoundMatcher::enforceReferenceLifecycle (reference, layeredCandidate);
+    if (layeredCandidate.sustain > 1.0e-6f || layeredCandidate.mseg.loopEnabled
+        || layeredCandidate.delayMix > 1.0e-6f || layeredCandidate.reverbMix > 1.0e-6f
+        || layeredCandidate.globalFxModules[0].type == 8 || layeredCandidate.globalFxModules[0].type == 9)
+        return fail ("root rack violated the enforced one-shot lifecycle");
+    if (! layeredCandidate.layers[0])
+        return fail ("lifecycle enforcement unexpectedly removed a rack layer");
+    const auto& constrainedChild = *layeredCandidate.layers[0];
+    if (constrainedChild.sustain > 1.0e-6f || constrainedChild.mseg.loopEnabled
+        || constrainedChild.delayMix > 1.0e-6f || constrainedChild.reverbMix > 1.0e-6f
+        || constrainedChild.fxModules[0].type == 8 || constrainedChild.fxModules[0].type == 9)
+        return fail ("child rack voice violated the enforced one-shot lifecycle");
+
+    const auto heldLayered = OfflineRenderer::renderPatch (layeredCandidate, sampleRate, 1.30f, fundamental, 128, {}, true);
+    const float layeredBodyRms = rmsBetween (heldLayered, 0, bodyEnd);
+    const float layeredTailRms = rmsBetween (heldLayered, tailStart, heldLayered.getNumSamples());
+    if (layeredBodyRms <= 1.0e-5f || layeredTailRms > layeredBodyRms * 0.03f + 1.0e-5f)
+        return fail ("constrained layered one-shot did not self-terminate while note remained held");
+
     const auto refined = SoundMatcher::refineFit (reference, sustainedCandidate, settings);
     if (refined.params.sustain > 1.0e-6f)
         return fail ("optimizer mutated a one-shot back into keyboard sustain");

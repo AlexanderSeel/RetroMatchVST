@@ -333,6 +333,9 @@ AIVariantBatch AISeedProvider::generateVariants (const SoundFeatures& reference,
         auto params = base;
         applySuggestion (params, *suggestion);
         params.referenceWavetable = base.referenceWavetable;
+        // Provider JSON is only a proposal. Reference lifecycle is authoritative so an AI
+        // variant cannot turn a detected one-shot back into a keyboard-sustained patch.
+        SoundMatcher::enforceReferenceLifecycle (reference, params);
         auto evaluated = SoundMatcher::evaluateFit (reference, params, matchSettings);
         evaluated.explanation = "AI " + stringProperty (*suggestion, "name", juce::String::charToString ((juce_wchar) ('A' + i)))
                               + ": " + stringProperty (*suggestion, "note", "Provider-generated seed, locally rendered and scored.");

@@ -153,6 +153,10 @@ VoiceParameters makeEmbeddedResynthRack (const MatchResult& mainResult, const So
         rack.layerOperation[(size_t) layer] = 0;
         rack.layerAmount[(size_t) layer] = 0.78f;
     }
+
+    // Layer roles are allowed to add motion/space for sustained references, but a detected
+    // one-shot must remain self-ending as a complete instrument, not only as its main voice.
+    SoundMatcher::enforceReferenceLifecycle (reference, rack);
     return rack;
 }
 
@@ -347,6 +351,10 @@ VoiceParameters mutateGoldRack (const VoiceParameters& source, const SoundFeatur
             rack.msegTarget = usefulMsegTargets[random.nextInt ((int) std::size (usefulMsegTargets))];
         }
     }
+
+    // Evolution may mutate MSEG/FX topology after the initial rack was made. Re-apply the
+    // lifecycle constraint before scoring so mutation cannot resurrect a held tail.
+    SoundMatcher::enforceReferenceLifecycle (reference, rack);
     return rack;
 }
 

@@ -54,6 +54,13 @@ public:
     }
     static MatchResult evaluateFit (const SoundFeatures& reference, const VoiceParameters& params,
                                     const MatchSettings& settings = {});
+
+    // Reference lifecycle is a hard generation invariant, separate from similarity scoring.
+    // This is intentionally public so AI variants and layered/GOLD racks cannot reintroduce
+    // keyboard sustain, looping amplitude motion or time-based tails after matching.
+    static bool referenceSelfTerminates (const SoundFeatures& reference);
+    static void enforceReferenceLifecycle (const SoundFeatures& reference, VoiceParameters& params);
+
     static MatchResult refineFit (const SoundFeatures& reference,
                                   const VoiceParameters& seed,
                                   const MatchSettings& settings = {},

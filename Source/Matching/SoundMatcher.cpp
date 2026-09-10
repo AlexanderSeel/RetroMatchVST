@@ -121,6 +121,21 @@ void enforceSelfTerminatingEnvelope (VoiceParameters& p, const SoundFeatures& re
     removeTimeBasedTailEffects (p);
 }
 
+void enforceSelfTerminatingTree (VoiceParameters& p, const SoundFeatures& reference, int depth = 0)
+{
+    enforceSelfTerminatingEnvelope (p, reference);
+    if (depth >= VoiceParameters::extraLayerCount) return;
+
+    // VoiceParameters copies share layer pointers. Clone before normalising so evaluating
+    // or constraining one generated rack never mutates another candidate through aliasing.
+    for (auto& layer : p.layers)
+    {
+        if (! layer) continue;
+        layer = std::make_shared<VoiceParameters> (*layer);
+        enforceSelfTerminatingTree (*layer, reference, depth + 1);
+    }
+}
+
 float rmsBetween (const juce::AudioBuffer<float>& audio, int startSample, int endSample)
 {
     startSample = juce::jlimit (0, audio.getNumSamples(), startSample);
@@ -142,12 +157,23 @@ float rmsBetween (const juce::AudioBuffer<float>& audio, int startSample, int en
 }
 }
 
+bool SoundMatcher::referenceSelfTerminates (const SoundFeatures& reference)
+{
+    return isSelfTerminatingReference (reference);
+}
+
+void SoundMatcher::enforceReferenceLifecycle (const SoundFeatures& reference, VoiceParameters& params)
+{
+    if (! isSelfTerminatingReference (reference)) return;
+    enforceSelfTerminatingTree (params, reference);
+}
+
 MatchResult SoundMatcher::initialFit (const SoundFeatures& reference)
 {
     auto result = initialFitCore (reference);
     if (isSelfTerminatingReference (reference))
     {
-        enforceSelfTerminatingEnvelope (result.params, reference);
+        enforceReferenceLifecycle (reference, result.params);
         result.explanation += " Self-terminating reference: sustain is zero, decay follows the audible source duration, FM operator sustains are zero and amplitude motion cannot loop.";
     }
     return result;
@@ -233,7 +259,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
 
     auto profiledSeed = seed;
     applyAlgorithmProfile (profiledSeed, settings.algorithm, reference);
-    enforceSelfTerminatingEnvelope (profiledSeed, reference);
+    enforceReferenceLifecycle (reference, profiledSeed);
     insertElite (evaluateFit (reference, profiledSeed, settings));
     int evaluated = 1;
     const int total = juce::jmax (1, 1 + settings.topologyTrials + settings.iterations);
@@ -272,7 +298,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
         }
         applyAlgorithmProfile (candidate, settings.algorithm, reference);
         applyLocks (candidate, seed, settings);
-        enforceSelfTerminatingEnvelope (candidate, reference);
+        enforceReferenceLifecycle (reference, candidate);
         insertElite (evaluateFit (reference, candidate, settings));
         ++evaluated;
         report();
@@ -334,7 +360,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
 
         applyAlgorithmProfile (candidate, settings.algorithm, reference);
         applyLocks (candidate, seed, settings);
-        enforceSelfTerminatingEnvelope (candidate, reference);
+        enforceReferenceLifecycle (reference, candidate);
         insertElite (evaluateFit (reference, candidate, settings));
         ++evaluated;
         const float nowBest = elite.front().similarity.total;
