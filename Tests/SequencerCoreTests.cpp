@@ -155,6 +155,75 @@ int main()
         Core core;
         core.prepare (48000.0);
         auto settings = internalPatternSettings();
+        settings.mode = Mode::up;
+        settings.length = 4;
+        settings.octaveRange = 2;
+        core.setSettings (settings);
+        core.noteOn (64);
+        core.noteOn (60);
+        Trigger events[4] {};
+        Transport transport;
+        const int count = core.processBlock (24000, transport, events, 4);
+        if (count != 4 || events[0].midiNote != 60 || events[1].midiNote != 64
+            || events[2].midiNote != 72 || events[3].midiNote != 76)
+            return fail ("arpeggiator octave-range control does not extend held notes across octaves");
+    }
+
+    {
+        Core core;
+        core.prepare (48000.0);
+        auto settings = internalPatternSettings();
+        settings.mode = Mode::up;
+        settings.length = 4;
+        settings.restartMode = RestartMode::firstNote;
+        core.setSettings (settings);
+        core.noteOn (60);
+        core.noteOn (64);
+        Trigger events[4] {};
+        Transport transport;
+        if (core.processBlock (12000, transport, events, 4) != 2
+            || events[0].midiNote != 60 || events[1].midiNote != 64)
+            return fail ("first-note restart fixture did not establish its initial phrase");
+        core.allNotesOff();
+        core.noteOn (67);
+        core.noteOn (71);
+        if (core.processBlock (12000, transport, events, 4) != 2
+            || events[0].midiNote != 67 || events[1].midiNote != 71
+            || events[0].stepIndex != 0)
+            return fail ("FIRST NOTE restart did not reset the arpeggiator phrase and pattern position");
+    }
+
+    {
+        Core core;
+        core.prepare (48000.0);
+        auto settings = internalPatternSettings();
+        settings.clockSource = ClockSource::host;
+        settings.restartMode = RestartMode::transportStart;
+        settings.length = 4;
+        core.setSettings (settings);
+        for (int i = 0; i < 4; ++i)
+        {
+            Step step;
+            step.semitone = i * 2;
+            core.setStep (i, step);
+        }
+        Trigger events[4] {};
+        Transport host;
+        host.playing = true;
+        host.bpm = 120.0;
+        if (core.processBlock (12000, host, events, 4) != 2
+            || events[0].stepIndex != 0 || events[1].stepIndex != 1)
+            return fail ("host transport restart fixture did not advance before restart");
+        host.justStarted = true;
+        if (core.processBlock (6000, host, events, 4) != 1
+            || events[0].stepIndex != 0 || events[0].midiNote != 60)
+            return fail ("TRANSPORT restart did not reset sequence position on host start");
+    }
+
+    {
+        Core core;
+        core.prepare (48000.0);
+        auto settings = internalPatternSettings();
         settings.mode = Mode::playedOrder;
         settings.length = 3;
         settings.latch = true;
