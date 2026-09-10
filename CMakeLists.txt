@@ -155,6 +155,21 @@ if(RETROMATCH_BUILD_TESTS)
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
   add_test(NAME RetroMatchOneShot COMMAND RetroMatchOneShotTests)
+
+  juce_add_console_app(RetroMatchTelemetryTests PRODUCT_NAME "RetroMatch Render Telemetry Tests")
+  juce_generate_juce_header(RetroMatchTelemetryTests)
+  target_sources(RetroMatchTelemetryTests PRIVATE
+    Tests/RenderTelemetryTests.cpp)
+  target_compile_definitions(RetroMatchTelemetryTests PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0)
+  target_link_libraries(RetroMatchTelemetryTests PRIVATE
+    juce::juce_audio_basics
+    juce::juce_core
+    PUBLIC
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+  add_test(NAME RetroMatchRenderTelemetry COMMAND RetroMatchTelemetryTests)
 endif()
 
 option(RETROMATCH_BUILD_UI_TESTS "Build offscreen editor snapshot/lifecycle probe" OFF)
