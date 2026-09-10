@@ -12,6 +12,10 @@ struct SimilarityBreakdown
     float harmonic = 0.0f;
     float pitch = 0.0f;
     float stereo = 0.0f;
+    // Reference-relative guard against unexplained upper-band expansion. This is
+    // kept separate from the ordinary brightness similarity so callers/debug UI
+    // can distinguish timbral mismatch from suspicious harshness/alias-like energy.
+    float spectralSafety = 1.0f;
 };
 
 class SimilarityScorer
