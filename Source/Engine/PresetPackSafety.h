@@ -10,6 +10,15 @@ inline constexpr int maxAssetCount = 4096;
 inline constexpr int maxMetadataCharacters = 256;
 inline constexpr int maxTagCount = 64;
 
+enum class ImportConflictPolicy { ask, keep, replace, importAsCopy };
+enum class ImportConflictAction { importNew, keepExisting, replaceExisting, importAsCopy, needsDecision };
+
+struct ImportConflictResolution
+{
+    ImportConflictAction action = ImportConflictAction::needsDecision;
+    juce::String patchId;
+};
+
 inline bool validateManifest (const juce::var&, juce::String* reason) noexcept;
 
 struct Asset
@@ -84,6 +93,48 @@ struct Manifest
         return true;
     }
 };
+
+inline ImportConflictResolution resolveImportConflict (const juce::String& requestedPatchId,
+                                                       const juce::StringArray& existingPatchIds,
+                                                       ImportConflictPolicy policy)
+{
+    ImportConflictResolution result;
+    result.patchId = requestedPatchId.trim();
+    const bool exists = existingPatchIds.contains (result.patchId);
+    if (! exists)
+    {
+        result.action = ImportConflictAction::importNew;
+        return result;
+    }
+
+    switch (policy)
+    {
+        case ImportConflictPolicy::ask:
+            result.action = ImportConflictAction::needsDecision;
+            break;
+        case ImportConflictPolicy::keep:
+            result.action = ImportConflictAction::keepExisting;
+            break;
+        case ImportConflictPolicy::replace:
+            result.action = ImportConflictAction::replaceExisting;
+            break;
+        case ImportConflictPolicy::importAsCopy:
+        {
+            result.action = ImportConflictAction::importAsCopy;
+            for (int copy = 1; copy <= maxTagCount; ++copy)
+            {
+                const auto candidate = result.patchId + "-copy-" + juce::String (copy);
+                if (! existingPatchIds.contains (candidate))
+                {
+                    result.patchId = candidate;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    return result;
+}
 
 inline bool safeRelativePath (juce::String path) noexcept
 {

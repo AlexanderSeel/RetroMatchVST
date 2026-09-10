@@ -1,6 +1,7 @@
 #pragma once
 
 #include "StepSequencer.h"
+#include <algorithm>
 #include <array>
 
 namespace RetroMatchSequencer
@@ -32,7 +33,7 @@ inline PatternTemplate makePatternTemplate (int index) noexcept
         step.modulationProbability = 1.0f;
     };
 
-    switch (juce::jlimit (0, 7, index))
+    switch (std::clamp (index, 0, 7))
     {
         case 0:
             pattern.name = "Empty"; pattern.length = 1; return pattern;

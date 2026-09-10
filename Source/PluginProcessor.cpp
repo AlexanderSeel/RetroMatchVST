@@ -1923,6 +1923,20 @@ bool RetroMatchSynthAudioProcessor::applyDirectedVariation (VariationDirection d
         if (measured.technicalSafetyScore >= 0.0f && ! measured.technicallySafe)
             return false;
     }
+    else
+    {
+        // Magic is also available for a hand-authored patch with no reference.
+        // Render a short bounded audition so finite parameters cannot hide an
+        // unsafe rack/FX interaction.
+        const auto settings = matchSettings.bounded();
+        const float fundamental = midiNoteToHz (referenceBaseMidiNote.load (std::memory_order_relaxed));
+        const auto audition = OfflineRenderer::renderPatch (variant, settings.renderSampleRate,
+                                                             juce::jlimit (0.25f, 2.0f, settings.maxRenderSeconds),
+                                                             fundamental, 256);
+        const auto telemetry = RenderTelemetry::analyze (audition);
+        if (! telemetry.isTechnicallySafe() || telemetry.peak > 0.99f)
+            return false;
+    }
 
     magicBranchHistory.push_back (snapshotCurrent());
     if (magicBranchHistory.size() > 16) magicBranchHistory.erase (magicBranchHistory.begin());

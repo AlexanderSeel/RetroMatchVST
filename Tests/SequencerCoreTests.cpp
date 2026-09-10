@@ -1,4 +1,5 @@
 #include "../Source/Sequencer/StepSequencer.h"
+#include "../Source/Sequencer/PatternLibrary.h"
 
 #include <cmath>
 #include <iostream>
@@ -34,6 +35,31 @@ Settings internalPatternSettings()
 
 int main()
 {
+    {
+        std::array<Step, maxSteps> previous {};
+        for (int templateIndex = 0; templateIndex < patternTemplateCount; ++templateIndex)
+        {
+            const auto pattern = makePatternTemplate (templateIndex);
+            if (pattern.name == nullptr || pattern.length < 1 || pattern.length > maxSteps)
+                return fail ("pattern library returned an invalid template descriptor");
+            bool differs = templateIndex == 0;
+            for (int i = 0; i < pattern.length; ++i)
+            {
+                const auto& step = pattern.steps[(size_t) i];
+                if (step.semitone < -48 || step.semitone > 48 || step.velocity < 0.0f || step.velocity > 1.0f
+                    || step.gate < 0.02f || step.gate > 1.0f || step.probability < 0.0f || step.probability > 1.0f
+                    || step.modulationProbability < 0.0f || step.modulationProbability > 1.0f
+                    || step.ratchet < 1 || step.ratchet > 8)
+                    return fail ("pattern library escaped step safety bounds");
+                differs = differs || step.semitone != previous[(size_t) i].semitone
+                                  || step.rest != previous[(size_t) i].rest;
+            }
+            if (templateIndex > 0 && ! differs)
+                return fail ("pattern library templates are not distinct");
+            previous = pattern.steps;
+        }
+    }
+
     if (std::abs (Core::quarterNotesForDivision (Division::sixteenth) - 0.25) > 1.0e-12
         || std::abs (Core::quarterNotesForDivision (Division::eighthTriplet) - 1.0 / 3.0) > 1.0e-12
         || std::abs (Core::quarterNotesForDivision (Division::sixteenthDotted) - 0.375) > 1.0e-12)
@@ -136,6 +162,24 @@ int main()
         Core core;
         core.prepare (48000.0);
         auto settings = internalPatternSettings();
+        settings.length = 1;
+        core.setSettings (settings);
+        Step step;
+        step.modulationProbability = 0.0f;
+        step.macro = {{ 0.12f, 0.88f }};
+        core.setStep (0, step);
+        Trigger event {};
+        Transport transport;
+        if (core.processBlock (1, transport, &event, 1) != 1
+            || std::abs (event.macro[0] - 0.5f) > 1.0e-6f
+            || std::abs (event.macro[1] - 0.5f) > 1.0e-6f)
+            return fail ("modulation probability did not preserve the note while neutralizing macro lanes");
+    }
+
+    {
+        Core core;
+        core.prepare (48000.0);
+        auto settings = internalPatternSettings();
         settings.mode = Mode::up;
         settings.length = 4;
         settings.octaveRange = 1;
@@ -218,6 +262,30 @@ int main()
         if (core.processBlock (6000, host, events, 4) != 1
             || events[0].stepIndex != 0 || events[0].midiNote != 60)
             return fail ("TRANSPORT restart did not reset sequence position on host start");
+    }
+
+    {
+        Core core;
+        core.prepare (48000.0);
+        auto settings = internalPatternSettings();
+        settings.clockSource = ClockSource::host;
+        settings.restartMode = RestartMode::transportStart;
+        settings.length = 2;
+        core.setSettings (settings);
+        Transport host;
+        host.playing = true;
+        host.justStarted = true;
+        Trigger events[4] {};
+        if (core.processBlock (1, host, events, 4) != 1 || events[0].stepIndex != 0)
+            return fail ("host transport stop/resume fixture did not establish its first step");
+        host.playing = false;
+        host.justStarted = false;
+        if (core.processBlock (12000, host, events, 4) != 0)
+            return fail ("host stop did not suppress sequencer triggers");
+        host.playing = true;
+        host.justStarted = true;
+        if (core.processBlock (1, host, events, 4) != 1 || events[0].stepIndex != 0)
+            return fail ("host resume did not restart the sequencer at step zero");
     }
 
     {

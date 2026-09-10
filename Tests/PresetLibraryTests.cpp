@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "../Source/Engine/PresetLibrary.h"
+#include "../Source/Matching/GeneratedRackGainPolicy.h"
 
 #include <cmath>
 #include <iostream>
@@ -19,6 +20,17 @@ bool finite (float value) { return std::isfinite (value); }
 
 int main()
 {
+    {
+        constexpr int expectedDepths[] { 3, 4, 6, 8 };
+        for (int complexity = 0; complexity < 4; ++complexity)
+            if (GeneratedRackGainPolicy::totalInstancesForComplexity (complexity) != expectedDepths[complexity]
+                || ! GeneratedRackGainPolicy::isSupportedTotalInstances (expectedDepths[complexity]))
+                return fail ("GOLD complexity did not map deterministically to a supported rack depth");
+        for (const int unsupported : { 0, 1, 2, 5, 7, 9 })
+            if (GeneratedRackGainPolicy::isSupportedTotalInstances (unsupported))
+                return fail ("unsupported GOLD rack depth passed the depth gate");
+    }
+
     constexpr int expectedCatalogSize = 10 + FactoryPresetDesign::familyCount * FactoryPresetDesign::variationsPerFamily;
     if ((int) factoryPresetCatalog.size() != expectedCatalogSize || expectedCatalogSize < 300)
         return fail ("factory catalog does not contain the expected 300-plus presets");

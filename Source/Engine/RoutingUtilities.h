@@ -59,7 +59,50 @@ inline void mixParallel (juce::AudioBuffer<float>& destination,
         auto* output = destination.getWritePointer (channel);
         const auto* input = branch.getReadPointer (channel);
         for (int sample = 0; sample < samples; ++sample)
-            output[sample] = a * output[sample] + b * input[sample];
+        {
+            const float destinationSample = std::isfinite (output[sample]) ? output[sample] : 0.0f;
+            const float branchSample = std::isfinite (input[sample]) ? input[sample] : 0.0f;
+            const float result = a * destinationSample + b * branchSample;
+            output[sample] = std::isfinite (result) ? result : 0.0f;
+        }
+    }
+}
+
+// Allocation-free layer combine used by both ordinary and generated racks.
+// Operation values match PatchGraph/SynthEngine's bounded combine contract:
+// 0 additive, 1 replacement/crossfade, 2 subtract, 3 multiply, 4 safe divide.
+inline void mixLayer (juce::AudioBuffer<float>& destination,
+                      const juce::AudioBuffer<float>& layer,
+                      float gain, float pan, float amount, int operation) noexcept
+{
+    const float safeGain = boundedGain (gain);
+    const float safeAmount = juce::jlimit (0.0f, 1.0f, std::isfinite (amount) ? amount : 0.0f);
+    const float safePan = boundedPan (pan);
+    const int channels = juce::jmin (destination.getNumChannels(), layer.getNumChannels());
+    const int samples = juce::jmin (destination.getNumSamples(), layer.getNumSamples());
+    for (int channel = 0; channel < channels; ++channel)
+    {
+        const float balance = channel == 0 ? leftBalance (safePan) : rightBalance (safePan);
+        const float scaledGain = safeGain * balance;
+        auto* output = destination.getWritePointer (channel);
+        const auto* input = layer.getReadPointer (channel);
+        for (int sample = 0; sample < samples; ++sample)
+        {
+            const float a = std::isfinite (output[sample]) ? output[sample] : 0.0f;
+            const float source = std::isfinite (input[sample]) ? input[sample] : 0.0f;
+            const float b = source * scaledGain;
+            float combined = a + b;
+            switch (operation)
+            {
+                case 1: combined = b; break;
+                case 2: combined = a - b; break;
+                case 3: combined = a * b; break;
+                case 4: combined = std::tanh (a * b / (b * b + 0.01f)); break;
+                default: break;
+            }
+            const float result = a + safeAmount * (combined - a);
+            output[sample] = std::isfinite (result) ? result : 0.0f;
+        }
     }
 }
 

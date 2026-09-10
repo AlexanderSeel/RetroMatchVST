@@ -83,6 +83,16 @@ int main()
     if (validateManifest (oversized, nullptr))
         return fail ("oversized metadata passed manifest validation");
 
+    const juce::StringArray existingIds { "patch-001", "patch-001-copy-1" };
+    if (resolveImportConflict ("new-patch", existingIds, ImportConflictPolicy::ask).action != ImportConflictAction::importNew
+        || resolveImportConflict ("patch-001", existingIds, ImportConflictPolicy::ask).action != ImportConflictAction::needsDecision
+        || resolveImportConflict ("patch-001", existingIds, ImportConflictPolicy::keep).action != ImportConflictAction::keepExisting
+        || resolveImportConflict ("patch-001", existingIds, ImportConflictPolicy::replace).action != ImportConflictAction::replaceExisting)
+        return fail ("pack conflict policy did not return the requested deterministic action");
+    const auto copied = resolveImportConflict ("patch-001", existingIds, ImportConflictPolicy::importAsCopy);
+    if (copied.action != ImportConflictAction::importAsCopy || copied.patchId != "patch-001-copy-2")
+        return fail ("import-as-copy did not choose a unique deterministic patch ID");
+
     root.deleteRecursively();
     std::cout << "Preset pack safety tests passed.\n";
     return 0;

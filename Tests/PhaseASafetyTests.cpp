@@ -235,6 +235,25 @@ int main()
     if (! layeredTelemetry.isTechnicallySafe() || layeredTelemetry.peak > 0.98f || layeredTelemetry.rms <= 0.01f)
         return fail ("gain-budgeted additive rack is not rendered headroom-safe");
 
+    SynthEngine layeredLiveEngine;
+    layeredLiveEngine.setRandomSeed ((int64) 0x524d534f);
+    layeredLiveEngine.prepare (sampleRate, 256, 2, false);
+    layeredLiveEngine.setParameters (generatedRack);
+    juce::AudioBuffer<float> layeredLive (2, layered.getNumSamples());
+    layeredLive.clear();
+    juce::MidiBuffer layeredMidi;
+    layeredMidi.addEvent (juce::MidiMessage::noteOn (1, 57, (juce::uint8) 108), 0);
+    layeredLiveEngine.render (layeredLive, layeredMidi);
+    const auto layeredLiveTelemetry = RenderTelemetry::analyze (layeredLive);
+    float layeredLiveOfflineDifference = 0.0f;
+    for (int ch = 0; ch < layeredLive.getNumChannels(); ++ch)
+        for (int i = 0; i < layeredLive.getNumSamples(); ++i)
+            layeredLiveOfflineDifference = juce::jmax (layeredLiveOfflineDifference,
+                                                       std::abs (layeredLive.getSample (ch, i) - layered.getSample (ch, i)));
+    if (! layeredLiveTelemetry.isTechnicallySafe() || layeredLiveTelemetry.peak > 0.98f
+        || layeredLiveOfflineDifference > 1.0e-6f)
+        return fail ("offline and live renders diverged or lost headroom for the generated multilayer rack");
+
     auto nonAdditive = cleanPatch;
     nonAdditive.layers[0] = std::make_shared<VoiceParameters> (cleanPatch);
     nonAdditive.layerGain[0] = 1.0f;

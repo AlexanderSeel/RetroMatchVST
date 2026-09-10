@@ -6,11 +6,13 @@
 #include "../Source/Engine/ReferenceWavetable.h"
 #include "../Source/Engine/PresetLibrary.h"
 #include "../Source/Matching/OfflineRenderer.h"
+#include "../Source/Matching/RenderTelemetry.h"
 #include "../Source/Matching/SoundMatcher.h"
 #include "../Source/Matching/EffectChainProbe.h"
 #include "../Source/Matching/ResynthesisAdvisor.h"
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace
 {
@@ -98,6 +100,42 @@ int main (int argc, char** argv)
         const auto snapshot = published.snapshot();
         if (snapshot.layerOrder != restoredCompiled.plan.layerOrder || snapshot.parallelFx != restoredCompiled.plan.parallelFx || ! snapshot.graphAuthored)
             return fail ("atomic routing plan publication changed the compiled topology");
+
+        for (int iteration = 0; iteration < 4096; ++iteration)
+        {
+            auto stressPlan = restoredCompiled.plan;
+            const int first = iteration % DspRouting::maxLayerCount;
+            const int second = (iteration * 3 + 1) % DspRouting::maxLayerCount;
+            std::swap (stressPlan.layerOrder[(size_t) first], stressPlan.layerOrder[(size_t) second]);
+            stressPlan.parallelFx[(size_t) (iteration % DspRouting::maxInstanceCount)] = (iteration & 1) != 0;
+            stressPlan.soloLayer = (iteration % 11 == 0) ? -1 : iteration % DspRouting::maxLayerCount;
+            stressPlan.graphAuthored = true;
+            if (! stressPlan.valid()) return fail ("graph stress fixture generated an invalid routing plan");
+            published.publish (stressPlan);
+            const auto stressSnapshot = published.snapshot();
+            if (! stressSnapshot.valid() || stressSnapshot.layerOrder != stressPlan.layerOrder
+                || stressSnapshot.parallelFx != stressPlan.parallelFx || stressSnapshot.soloLayer != stressPlan.soloLayer)
+                return fail ("atomic routing publication lost a valid graph edit during stress coverage");
+        }
+    }
+    {
+        juce::AudioBuffer<float> destination (2, 4), layer (2, 4);
+        destination.setSample (0, 0, std::numeric_limits<float>::quiet_NaN());
+        destination.setSample (1, 1, std::numeric_limits<float>::infinity());
+        layer.setSample (0, 2, std::numeric_limits<float>::quiet_NaN());
+        layer.setSample (1, 3, -std::numeric_limits<float>::infinity());
+        RoutingUtilities::mixLayer (destination, layer, std::numeric_limits<float>::infinity(),
+                                     std::numeric_limits<float>::quiet_NaN(), 2.0f, 4);
+        if (! finiteAudio (destination))
+            return fail ("routing layer utility propagated non-finite input or controls");
+
+        juce::AudioBuffer<float> branch (2, 4);
+        branch.setSample (0, 0, std::numeric_limits<float>::quiet_NaN());
+        branch.setSample (1, 1, -std::numeric_limits<float>::infinity());
+        destination.setSample (0, 3, std::numeric_limits<float>::infinity());
+        RoutingUtilities::mixParallel (destination, branch, std::numeric_limits<float>::quiet_NaN(), 2.0f);
+        if (! finiteAudio (destination))
+            return fail ("parallel routing utility propagated non-finite input or controls");
     }
     {
         VoiceParameters fullRack;
@@ -317,7 +355,9 @@ int main (int argc, char** argv)
         for (int i = 0; i < (int) factoryPresetCatalog.size(); ++i)
         {
             const auto audio = OfflineRenderer::renderPatch (makeFactoryPreset (i), 22050, 0.65f, 220);
-            if (! finiteAudio (audio) || audio.getMagnitude (0, audio.getNumSamples()) < 0.001f)
+            const auto telemetry = RenderTelemetry::analyze (audio);
+            if (! finiteAudio (audio) || ! telemetry.isTechnicallySafe() || telemetry.peak > 0.99f
+                || audio.getMagnitude (0, audio.getNumSamples()) < 0.001f)
                 return fail ("factory preset rendered silence or invalid audio");
         }
     }

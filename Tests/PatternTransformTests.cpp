@@ -21,6 +21,7 @@ bool sameStep (const Step& a, const Step& b)
         && std::abs (a.velocity - b.velocity) < 1.0e-6f
         && std::abs (a.gate - b.gate) < 1.0e-6f
         && std::abs (a.probability - b.probability) < 1.0e-6f
+        && std::abs (a.modulationProbability - b.modulationProbability) < 1.0e-6f
         && a.ratchet == b.ratchet
         && std::abs (a.microTiming - b.microTiming) < 1.0e-6f
         && a.glide == b.glide && a.macro == b.macro;
