@@ -1,0 +1,48 @@
+name: Apply Phase A match quality recovery
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-phase-a-match-quality-20260910.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  recover-match-quality:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate patch script
+        shell: pwsh
+        run: python -m py_compile scripts/apply-phase-a-match-quality-20260910.py
+      - name: Apply DSP recovery patch
+        shell: pwsh
+        run: python scripts/apply-phase-a-match-quality-20260910.py
+      - name: Static source integrity
+        shell: pwsh
+        run: python scripts/static-check.py
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build-phase-a -A x64 -DRETROMATCH_COPY_PLUGIN=OFF -DRETROMATCH_BUILD_TESTS=ON
+      - name: Build plug-in
+        shell: pwsh
+        run: cmake --build build-phase-a --config Release --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
+      - name: Build DSP tests
+        shell: pwsh
+        run: cmake --build build-phase-a --config Release --target RetroMatchTests RetroMatchFineTuneTests RetroMatchOneShotTests --parallel
+      - name: Run DSP tests
+        shell: pwsh
+        run: ctest --test-dir build-phase-a -C Release --output-on-failure
+      - name: Commit validated recovery and remove staging files
+        shell: bash
+        run: |
+          git config user.name "Alexander Seel"
+          git config user.email "mr.alexander.seel@gmail.com"
+          git rm .github/workflows/apply-phase-a-match-quality-20260910.yml scripts/apply-phase-a-match-quality-20260910.py
+          git add -A
+          git diff --cached --check
+          git commit -m "Recover clean match and Compare semantics"
+          git push origin HEAD:main
