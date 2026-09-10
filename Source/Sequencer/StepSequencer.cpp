@@ -95,7 +95,10 @@ const Step& Core::getStep (int index) const noexcept
 void Core::clearPattern() noexcept
 {
     for (auto& step : steps)
+    {
         step = Step {};
+        step.rest = true;
+    }
 }
 
 void Core::setRandomSeed (std::uint32_t seed) noexcept
@@ -386,7 +389,12 @@ void Core::scheduleStep (int stepIndex, double gridOffset, double stepSamples,
     if (step.probability < 1.0f && nextRandom01() > step.probability)
         return;
 
-    const double nominal = nominalStepSamples (settings.clockSource == ClockSource::internal ? settings.internalBpm : 120.0);
+    // Recover the unswung nominal duration from the current swung interval. This
+    // keeps micro-timing proportional to the actual host/internal BPM instead of
+    // silently treating host-synced patterns as 120 BPM.
+    const double swingOffset = static_cast<double> (settings.swing) * 0.5;
+    const double swingFactor = (absoluteStep & 1u) == 0u ? 1.0 + swingOffset : 1.0 - swingOffset;
+    const double nominal = stepSamples / std::max (0.025, swingFactor);
     const double microOffset = static_cast<double> (step.microTiming) * nominal;
     const int ratchetCount = bounded (1, 8, step.ratchet);
     const double ratchetSpacing = stepSamples / ratchetCount;
