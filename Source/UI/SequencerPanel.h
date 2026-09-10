@@ -21,8 +21,9 @@ public:
         status.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
         status.setColour (juce::Label::textColourId, findColour (RetroLookAndFeel::secondaryLed));
 
-        for (auto* c : std::array<juce::Component*, 12> { &enabled, &mode, &division, &bpm, &length, &swing, &latch,
-                                                           &previousPage, &nextPage, &randomize, &reverse, &clear })
+        for (auto* c : std::array<juce::Component*, 14> { &enabled, &mode, &division, &bpm, &length, &swing, &latch,
+                                                           &octaveRange, &restartMode, &previousPage, &nextPage,
+                                                           &randomize, &reverse, &clear })
             addAndMakeVisible (*c);
         addAndMakeVisible (rotateLeft); addAndMakeVisible (rotateRight);
 
@@ -30,6 +31,8 @@ public:
         latch.setButtonText ("LATCH");
         mode.addItemList ({ "UP", "DOWN", "UP / DOWN", "DOWN / UP", "PLAYED ORDER", "CHORD", "RANDOM", "WALK", "PATTERN" }, 1);
         division.addItemList ({ "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/8T", "1/16T", "1/8.", "1/16." }, 1);
+        octaveRange.addItemList ({ "1 OCT", "2 OCT", "3 OCT", "4 OCT" }, 1);
+        restartMode.addItemList ({ "FREE RUN", "TRANSPORT", "FIRST NOTE" }, 1);
         bpm.setRange (20.0, 400.0, 1.0); bpm.setTextValueSuffix (" BPM");
         length.setRange (1.0, RetroMatchSequencer::maxSteps, 1.0); length.setTextValueSuffix (" steps");
         swing.setRange (0.0, 95.0, 1.0); swing.setTextValueSuffix (" %");
@@ -74,6 +77,8 @@ public:
         division.setTooltip ("Internal sequencer clock division. Host clock wiring is intentionally deferred until transport position is supplied to the core.");
         swing.setTooltip ("Alternating swing while preserving each two-step pair duration.");
         latch.setTooltip ("Keep held arpeggiator notes active after key release.");
+        octaveRange.setTooltip ("Arpeggiator octave span for held-note modes. Pattern mode keeps using each step's explicit pitch/octave.");
+        restartMode.setTooltip ("FREE RUN keeps phase, TRANSPORT follows a transport-start reset when supplied, FIRST NOTE restarts when a new held-note phrase begins.");
         probability.setTooltip ("Independent note trigger probability for this step.");
         microTiming.setTooltip ("Bounded offset within the nominal step, +/-45% maximum.");
         macro1.setTooltip ("Step modulation lane 1 value (stored now; destination routing comes with modulation-lane wiring).");
@@ -83,6 +88,8 @@ public:
         latch.onClick = [this] { commitSettings(); };
         mode.onChange = [this] { commitSettings(); };
         division.onChange = [this] { commitSettings(); };
+        octaveRange.onChange = [this] { commitSettings(); };
+        restartMode.onChange = [this] { commitSettings(); };
         bpm.onValueChange = [this] { commitSettings(); };
         length.onValueChange = [this]
         {
@@ -126,10 +133,11 @@ public:
         latch.setBounds (transport.reduced (2));
 
         auto tools = area.removeFromTop (30);
+        octaveRange.setBounds (tools.removeFromLeft (82).reduced (2)); restartMode.setBounds (tools.removeFromLeft (110).reduced (2));
         previousPage.setBounds (tools.removeFromLeft (58).reduced (2)); nextPage.setBounds (tools.removeFromLeft (58).reduced (2));
-        randomize.setBounds (tools.removeFromLeft (100).reduced (2)); reverse.setBounds (tools.removeFromLeft (82).reduced (2));
-        rotateLeft.setBounds (tools.removeFromLeft (82).reduced (2)); rotateRight.setBounds (tools.removeFromLeft (82).reduced (2));
-        clear.setBounds (tools.removeFromLeft (72).reduced (2)); status.setBounds (tools.reduced (2));
+        randomize.setBounds (tools.removeFromLeft (94).reduced (2)); reverse.setBounds (tools.removeFromLeft (76).reduced (2));
+        rotateLeft.setBounds (tools.removeFromLeft (76).reduced (2)); rotateRight.setBounds (tools.removeFromLeft (76).reduced (2));
+        clear.setBounds (tools.removeFromLeft (62).reduced (2)); status.setBounds (tools.reduced (2));
 
         area.removeFromTop (5);
         auto steps = area.removeFromTop (52);
@@ -173,7 +181,7 @@ private:
 
     juce::Label title, stepLabel, status;
     juce::ToggleButton enabled, latch, rest, tie, glide;
-    juce::ComboBox mode, division;
+    juce::ComboBox mode, division, octaveRange, restartMode;
     juce::Slider bpm, length, swing;
     juce::TextButton previousPage, nextPage, randomize, reverse, rotateLeft, rotateRight, clear;
     std::array<juce::TextButton, stepsPerPage> stepButtons;
@@ -232,7 +240,8 @@ private:
         settings.length = juce::jlimit (1, RetroMatchSequencer::maxSteps, (int) std::lround (length.getValue()));
         settings.swing = juce::jlimit (0.0f, 0.95f, (float) swing.getValue() * 0.01f);
         settings.latch = latch.getToggleState();
-        settings.restartMode = RetroMatchSequencer::RestartMode::firstNote;
+        settings.octaveRange = juce::jlimit (1, 4, octaveRange.getSelectedId());
+        settings.restartMode = (RetroMatchSequencer::RestartMode) juce::jlimit (0, 2, restartMode.getSelectedId() - 1);
         if (settings.enabled) proc.melodyTransport.stop();
         proc.melodyTransport.setSequencerSettings (settings);
         saveState();
@@ -332,6 +341,7 @@ private:
         settings.length = 16;
         settings.internalBpm = 120.0;
         settings.restartMode = RetroMatchSequencer::RestartMode::firstNote;
+        settings.octaveRange = 1;
         for (auto& step : stepState) step = {};
 
         const auto state = proc.apvts.state.getChildWithName ("SEQUENCER");
@@ -344,6 +354,8 @@ private:
             settings.internalBpm = juce::jlimit (20.0, 400.0, (double) state.getProperty ("bpm", 120.0));
             settings.swing = juce::jlimit (0.0f, 0.95f, (float) state.getProperty ("swing", 0.0f));
             settings.latch = (bool) state.getProperty ("latch", false);
+            settings.octaveRange = juce::jlimit (1, 4, (int) state.getProperty ("octaveRange", 1));
+            settings.restartMode = (RetroMatchSequencer::RestartMode) juce::jlimit (0, 2, (int) state.getProperty ("restartMode", 2));
             for (const auto child : state)
             {
                 if (! child.hasType ("STEP")) continue;
@@ -362,6 +374,7 @@ private:
         updating = true;
         enabled.setToggleState (settings.enabled, juce::dontSendNotification); latch.setToggleState (settings.latch, juce::dontSendNotification);
         mode.setSelectedId ((int) settings.mode + 1, juce::dontSendNotification); division.setSelectedId ((int) settings.division + 1, juce::dontSendNotification);
+        octaveRange.setSelectedId (settings.octaveRange, juce::dontSendNotification); restartMode.setSelectedId ((int) settings.restartMode + 1, juce::dontSendNotification);
         bpm.setValue (settings.internalBpm, juce::dontSendNotification); length.setValue (settings.length, juce::dontSendNotification); swing.setValue (settings.swing * 100.0f, juce::dontSendNotification);
         updating = false;
         proc.melodyTransport.setSequencerSettings (settings);
@@ -376,6 +389,7 @@ private:
         state.setProperty ("mode", (int) settings.mode, nullptr); state.setProperty ("division", (int) settings.division, nullptr);
         state.setProperty ("length", settings.length, nullptr); state.setProperty ("bpm", settings.internalBpm, nullptr);
         state.setProperty ("swing", settings.swing, nullptr); state.setProperty ("latch", settings.latch, nullptr);
+        state.setProperty ("octaveRange", settings.octaveRange, nullptr); state.setProperty ("restartMode", (int) settings.restartMode, nullptr);
         for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i)
         {
             const auto& step = stepState[(size_t) i];
