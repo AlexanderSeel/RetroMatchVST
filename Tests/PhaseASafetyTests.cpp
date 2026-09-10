@@ -2,6 +2,7 @@
 
 #include "ReferenceFixtureCorpus.h"
 #include "../Source/Analysis/SampleAnalyzer.h"
+#include "../Source/Matching/GeneratedRackGainPolicy.h"
 #include "../Source/Matching/OfflineRenderer.h"
 #include "../Source/Matching/RenderTelemetry.h"
 
@@ -164,6 +165,52 @@ int main()
     if (fundamental <= 0.01f || upperHarmonics / fundamental > 0.012f)
         return fail ("clean sine path introduces unintended nonlinear harmonic energy");
 
-    std::cout << "Phase A deterministic corpus and clean-path safety tests passed.\n";
+    auto singleVoice = cleanPatch;
+    const float singleScale = GeneratedRackGainPolicy::apply (singleVoice);
+    if (std::abs (singleScale - 1.0f) > 1.0e-6f || std::abs (singleVoice.mainLayerGain - 1.0f) > 1.0e-6f)
+        return fail ("generated rack policy changed a single-voice patch");
+
+    auto generatedRack = cleanPatch;
+    generatedRack.mainLayerGain = 0.78f;
+    const std::array<float, VoiceParameters::extraLayerCount> gains {{ 0.30f, 0.18f, 0.24f, 0.20f, 0.17f, 0.16f, 0.13f }};
+    for (size_t i = 0; i < generatedRack.layers.size(); ++i)
+    {
+        auto companion = cleanPatch;
+        companion.mainLayerGain = 1.0f;
+        generatedRack.layers[i] = std::make_shared<VoiceParameters> (std::move (companion));
+        generatedRack.layerGain[i] = gains[i];
+        generatedRack.layerAmount[i] = 0.78f;
+        generatedRack.layerOperation[i] = 0;
+    }
+
+    const float mainBefore = generatedRack.mainLayerGain;
+    const auto gainsBefore = generatedRack.layerGain;
+    const float contributionBefore = GeneratedRackGainPolicy::coherentContribution (generatedRack);
+    const float rackScale = GeneratedRackGainPolicy::apply (generatedRack);
+    const float contributionAfter = GeneratedRackGainPolicy::coherentContribution (generatedRack);
+    if (contributionBefore <= GeneratedRackGainPolicy::defaultCoherentBudget || rackScale >= 1.0f
+        || contributionAfter > GeneratedRackGainPolicy::defaultCoherentBudget + 1.0e-5f)
+        return fail ("generated additive rack was not normalized to the coherent gain budget");
+    if (std::abs (generatedRack.mainLayerGain / mainBefore - rackScale) > 1.0e-5f)
+        return fail ("rack normalization did not preserve main-layer ratio");
+    for (size_t i = 0; i < generatedRack.layers.size(); ++i)
+        if (std::abs (generatedRack.layerGain[i] / gainsBefore[i] - rackScale) > 1.0e-5f)
+            return fail ("rack normalization did not preserve companion-layer ratios");
+
+    const auto layered = OfflineRenderer::renderPatch (generatedRack, sampleRate, 1.40f, 220.0f, 256, {}, true);
+    const auto layeredTelemetry = RenderTelemetry::analyze (layered);
+    if (! layeredTelemetry.isTechnicallySafe() || layeredTelemetry.peak > 0.98f || layeredTelemetry.rms <= 0.01f)
+        return fail ("gain-budgeted additive rack is not rendered headroom-safe");
+
+    auto nonAdditive = cleanPatch;
+    nonAdditive.layers[0] = std::make_shared<VoiceParameters> (cleanPatch);
+    nonAdditive.layerGain[0] = 1.0f;
+    nonAdditive.layerAmount[0] = 1.0f;
+    nonAdditive.layerOperation[0] = 1;
+    const float nonAdditiveScale = GeneratedRackGainPolicy::apply (nonAdditive);
+    if (std::abs (nonAdditiveScale - 1.0f) > 1.0e-6f || std::abs (nonAdditive.layerGain[0] - 1.0f) > 1.0e-6f)
+        return fail ("gain budget altered a non-additive layer operation");
+
+    std::cout << "Phase A deterministic corpus, clean-path and generated-rack safety tests passed.\n";
     return 0;
 }
