@@ -43,10 +43,11 @@ jobs:
         run: |
           git config user.name "Alexander Seel"
           git config user.email "mr.alexander.seel@gmail.com"
+          rm -rf build-phase-a
           git rm .github/workflows/apply-phase-a-match-quality-20260910.yml scripts/apply-phase-a-match-quality-20260910.py scripts/apply-phase-a-match-quality-v2-20260910.py
           git add -A
           git diff --cached --check
           git commit -m "Recover clean match and Compare semantics"
           git push origin HEAD:main
 
-# Recovery revision 3: scope local switch-case evidence variables before native compile.
+# Recovery revision 4: remove generated build output before staging the validated source patch.
