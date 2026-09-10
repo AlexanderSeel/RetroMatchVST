@@ -57,6 +57,10 @@ public:
         add.onClick = [this] { for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) if (! proc.hasLayer (i)) { proc.captureLayer (i); break; } refresh(); };
         addAndMakeVisible (safeSum); safeSum.setButtonText ("SAFE SUM"); safeSum.onClick = [this] { applySafeSum(); };
         safeSum.setTooltip ("Reduce Main + additive layer gains as one group only when their worst-case coherent contribution exceeds the generated-rack headroom budget. Layer balance is preserved; non-additive Mix/Subtract/Multiply/Divide rows are untouched.");
+        addAndMakeVisible (allOn); allOn.setButtonText ("ALL ON"); allOn.onClick = [this] { setAllExtraLayersEnabled (true); };
+        allOn.setTooltip ("Enable every stored extra synth instance without changing its gain, operation or sound design.");
+        addAndMakeVisible (muteExtras); muteExtras.setButtonText ("MUTE EXTRAS"); muteExtras.onClick = [this] { setAllExtraLayersEnabled (false); };
+        muteExtras.setTooltip ("Audition Instance 1 / Main alone by disabling all extra instances. Layer snapshots and mix settings are preserved.");
         addAndMakeVisible (rackStatus); rackStatus.setJustificationType (juce::Justification::centredRight); rackStatus.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
         addAndMakeVisible (mainGain); mainGain.setSliderStyle (juce::Slider::LinearHorizontal); mainGain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 24);
         mainGain.setNumDecimalPlacesToDisplay (2); mainGain.setTooltip ("Instance 1 / Main level"); mainAttachment = std::make_unique<SliderAttachment> (proc.apvts, "mainLayerGain", mainGain);
@@ -99,7 +103,7 @@ public:
         auto method = r.removeFromTop (30); strategyLabel.setBounds (method.removeFromLeft (150)); strategy.setBounds (method.removeFromLeft (260).reduced (2)); complexityLabel.setBounds (method.removeFromLeft (110)); complexity.setBounds (method.reduced (2));
         editMain.setBounds (r.removeFromTop (30).reduced (2));
         auto controls = r.removeFromTop (30); add.setBounds (controls.removeFromLeft (controls.getWidth() * 2 / 3).reduced (2)); mainGain.setBounds (controls.reduced (2));
-        auto safety = r.removeFromTop (28); safeSum.setBounds (safety.removeFromLeft (105).reduced (2)); rackStatus.setBounds (safety.reduced (2));
+        auto safety = r.removeFromTop (28); safeSum.setBounds (safety.removeFromLeft (105).reduced (2)); allOn.setBounds (safety.removeFromLeft (78).reduced (2)); muteExtras.setBounds (safety.removeFromLeft (110).reduced (2)); rackStatus.setBounds (safety.reduced (2));
         mainVisual.setBounds (r.removeFromTop (65)); r.removeFromTop (6); viewport.setBounds (r); layoutRows();
     }
 private:
@@ -116,7 +120,7 @@ private:
         std::array<std::unique_ptr<SliderAttachment>, 4> attachments;
     };
     juce::Label hint, resynthLabel, strategyLabel, complexityLabel, rackStatus;
-    juce::ComboBox resynthInstances, strategy, complexity; juce::TextButton add, editMain, safeSum; juce::Slider mainGain; SynthInstanceVisual mainVisual;
+    juce::ComboBox resynthInstances, strategy, complexity; juce::TextButton add, editMain, safeSum, allOn, muteExtras; juce::Slider mainGain; SynthInstanceVisual mainVisual;
     std::unique_ptr<SliderAttachment> mainAttachment;
     std::unique_ptr<ComboAttachment> resynthAttachment, strategyAttachment, complexityAttachment;
     juce::Component content; juce::Viewport viewport;
@@ -132,6 +136,21 @@ private:
     {
         if (auto* parameter = proc.apvts.getParameter (id))
             parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+    }
+    void setAllExtraLayersEnabled (bool enabled)
+    {
+        int changed = 0;
+        for (int i = 0; i < VoiceParameters::extraLayerCount; ++i)
+        {
+            if (! proc.hasLayer (i)) continue;
+            setParameterPlain ("layer" + juce::String (i + 1) + "Enabled", enabled ? 1.0f : 0.0f);
+            ++changed;
+        }
+        hint.setText (enabled ? "RACK AUDITION: all stored extra instances enabled."
+                              : "RACK AUDITION: extras muted; Instance 1 / Main is playing alone. Layer settings are preserved.",
+                      juce::dontSendNotification);
+        allOn.setEnabled (changed > 0); muteExtras.setEnabled (changed > 0);
+        refresh();
     }
     void applySafeSum()
     {
@@ -157,6 +176,9 @@ private:
     void refresh()
     {
         bool available = false;
+        bool anyStoredLayer = false;
+        bool anyEnabledLayer = false;
+        bool anyDisabledLayer = false;
         int activeInstances = 1;
         for (size_t i = 0; i < rows.size(); ++i)
         {
@@ -165,7 +187,10 @@ private:
             row.name.setColour (juce::Label::textColourId, juce::Colour (colours[i])); row.edit.setToggleState (proc.getEditingLayer() == (int) i, juce::dontSendNotification);
             row.name.setText ("SYNTH " + juce::String ((int) i + 2) + " / " + proc.getLayerName ((int) i), juce::dontSendNotification); row.visual.repaint();
             const auto enabledId = "layer" + juce::String ((int) i + 1) + "Enabled";
-            if (present && proc.apvts.getRawParameterValue (enabledId)->load() >= 0.5f) ++activeInstances;
+            const bool enabled = present && proc.apvts.getRawParameterValue (enabledId)->load() >= 0.5f;
+            if (present) anyStoredLayer = true;
+            if (enabled) { ++activeInstances; anyEnabledLayer = true; }
+            else if (present) anyDisabledLayer = true;
         }
         const auto rack = proc.getCurrentVoiceParameters();
         const float contribution = GeneratedRackGainPolicy::coherentContribution (rack);
@@ -174,6 +199,8 @@ private:
                             + (overBudget ? "  /  SAFE SUM RECOMMENDED" : "  /  HEADROOM OK"), juce::dontSendNotification);
         rackStatus.setColour (juce::Label::textColourId, overBudget ? findColour (RetroLookAndFeel::secondaryLed) : findColour (RetroLookAndFeel::primaryLed));
         safeSum.setEnabled (overBudget);
+        allOn.setEnabled (anyStoredLayer && anyDisabledLayer);
+        muteExtras.setEnabled (anyStoredLayer && anyEnabledLayer);
         add.setEnabled (available); mainVisual.repaint(); layoutRows();
     }
     void layoutRows()
