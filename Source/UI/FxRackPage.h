@@ -73,7 +73,11 @@ public:
             for (int k = 0; k < 4; ++k)
             {
                 auto& slider = row.controls[(size_t) k]; row.panel.addAndMakeVisible (slider); row.panel.addAndMakeVisible (row.labels[(size_t) k]);
-                slider.setSliderStyle (juce::Slider::LinearVertical); slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 52, 18);
+                slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+                slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 68, 18);
+                slider.setMouseDragSensitivity (180);
+                slider.setRotaryParameters (juce::MathConstants<float>::pi * 1.2f,
+                                            juce::MathConstants<float>::pi * 2.8f, true);
                 row.attachments[(size_t) k] = std::make_unique<SliderAttachment> (proc.apvts, prefix + suffixes[(size_t) k], slider);
             }
             row.up.onClick = [this, i] { for (int j = i - 1; j >= 0; --j) if (value (j, "Type") > 0) { swap (i, j); break; } };
@@ -146,15 +150,38 @@ private:
         int y = 0; const int width = juce::jmax (360, viewport.getWidth() - 16);
         for (auto& row : rows) if (row.panel.isVisible())
         {
-            row.panel.setBounds (0, y, width, 196); y += 206;
-            auto r = row.panel.getLocalBounds(); auto header = r.removeFromTop (30);
-            row.type.setBounds (header.removeFromLeft (juce::jmax (100, width - 320)).reduced (2)); row.stage.setBounds (header.removeFromLeft (70).reduced (2));
-            row.bypass.setBounds (header.removeFromLeft (78)); row.up.setBounds (header.removeFromLeft (36).reduced (2)); row.down.setBounds (header.removeFromLeft (36).reduced (2));
-            row.copy.setBounds (header.removeFromLeft (53).reduced (2)); row.remove.setBounds (header.reduced (2));
-            if (row.sync && row.sync->isVisible()) row.sync->setBounds (r.removeFromTop (30).removeFromRight (220).reduced (2));
-            else r.removeFromTop (30);
-            row.visual.setBounds (r.removeFromLeft (width * 2 / 5).reduced (3)); const int w = r.getWidth() / 4;
-            for (int k = 0; k < 4; ++k) { auto control = r.removeFromLeft (w).reduced (2); row.labels[(size_t) k].setBounds (control.removeFromTop (24)); row.controls[(size_t) k].setBounds (control); }
+            constexpr int rowHeight = 224;
+            constexpr int rowGap = 10;
+            row.panel.setBounds (0, y, width, rowHeight); y += rowHeight + rowGap;
+
+            auto r = row.panel.getLocalBounds();
+            auto header = r.removeFromTop (34);
+            const int fixedHeaderWidth = 72 + 78 + 38 + 38 + 56 + 38;
+            row.type.setBounds (header.removeFromLeft (juce::jmax (150, width - fixedHeaderWidth)).reduced (2));
+            row.stage.setBounds (header.removeFromLeft (72).reduced (2));
+            row.bypass.setBounds (header.removeFromLeft (78).reduced (2));
+            row.up.setBounds (header.removeFromLeft (38).reduced (2));
+            row.down.setBounds (header.removeFromLeft (38).reduced (2));
+            row.copy.setBounds (header.removeFromLeft (56).reduced (2));
+            row.remove.setBounds (header.reduced (2));
+
+            auto syncBand = r.removeFromTop (32);
+            if (row.sync && row.sync->isVisible()) row.sync->setBounds (syncBand.removeFromRight (236).reduced (3, 2));
+
+            auto body = r.reduced (2, 3);
+            const int previewWidth = juce::jlimit (260, 390, body.getWidth() * 2 / 5);
+            row.visual.setBounds (body.removeFromLeft (previewWidth).reduced (3));
+            body.removeFromLeft (8);
+
+            const int cellWidth = juce::jmax (1, body.getWidth() / 4);
+            for (int k = 0; k < 4; ++k)
+            {
+                auto cell = body.removeFromLeft (k == 3 ? body.getWidth() : cellWidth).reduced (4, 0);
+                row.labels[(size_t) k].setBounds (cell.removeFromTop (22));
+                // Give the rotary control a real hardware-sized hit target. The LookAndFeel
+                // uses the smaller dimension for a circular knob and leaves the value box below.
+                row.controls[(size_t) k].setBounds (cell.reduced (2, 0));
+            }
         }
         content.setSize (width, juce::jmax (y, viewport.getHeight()));
     }
