@@ -2,6 +2,30 @@
 #include "SynthEngine.h"
 
 struct FactoryPresetInfo { juce::String name, category, description; };
+
+namespace FactoryPresetDesign
+{
+constexpr int familyCount = 10;
+constexpr int variationsPerFamily = 30;
+constexpr float coherentLayerBudget = 0.92f;
+
+inline int companionCountForVariation (int variation) noexcept
+{
+    if (variation < 8) return 0;
+    if (variation < 14) return 1;
+    if (variation < 19) return 2;
+    if (variation < 23) return 3;
+    if (variation < 26) return 4;
+    if (variation < 29) return 5;
+    return 6;
+}
+
+inline const char* characterName (int variation) noexcept
+{
+    return variation < 10 ? "Core" : (variation < 20 ? "Motion" : "Dimension");
+}
+}
+
 inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
     std::vector<FactoryPresetInfo> catalog {
     { "Pure Sub", "Bass", "A clean sine foundation with a short, controlled release." },
@@ -16,14 +40,24 @@ inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
     { "Room Piano", "Keys", "Soft FM keys with compression and a short room." }
     };
     const juce::StringArray families { "Bass", "Keys", "Pluck", "Pad", "Sequence", "Texture", "Lead", "Bell", "Drone", "Layered pad" };
-    const juce::StringArray names { "Obsidian", "Aurora", "Velvet", "Prism", "Ember", "Satellite", "Tidal", "Neon", "Polar", "Solstice" };
-    for (int family = 0; family < 10; ++family)
-        for (int variation = 0; variation < 10; ++variation)
+    const juce::StringArray names {
+        "Obsidian", "Aurora", "Velvet", "Prism", "Ember", "Satellite", "Tidal", "Neon", "Polar", "Solstice",
+        "Quartz", "Cipher", "Mirage", "Voltage", "Lunar", "Carbon", "Echo", "Helix", "Static", "Halo",
+        "Flux", "Chrome", "Moss", "Ivory", "Circuit", "Comet", "Hollow", "Vortex", "Dawn", "Nightfall"
+    };
+    catalog.reserve (10 + FactoryPresetDesign::familyCount * FactoryPresetDesign::variationsPerFamily);
+    for (int family = 0; family < FactoryPresetDesign::familyCount; ++family)
+        for (int variation = 0; variation < FactoryPresetDesign::variationsPerFamily; ++variation)
+        {
+            const int companions = FactoryPresetDesign::companionCountForVariation (variation);
             catalog.push_back ({ names[variation] + " " + families[family], families[family],
-                families[family] + " / " + juce::String (variation < 3 ? 1 : juce::jmin (6, variation - 1)) + " instances. "
-                + "Voiced with tuned oscillators, envelope movement and complementary spatial effects."
-                + (variation >= 2 && (family == 2 || family == 3 || family == 4 || family == 5 || family == 6 || family == 8 || family == 9) ? " MSEG motion is part of the authored sound." : "")
-                + (variation >= 5 ? " Layer controls shape the ordered combination; edit each instance independently." : "") });
+                families[family] + " / " + FactoryPresetDesign::characterName (variation) + " character / "
+                + juce::String (companions + 1) + " instance" + (companions == 0 ? ". " : "s. ")
+                + "Deterministically voiced with tuned oscillator balance, envelope contour, filter colour and complementary spatial processing."
+                + (variation >= 6 && (family == 2 || family == 3 || family == 4 || family == 5 || family == 6 || family == 8 || family == 9)
+                    ? " MSEG motion is part of the authored sound." : "")
+                + (variation >= 8 ? " Layer roles remain independently editable in the Instance Rack." : "") });
+        }
     return catalog;
 }();
 
@@ -31,25 +65,52 @@ inline VoiceParameters makeFactoryPreset (int index)
 {
     if (index >= 10)
     {
-        const int family = juce::jlimit (0, 9, (index - 10) / 10), variation = (index - 10) % 10;
+        const int generatedIndex = juce::jmax (0, index - 10);
+        const int family = juce::jlimit (0, FactoryPresetDesign::familyCount - 1,
+                                         generatedIndex / FactoryPresetDesign::variationsPerFamily);
+        const int variation = generatedIndex % FactoryPresetDesign::variationsPerFamily;
+        const int bank = variation / 10;
+        const int motif = variation % 10;
         const int seeds[] { 1, 9, 3, 4, 6, 7, 8, 2, 4, 5 };
         auto p = makeFactoryPreset (seeds[family]);
         p.layers.fill (nullptr);
-        const float t = variation / 9.0f;
-        p.osc1Wave = variation % 4; p.osc2Wave = (variation + 1) % 4;
-        p.osc2Mix = 0.08f + t * 0.22f; p.osc2Detune = 2 + variation;
-        p.cutoff = (family == 0 ? 450.0f : 1800.0f) * (1.0f + t * 2.5f);
-        p.resonance = 0.08f + t * 0.26f;
-        p.outputGainDb = variation >= 5 ? -15.0f : -11.0f;
-        p.extraLfoRate[0] = 0.08f + t * (family == 4 ? 7.0f : 1.2f);
-        p.moduleModSlots[1] = { (int) ModSource::lfo2, (int) ModDestination::cutoff, 0.08f + t * 0.2f };
-        if (variation >= 2 && (family == 2 || family == 3 || family == 4 || family == 5 || family == 6 || family == 8 || family == 9))
+        const float t = variation / (float) (FactoryPresetDesign::variationsPerFamily - 1);
+        const float motifT = motif / 9.0f;
+        p.osc1Wave = motif % 4; p.osc2Wave = (motif + 1 + bank) % 4;
+        p.osc2Mix = juce::jlimit (0.05f, 0.38f, 0.08f + motifT * 0.18f + bank * 0.035f);
+        p.osc2Detune = 2.0f + motif * 1.25f + bank * 2.0f;
+        p.cutoff = juce::jlimit (120.0f, 15000.0f,
+            (family == 0 ? 420.0f : 1650.0f) * (1.0f + t * 3.0f + bank * 0.18f));
+        p.resonance = juce::jlimit (0.04f, 0.72f, 0.08f + motifT * 0.20f + bank * 0.055f);
+        p.outputGainDb = variation >= 8 ? -15.0f : -11.0f;
+        p.extraLfoRate[0] = 0.07f + t * (family == 4 ? 7.5f : 1.45f);
+        p.moduleModSlots[1] = { (int) ModSource::lfo2, (int) ModDestination::cutoff, 0.07f + t * 0.23f };
+
+        // Three deliberately different variation banks: Core remains relatively
+        // direct, Motion introduces animated spectral behaviour, and Dimension
+        // adds restrained harmonic/spatial complexity without unbounded gain.
+        if (bank == 1)
+        {
+            p.wavetableMix = juce::jmax (p.wavetableMix, 0.10f + motifT * 0.24f);
+            p.chorusMix = juce::jmax (p.chorusMix, 0.04f + motifT * 0.10f);
+            p.stereoWidth = juce::jmax (p.stereoWidth, 1.0f + motifT * 0.24f);
+        }
+        else if (bank == 2)
+        {
+            p.fmMix = juce::jmax (p.fmMix, 0.08f + motifT * 0.20f);
+            p.fmAmount = juce::jmax (p.fmAmount, 0.04f + motifT * 0.12f);
+            p.wavetableMix = juce::jmax (p.wavetableMix, 0.08f + motifT * 0.18f);
+            p.stereoWidth = juce::jmax (p.stereoWidth, 1.12f + motifT * 0.32f);
+            p.reverbMix = juce::jmax (p.reverbMix, 0.05f + motifT * 0.10f);
+        }
+
+        if (variation >= 6 && (family == 2 || family == 3 || family == 4 || family == 5 || family == 6 || family == 8 || family == 9))
         {
             p.mseg.enabled = true;
             p.mseg.loopEnabled = family == 3 || family == 4 || family == 5 || family == 8 || family == 9;
             p.msegTarget = family == 2 || family == 4 ? (int) ModDestination::amplitude
                           : (family == 3 || family == 8 || family == 9 ? (int) ModDestination::wavetablePosition : (int) ModDestination::cutoff);
-            p.msegDepth = family == 2 ? 0.92f : 0.28f + 0.36f * t;
+            p.msegDepth = family == 2 ? 0.92f : 0.24f + 0.40f * t;
             p.mseg.levels = family == 2
                 ? std::array<float, MsegParameters::pointCount> {{ 0.0f, 1.0f, 0.52f, 0.24f, 0.10f, 0.0f }}
                 : std::array<float, MsegParameters::pointCount> {{ 0.16f, 0.86f, 0.42f, 0.92f, 0.34f, 0.62f }};
@@ -58,15 +119,16 @@ inline VoiceParameters makeFactoryPreset (int index)
             if (p.msegTarget != (int) ModDestination::cutoff)
                 p.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::cutoff, 0.12f + 0.18f * t };
         }
-        if (family == 7) { p.fmOpRatio[1] = 2.1f + t * 3.3f; p.decay = 1.4f + t; p.release = 0.9f; }
-        if (family == 8) { p.attack = 1.0f + t * 2; p.release = 2.5f; p.noiseMix = 0.02f + t * 0.04f; }
-        p.fxModules[2] = { 9, 1, false, 0.25f + t * 0.35f, 0.5f, 0.45f, family == 0 ? 0.04f : 0.12f + t * 0.16f };
-        const int companionCount = variation < 3 ? 0 : juce::jlimit (1, 5, variation - 2);
+        if (family == 7) { p.fmOpRatio[1] = 2.1f + t * 3.3f; p.decay = 1.25f + t * 1.35f; p.release = 0.75f + bank * 0.15f; }
+        if (family == 8) { p.attack = 0.85f + t * 2.2f; p.release = 2.2f + bank * 0.35f; p.noiseMix = 0.02f + t * 0.05f; }
+        p.fxModules[2] = { 9, 1, false, 0.22f + t * 0.38f, 0.5f, 0.45f, family == 0 ? 0.04f : 0.10f + t * 0.18f };
+
+        const int companionCount = FactoryPresetDesign::companionCountForVariation (variation);
         p.mainLayerGain = companionCount > 0 ? 0.80f : 0.95f;
         for (int layer = 0; layer < companionCount; ++layer)
         {
-            auto companion = std::make_shared<VoiceParameters> (makeFactoryPreset ((seeds[family] + layer + 2) % 10));
-            companion->layers.fill (nullptr); companion->mainLayerGain = 1.0f; companion->outputGainDb = -7.5f;
+            auto companion = std::make_shared<VoiceParameters> (makeFactoryPreset ((seeds[family] + layer + 2 + bank) % 10));
+            companion->layers.fill (nullptr); companion->mainLayerGain = 1.0f; companion->outputGainDb = -7.5f - bank * 0.5f;
             const int role = layer % 5;
             if (role == 0)
             {
@@ -105,8 +167,21 @@ inline VoiceParameters makeFactoryPreset (int index)
             p.layerOperation[(size_t) layer] = 0;
             p.layerAmount[(size_t) layer] = 0.80f;
         }
+
+        // The factory library must be safe before it reaches the live engine. Scale
+        // the additive rack as one group, preserving its authored layer ratios.
+        float coherent = p.mainLayerGain;
+        for (int layer = 0; layer < companionCount; ++layer)
+            coherent += p.layerGain[(size_t) layer] * p.layerAmount[(size_t) layer];
+        if (coherent > FactoryPresetDesign::coherentLayerBudget)
+        {
+            const float scale = FactoryPresetDesign::coherentLayerBudget / coherent;
+            p.mainLayerGain *= scale;
+            for (int layer = 0; layer < companionCount; ++layer) p.layerGain[(size_t) layer] *= scale;
+        }
+
         const float sourceDensity = p.osc1Mix + p.osc2Mix + p.subMix + p.fmMix + p.wavetableMix + p.supersawMix;
-        p.outputGainDb = juce::jlimit (-10.5f, -5.0f, -6.0f - companionCount * 0.55f - juce::jmax (0.0f, sourceDensity - 1.2f) * 1.1f);
+        p.outputGainDb = juce::jlimit (-10.5f, -5.0f, -6.0f - companionCount * 0.45f - juce::jmax (0.0f, sourceDensity - 1.2f) * 1.1f);
         return p;
     }
     VoiceParameters p; p.osc2Mix = 0; p.outputGainDb = -9; p.release = 0.2f;
