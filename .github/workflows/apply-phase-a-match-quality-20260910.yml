@@ -48,3 +48,5 @@ jobs:
           git diff --cached --check
           git commit -m "Recover clean match and Compare semantics"
           git push origin HEAD:main
+
+# Recovery revision 3: scope local switch-case evidence variables before native compile.
