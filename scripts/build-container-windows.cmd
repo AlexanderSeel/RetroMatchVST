@@ -56,7 +56,7 @@ echo VST3 auto-manifest generation is disabled in the Server Core container.
 if errorlevel 1 goto :configure_failed
 
 echo Building plug-in, standalone app and all registered test executables...
-"%CMAKE%" --build C:\build --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone RetroMatchTests RetroMatchFineTuneTests RetroMatchOneShotTests RetroMatchTelemetryTests
+"%CMAKE%" --build C:\build --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone RetroMatchTests RetroMatchFineTuneTests RetroMatchOneShotTests RetroMatchTelemetryTests RetroMatchSequencerTests
 if errorlevel 1 goto :build_failed
 
 echo Running tests...
@@ -79,7 +79,7 @@ echo ERROR: ctest.exe not found at %CTEST%
 exit /b 4
 
 :missing_git
-echo ERROR: git.exe not found at %GIT%
+echo ERROR: git.exe is not available.
 exit /b 16
 
 :missing_cl

@@ -61,6 +61,7 @@ target_sources(RetroMatchSynth PRIVATE
   Source/Reference/ReferenceSamplePlayer.cpp
   Source/Analysis/SampleAnalyzer.cpp
   Source/Analysis/MelodyAnalyzer.cpp
+  Source/Sequencer/StepSequencer.cpp
   Source/Matching/OfflineRenderer.cpp
   Source/Matching/SimilarityScorer.cpp
   Source/Matching/SoundMatcher.cpp)
@@ -170,6 +171,12 @@ if(RETROMATCH_BUILD_TESTS)
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
   add_test(NAME RetroMatchRenderTelemetry COMMAND RetroMatchTelemetryTests)
+
+  add_executable(RetroMatchSequencerTests
+    Tests/SequencerCoreTests.cpp
+    Source/Sequencer/StepSequencer.cpp)
+  target_include_directories(RetroMatchSequencerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME RetroMatchSequencer COMMAND RetroMatchSequencerTests)
 endif()
 
 option(RETROMATCH_BUILD_UI_TESTS "Build offscreen editor snapshot/lifecycle probe" OFF)
