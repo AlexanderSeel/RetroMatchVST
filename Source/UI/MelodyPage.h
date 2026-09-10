@@ -1,14 +1,15 @@
 #pragma once
 #include "../PluginProcessor.h"
 #include "RetroLookAndFeel.h"
+#include <optional>
 
 class MelodyPage final : public juce::Component, private juce::Timer
 {
 public:
     explicit MelodyPage (RetroMatchSynthAudioProcessor& p) : proc (p), roll (*this)
     {
-        for (auto* button : std::array<juce::Button*, 11> { &analyze, &play, &samplePlay, &stop, &save, &drag, &lower, &higher, &remove, &midiFromSynth, &midiFull }) addAndMakeVisible (*button);
-        addAndMakeVisible (mode); addAndMakeVisible (tempo); addAndMakeVisible (hint); addAndMakeVisible (roll);
+        for (auto* button : std::array<juce::Button*, 15> { &analyze, &play, &samplePlay, &stop, &save, &drag, &lower, &higher, &remove, &midiFromSynth, &midiFull, &octaveDown, &octaveUp, &quantize, &undoEdit }) addAndMakeVisible (*button);
+        addAndMakeVisible (mode); addAndMakeVisible (tempo); addAndMakeVisible (quantizeGrid); addAndMakeVisible (hint); addAndMakeVisible (roll);
         for (auto* slider : { &synthStart, &synthEnd, &midiStart, &midiEnd })
         { addAndMakeVisible (*slider); slider->setRange (0.0, 60.0, 0.01); slider->setSliderStyle (juce::Slider::LinearHorizontal); slider->setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 20); slider->setTextValueSuffix (" s"); }
         addAndMakeVisible (applyRegion); addAndMakeVisible (synthLabel); addAndMakeVisible (midiLabel); addAndMakeVisible (sampleView);
@@ -17,7 +18,9 @@ public:
         mode.setTooltip ("Melody follows one predominant line. Layered estimates up to four simultaneous notes; overlapping harmonics can cause errors.");
         tempo.setRange (30, 300, 1); tempo.setSliderStyle (juce::Slider::LinearHorizontal);
         tempo.setTextBoxStyle (juce::Slider::TextBoxRight, false, 80, 24); tempo.setTextValueSuffix (" BPM");
-        tempo.setTooltip ("Export tempo / piano-roll grid. Changing it preserves the recording's note times; no automatic beat detection or quantization.");
+        tempo.setTooltip ("Export tempo / piano-roll grid. Changing it preserves the recording's note times until QUANTIZE is used.");
+        quantizeGrid.addItemList ({ "1/4", "1/8", "1/16", "1/32" }, 1); quantizeGrid.setSelectedId (3);
+        quantizeGrid.setTooltip ("Grid used by QUANTIZE. Note starts and durations are snapped in the current BPM domain.");
         hint.setColour (juce::Label::textColourId, juce::Colour (0xffa6bcb9));
         hint.setFont (juce::Font (juce::FontOptions (12.0f)));
         analyze.onClick = [this]
@@ -47,11 +50,19 @@ public:
         };
         lower.onClick = [this] { editSelected (-1); }; higher.onClick = [this] { editSelected (1); };
         remove.onClick = [this] { editSelected (0); };
+        octaveDown.onClick = [this] { transposeAll (-12); };
+        octaveUp.onClick = [this] { transposeAll (12); };
+        quantize.onClick = [this] { quantizeClip(); };
+        undoEdit.onClick = [this] { undoLastEdit(); };
+        octaveDown.setTooltip ("Transpose every extracted note down one octave without changing the synth patch.");
+        octaveUp.setTooltip ("Transpose every extracted note up one octave without changing the synth patch.");
+        quantize.setTooltip ("Snap extracted note starts and durations to the selected musical grid.");
+        undoEdit.setTooltip ("Restore the MelodyClip state from immediately before the last note/clip edit.");
         tempo.onValueChange = [this] { clip.bpm = tempo.getValue(); if (! clip.notes.empty()) proc.setMelodyClip (clip); };
         applyRegion.onClick = [this]
         {
             if (proc.setReferenceAnalysisRegion ((float) synthStart.getValue(), (float) synthEnd.getValue()))
-            { hint.setText ("Synthesis analysis region applied. Pitch is re-detected unless BASE NOTE is manually locked.", juce::dontSendNotification); refreshClip(); }
+            { undoClip.reset(); hint.setText ("Synthesis analysis region applied. Pitch is re-detected unless BASE NOTE is manually locked.", juce::dontSendNotification); refreshClip(); }
         };
         midiFromSynth.onClick = [this]
         {
@@ -98,7 +109,11 @@ public:
         area.removeFromTop (6); sampleView.setBounds (area.removeFromTop (112)); area.removeFromTop (8); auto edit = area.removeFromTop (28);
         lower.setBounds (edit.removeFromLeft (90).reduced (2)); higher.setBounds (edit.removeFromLeft (90).reduced (2));
         remove.setBounds (edit.removeFromLeft (100).reduced (2));
-        hint.setBounds (area.removeFromBottom (62)); area.removeFromTop (10); roll.setBounds (area);
+        area.removeFromTop (4); auto transforms = area.removeFromTop (30);
+        octaveDown.setBounds (transforms.removeFromLeft (78).reduced (2)); octaveUp.setBounds (transforms.removeFromLeft (78).reduced (2));
+        quantizeGrid.setBounds (transforms.removeFromLeft (88).reduced (2)); quantize.setBounds (transforms.removeFromLeft (104).reduced (2));
+        undoEdit.setBounds (transforms.removeFromLeft (88).reduced (2));
+        hint.setBounds (area.removeFromBottom (62)); area.removeFromTop (8); roll.setBounds (area);
     }
     void paint (juce::Graphics& g) override
     {
@@ -213,12 +228,14 @@ private:
     RetroMatchSynthAudioProcessor& proc;
     float shownStart = -1, shownEnd = -1, shownMidiStart = -1, shownMidiEnd = -1;
     MelodyClip clip; juce::ValueTree previousState; int selected = -1; SampleRangeView sampleView { *this };
+    std::optional<MelodyClip> undoClip;
     std::unique_ptr<Worker> worker; std::unique_ptr<juce::FileChooser> chooser;
     juce::TextButton analyze { "ANALYZE" }, play { "PLAY MELODY" }, samplePlay { "PLAY SAMPLE" }, stop { "STOP" }, save { "EXPORT MIDI" };
     DragButton drag;
     juce::TextButton lower { "NOTE -" }, higher { "NOTE +" }, remove { "DELETE NOTE" };
     juce::TextButton midiFromSynth { "MIDI = SYNTH" }, midiFull { "FULL TRACK MIDI" };
-    juce::ComboBox mode; juce::Slider tempo, synthStart, synthEnd, midiStart, midiEnd; juce::TextButton applyRegion { "APPLY SYNTH" }; juce::Label synthLabel, midiLabel, hint; PianoRoll roll;
+    juce::TextButton octaveDown { "OCT -" }, octaveUp { "OCT +" }, quantize { "QUANTIZE" }, undoEdit { "UNDO" };
+    juce::ComboBox mode, quantizeGrid; juce::Slider tempo, synthStart, synthEnd, midiStart, midiEnd; juce::TextButton applyRegion { "APPLY SYNTH" }; juce::Label synthLabel, midiLabel, hint; PianoRoll roll;
     void refreshClip()
     {
         previousState = proc.apvts.state.getChildWithName ("MELODY"); clip = proc.getMelodyClip(); selected = -1;
@@ -240,12 +257,60 @@ private:
         if (juce::isPositiveAndBelow (selected, (int) clip.notes.size()))
         { const auto& n = clip.notes[(size_t) selected]; text += juce::MidiMessage::getMidiNoteName (n.pitch, true, true, 3) + " at " + juce::String (n.start, 2) + " s / confidence " + juce::String (n.confidence * 100, 0) + "%. "; }
         text += clip.truncated ? "Analysis safety limit reached (6 h / 16384 notes). " : "";
-        text += "Click a note to correct/delete it. FULL TRACK MIDI analyzes the whole source in chunks; the MIDI timing is relative to the selected MIDI region. Mixed audio may contain extra or missed notes.";
+        if (undoClip.has_value()) text += "UNDO restores the previous edit. ";
+        text += "Click a note to correct/delete it. Clip tools transpose or quantize all extracted notes; FULL TRACK MIDI analyzes the whole source in chunks.";
         hint.setText (text, juce::dontSendNotification);
+    }
+    void rememberUndo()
+    {
+        undoClip = clip;
+    }
+    void transposeAll (int semitones)
+    {
+        if (clip.notes.empty() || semitones == 0) return;
+        rememberUndo();
+        for (auto& note : clip.notes)
+            note.pitch = juce::jlimit (0, 127, note.pitch + semitones);
+        proc.setMelodyClip (clip); refreshClip();
+        hint.setText ("Transposed extracted clip " + juce::String (semitones > 0 ? "+12" : "-12") + " semitones. UNDO is available.", juce::dontSendNotification);
+    }
+    void quantizeClip()
+    {
+        if (clip.notes.empty()) return;
+        const int subdivisions = quantizeGrid.getSelectedId() == 1 ? 1
+                               : quantizeGrid.getSelectedId() == 2 ? 2
+                               : quantizeGrid.getSelectedId() == 4 ? 8 : 4;
+        const double beatSeconds = 60.0 / juce::jlimit (30.0, 300.0, clip.bpm);
+        const double step = beatSeconds / subdivisions;
+        const double minimumDuration = step * 0.25;
+        const double clipEnd = juce::jmax (minimumDuration, clip.duration);
+        rememberUndo();
+        for (auto& note : clip.notes)
+        {
+            const double snappedStart = std::round (note.start / step) * step;
+            note.start = juce::jlimit (0.0, juce::jmax (0.0, clipEnd - minimumDuration), snappedStart);
+            const double snappedDuration = juce::jmax (minimumDuration, std::round (note.duration / step) * step);
+            note.duration = juce::jlimit (minimumDuration, juce::jmax (minimumDuration, clipEnd - note.start), snappedDuration);
+        }
+        proc.setMelodyClip (clip); refreshClip();
+        hint.setText ("Quantized extracted notes to " + quantizeGrid.getText() + " at " + juce::String (clip.bpm, 0) + " BPM. UNDO is available.", juce::dontSendNotification);
+    }
+    void undoLastEdit()
+    {
+        if (! undoClip.has_value()) return;
+        if (undoClip->sourceName != clip.sourceName)
+        {
+            undoClip.reset(); updateHint(); return;
+        }
+        auto restored = *undoClip;
+        undoClip.reset();
+        proc.setMelodyClip (restored); refreshClip();
+        hint.setText ("Previous Melody Lab edit restored.", juce::dontSendNotification);
     }
     void editSelected (int delta)
     {
         if (! juce::isPositiveAndBelow (selected, (int) clip.notes.size())) return;
+        rememberUndo();
         const int edited = selected;
         if (delta == 0) clip.notes.erase (clip.notes.begin() + selected);
         else clip.notes[(size_t) selected].pitch = juce::jlimit (0, 127, clip.notes[(size_t) selected].pitch + delta);
@@ -271,7 +336,7 @@ private:
             if (worker->file != proc.getReferenceFile()) worker->signalThreadShouldExit();
             if (! worker->isThreadRunning())
             {
-                if (! worker->threadShouldExit()) { proc.setMelodyClip (worker->result); refreshClip(); }
+                if (! worker->threadShouldExit()) { undoClip.reset(); proc.setMelodyClip (worker->result); refreshClip(); }
                 worker.reset(); analyze.setButtonText ("ANALYZE"); updateHint();
             }
             else hint.setText ("Analyzing locally... " + juce::String (worker->progress.load() * 100, 0) + "%", juce::dontSendNotification);
@@ -299,6 +364,8 @@ private:
         play.setEnabled (ready); save.setEnabled (ready); drag.setEnabled (ready);
         samplePlay.setEnabled (proc.hasReferenceSample());
         lower.setEnabled (ready && selected >= 0); higher.setEnabled (ready && selected >= 0); remove.setEnabled (ready && selected >= 0);
+        octaveDown.setEnabled (ready); octaveUp.setEnabled (ready); quantizeGrid.setEnabled (ready); quantize.setEnabled (ready);
+        undoEdit.setEnabled (ready && undoClip.has_value());
         play.setToggleState (proc.melodyTransport.isPlaying(), juce::dontSendNotification);
         roll.repaint();
     }
