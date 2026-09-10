@@ -3,3 +3,7 @@
 /.vs/
 *.user
 *.suo
+
+# Local helper-script bytecode
+__pycache__/
+*.py[cod]
