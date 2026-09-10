@@ -23,16 +23,52 @@ public:
         baseline.setClickingTogglesState (true); adjusted.setClickingTogglesState (true);
         baseline.setRadioGroupId (0x524d46); adjusted.setRadioGroupId (0x524d46);
 
+        baseline.setTooltip ("Audition the immutable measured candidate before post-analysis correction.");
+        adjusted.setTooltip ("Audition the current post-analysis correction. This state is temporary until KEEP / APPLY.");
+        resetTune.setTooltip ("Return every post-analysis correction to neutral and restore the measured baseline.");
+        measureTune.setTooltip ("Render and measure the adjusted candidate so waveform, spectrum and score reflect the actual audio.");
+        autoNudge.setTooltip ("Derive a small correction from the measured residual, render it, and keep it only when the score improves.");
+        keepTune.setTooltip ("Commit the current correction to the selected candidate. The original measured candidate remains the Compare baseline.");
+
         static constexpr const char* tuneNames[] { "BRIGHT", "LOW END", "PUNCH", "TAIL", "WIDTH", "MOTION", "FINE PITCH" };
+        static constexpr const char* tuneTips[] {
+            "Spectral brightness only. Moves the existing filter cutoff by up to +/-1.25 octaves; it never adds drive, FM or wavefold. Double-click = neutral.",
+            "Low-frequency balance. Changes the main voice's existing sub level by up to +/-0.12; companion GOLD layers do not gain extra sub sources. Double-click = neutral.",
+            "Onset punch, not loudness. Scales amp and FM attack time from x2.83 (softer) to x0.35 (harder). Double-click = neutral.",
+            "Decay/release time only. Scales tail time from x0.45 to x2.22 and never raises sustain, preserving one-shot behaviour. Double-click = neutral.",
+            "Stereo image width only. Scales width from x0.73 to x1.37 without changing unison detune. Double-click = neutral.",
+            "Scales modulation that already exists from x0.55 to x1.80. It never invents LFO, MSEG or matrix routing on a static patch. Double-click = neutral.",
+            "Whole-instrument residual tuning correction, exactly +/-50 cents. Double-click = neutral."
+        };
         for (size_t i = 0; i < fineTune.size(); ++i)
         {
             addAndMakeVisible (fineTune[i]);
             addAndMakeVisible (fineTuneLabels[i]);
             fineTune[i].setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-            fineTune[i].setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 14);
+            fineTune[i].setTextBoxStyle (juce::Slider::TextBoxBelow, false, 66, 14);
             fineTune[i].setRange (-1.0, 1.0, 0.01);
             fineTune[i].setDoubleClickReturnValue (true, 0.0);
             fineTune[i].setValue (0.0, juce::dontSendNotification);
+            fineTune[i].setTooltip (tuneTips[i]);
+            fineTune[i].textFromValueFunction = [i] (double value)
+            {
+                const auto signedText = [] (double v, int decimals)
+                {
+                    return juce::String (v >= 0.0 ? "+" : "") + juce::String (v, decimals);
+                };
+                switch (i)
+                {
+                    case 0: return signedText (value * 1.25, 2) + " oct";
+                    case 1: return signedText (value * 0.12, 2);
+                    case 2: return "A x" + juce::String (std::pow (2.0, -value * 1.50), 2);
+                    case 3: return "T x" + juce::String (std::pow (2.0, value * 1.15), 2);
+                    case 4: return "W x" + juce::String (std::pow (2.0, value * 0.45), 2);
+                    case 5: return "M x" + juce::String (std::pow (2.0, value * 0.85), 2);
+                    case 6: return signedText (value * 50.0, 0) + " ct";
+                    default: return juce::String (value, 2);
+                }
+            };
+            fineTune[i].updateText();
             fineTuneLabels[i].setText (tuneNames[i], juce::dontSendNotification);
             fineTuneLabels[i].setJustificationType (juce::Justification::centred);
             fineTuneLabels[i].setColour (juce::Label::textColourId, juce::Colour (0xffb8c8c3));
