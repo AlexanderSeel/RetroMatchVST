@@ -1,0 +1,7 @@
+Trigger native Windows/macOS validation after the premium FX/LFO/modulation rotary-control pass.
+
+Expected UI contracts:
+- FX Amount/Rate/Feedback/Mix use rotary hardware controls.
+- LFO 2-4 rate uses rotary hardware controls.
+- Module modulation depth uses compact rotary trim controls.
+- waveform/routing structure selectors remain non-rotary.
