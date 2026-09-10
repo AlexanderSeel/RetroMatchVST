@@ -1,4 +1,6 @@
 #include <JuceHeader.h>
+#include "../Source/Matching/ReferenceIdentity.h"
+#include "../Source/Matching/ResynthesisAdvisor.h"
 #include "../Source/Matching/SimilarityScorer.h"
 
 #include <cmath>
@@ -85,6 +87,50 @@ int main()
     if (brightScore.spectralSafety < 0.99f)
         return fail ("a legitimately bright reference did not receive evidence-based allowance");
 
-    std::cout << "Reference-relative spectral safety tests passed.\n";
+    auto noisyHit = reference;
+    noisyHit.duration = 0.28f;
+    noisyHit.pitchConfidence = 0.18f;
+    noisyHit.harmonicity = 0.18f;
+    noisyHit.inharmonicity = 0.72f;
+    noisyHit.spectralFlatness = 0.72f;
+    noisyHit.transientScore = 0.90f;
+    noisyHit.sustainLevel = 0.08f;
+    noisyHit.temporalRms = {{ 1.0f, 0.72f, 0.35f, 0.16f, 0.07f, 0.03f, 0.01f, 0.0f }};
+    const auto noisyIdentity = ReferenceIdentity::classify (noisyHit);
+    if (noisyIdentity.pitchModel != ReferenceIdentity::PitchModel::unpitched
+        || noisyIdentity.lifecycle != ReferenceIdentity::Lifecycle::oneShot)
+        return fail ("noisy percussion was forced into a pitched or sustained identity");
+    const auto noisyAdvice = ResynthesisAdvisor::advise (noisyHit);
+    if (noisyAdvice.sourceFamily != "percussive / transient" || noisyAdvice.method == 1 || noisyAdvice.method == 2)
+        return fail ("noisy percussion advice still prefers a harmonic oscillator topology");
+
+    auto mallet = reference;
+    mallet.duration = 1.10f;
+    mallet.pitchConfidence = 0.82f;
+    mallet.harmonicity = 0.48f;
+    mallet.inharmonicity = 0.42f;
+    mallet.spectralFlatness = 0.14f;
+    mallet.transientScore = 0.68f;
+    mallet.sustainLevel = 0.20f;
+    mallet.temporalRms = {{ 1.0f, 0.82f, 0.57f, 0.36f, 0.20f, 0.10f, 0.04f, 0.01f }};
+    const auto malletIdentity = ReferenceIdentity::classify (mallet);
+    if (malletIdentity.pitchModel != ReferenceIdentity::PitchModel::inharmonicPitched
+        || malletIdentity.lifecycle != ReferenceIdentity::Lifecycle::plucked)
+        return fail ("mallet identity did not preserve pitched-but-inharmonic evidence");
+    const auto malletAdvice = ResynthesisAdvisor::advise (mallet);
+    if (malletAdvice.sourceFamily != "mallet / metallic pitched" || malletAdvice.method == 2)
+        return fail ("mallet advice collapsed back to a subtractive-only explanation");
+
+    auto evolving = reference;
+    evolving.duration = 4.0f;
+    evolving.sustainLevel = 0.76f;
+    evolving.spectralMotion = 0.24f;
+    evolving.temporalRms.fill (0.62f);
+    const auto evolvingIdentity = ReferenceIdentity::classify (evolving);
+    if (evolvingIdentity.lifecycle != ReferenceIdentity::Lifecycle::evolving
+        || evolvingIdentity.selfTerminates())
+        return fail ("evolving sustained material was misclassified as self-terminating");
+
+    std::cout << "Reference-relative spectral safety and explicit identity tests passed.\n";
     return 0;
 }
