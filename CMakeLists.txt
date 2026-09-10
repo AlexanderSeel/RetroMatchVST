@@ -172,6 +172,22 @@ if(RETROMATCH_BUILD_TESTS)
     juce::juce_recommended_warning_flags)
   add_test(NAME RetroMatchRenderTelemetry COMMAND RetroMatchTelemetryTests)
 
+  juce_add_console_app(RetroMatchSimilaritySafetyTests PRODUCT_NAME "RetroMatch Similarity Safety Tests")
+  juce_generate_juce_header(RetroMatchSimilaritySafetyTests)
+  target_sources(RetroMatchSimilaritySafetyTests PRIVATE
+    Tests/SimilaritySafetyTests.cpp
+    Source/Matching/SimilarityScorer.cpp)
+  target_compile_definitions(RetroMatchSimilaritySafetyTests PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0)
+  target_link_libraries(RetroMatchSimilaritySafetyTests PRIVATE
+    juce::juce_audio_basics
+    juce::juce_core
+    PUBLIC
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+  add_test(NAME RetroMatchSimilaritySafety COMMAND RetroMatchSimilaritySafetyTests)
+
   juce_add_console_app(RetroMatchPhaseATests PRODUCT_NAME "RetroMatch Phase A Safety Tests")
   juce_generate_juce_header(RetroMatchPhaseATests)
   target_sources(RetroMatchPhaseATests PRIVATE
