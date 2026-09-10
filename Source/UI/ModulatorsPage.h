@@ -8,6 +8,27 @@ class ModularModPage final : public juce::Component, private juce::Timer
 public:
     explicit ModularModPage (RetroMatchSynthAudioProcessor& p) : proc (p)
     {
+        addAndMakeVisible (clearRoutes);
+        clearRoutes.setButtonText ("CLEAR ROUTES");
+        clearRoutes.setTooltip ("Reset all four modular routing rows to Off and zero depth. LFO settings are preserved.");
+        clearRoutes.onClick = [this]
+        {
+            juce::PopupMenu confirm;
+            confirm.addItem (1, "Clear all modular routes");
+            confirm.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&clearRoutes), [this] (int result)
+            {
+                if (result != 1) return;
+                for (int i = 0; i < 4; ++i)
+                {
+                    const auto prefix = "moduleMod" + juce::String (i + 1);
+                    setParameterToDefault (prefix + "Source");
+                    setParameterToDefault (prefix + "Dest");
+                    setParameterToDefault (prefix + "Amount");
+                }
+                repaint();
+            });
+        };
+
         for (int i = 0; i < 3; ++i)
         {
             const auto prefix = "lfoModule" + juce::String (i + 2);
@@ -47,19 +68,18 @@ public:
         }
         startTimerHz (20);
     }
+
     void resized() override
     {
         auto r = getLocalBounds().reduced (12);
-        r.removeFromTop (36);
+        auto header = r.removeFromTop (36);
+        clearRoutes.setBounds (header.removeFromRight (125).reduced (2, 4));
         const int lfoHeight = juce::jlimit (210, 230, r.getHeight() - 188);
         auto lfos = r.removeFromTop (lfoHeight);
         const int columnWidth = lfos.getWidth() / 3;
         for (int i = 0; i < 3; ++i)
         {
             auto column = lfos.removeFromLeft (i == 2 ? lfos.getWidth() : columnWidth).reduced (6, 3);
-            // At the minimum LFO-card height reserve 132 px after the preview:
-            // 4 gap + 28 shape + 16 label + >=56 rotary/value + 28 sync.
-            // The preview yields space first so interactive controls never collapse.
             const int plotHeight = juce::jmax (72, column.getHeight() - 132);
             plots[(size_t) i] = column.removeFromTop (plotHeight);
             column.removeFromTop (4);
@@ -85,10 +105,11 @@ public:
             amounts[(size_t) i].setBounds (depth.withWidth (trimWidth));
         }
     }
+
     void paint (juce::Graphics& g) override
     {
         g.fillAll (juce::Colour (0xff101719)); const auto led = findColour (RetroLookAndFeel::primaryLed); g.setColour (led); g.setFont (14);
-        g.drawText ("INDEPENDENT LFO MODULES > MODULATION ROUTES", 16, 10, getWidth() - 32, 28, juce::Justification::centredLeft);
+        g.drawText ("INDEPENDENT LFO MODULES > MODULATION ROUTES", 16, 10, getWidth() - 180, 28, juce::Justification::centredLeft);
         for (int k = 0; k < 3; ++k)
         {
             auto r = plots[(size_t) k].toFloat(); g.setColour (juce::Colour (0xff061015)); g.fillRoundedRectangle (r, 7);
@@ -112,10 +133,25 @@ public:
         g.drawText ("SOURCE", header.withWidth (third).reduced (4.0f, 0.0f), juce::Justification::centredLeft);
         g.drawText ("DESTINATION", header.withTrimmedLeft (third).withWidth (third).reduced (4.0f, 0.0f), juce::Justification::centredLeft);
         g.drawText ("DEPTH", header.withTrimmedLeft (third * 2.0f).reduced (4.0f, 0.0f), juce::Justification::centredLeft);
+
+        int active = 0;
+        for (int i = 0; i < 4; ++i)
+            if (sources[(size_t) i].getSelectedId() > 1 && destinations[(size_t) i].getSelectedId() > 1
+                && std::abs (amounts[(size_t) i].getValue()) > 0.0001) ++active;
+        g.setColour (led.withAlpha (0.52f));
+        g.drawText (juce::String (active) + " / 4 ACTIVE", routesHeaderBounds.withTrimmedLeft (juce::jmax (0, routesHeaderBounds.getWidth() - 90)), juce::Justification::centredRight);
     }
+
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
+
+    void setParameterToDefault (const juce::String& id)
+    {
+        if (auto* parameter = proc.apvts.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->getDefaultValue());
+    }
+
     RetroMatchSynthAudioProcessor& proc;
     std::array<juce::Rectangle<int>, 3> plots;
     juce::Rectangle<int> routesHeaderBounds;
@@ -127,6 +163,7 @@ private:
     std::array<std::unique_ptr<ComboAttachment>, 3> shapeAttachments;
     std::array<std::unique_ptr<SliderAttachment>, 4> amountAttachments;
     std::array<std::unique_ptr<ComboAttachment>, 4> sourceAttachments, destinationAttachments;
+    juce::TextButton clearRoutes;
     void timerCallback() override { repaint(); }
 };
 
