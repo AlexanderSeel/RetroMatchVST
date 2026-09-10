@@ -16,6 +16,11 @@
 - Embedded imported user wavetable data and metadata in `.rmsynth` presets and DAW session state; preset schema metadata is now 1.2 without changing the plug-in product version.
 - Kept the user-wavetable mix append-only after the existing post-1.0 parameter surface and preserved it across matcher candidate selection/morphing.
 - Extended static and DSP smoke coverage for oversampling determinism, latency reporting, MSEG held-loop/release lifecycle, rendered MSEG routing, user-wavetable import/serialization and user-wavetable rendering.
+- Fixed one-shot and naturally decaying resynthesis so amplitude/FM sustains reach zero and amplitude MSEG motion cannot loop indefinitely while a MIDI note remains held.
+- Added held-note tail scoring so short references penalize synthesized energy that continues beyond the source instead of hiding it behind an artificial Note-Off.
+- Enforced the one-shot lifecycle recursively across layered/GOLD instruments and AI-generated variants, including removal of generated delay/reverb tails that would outlive the reference.
+- Added regression coverage for single-voice and layered one-shot self-termination while preserving genuinely sustained short tones.
+- Integrated the responsive LARGE PATCH MAP view directly into the main development line.
 
 ## 1.0.0
 
