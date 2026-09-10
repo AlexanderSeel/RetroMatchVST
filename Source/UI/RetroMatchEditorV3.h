@@ -240,6 +240,7 @@ private:
 
     // Persistent reference -> match -> audition workspace.
     juce::TextButton load { "LOAD REFERENCE" }, quick { "QUICK x3" }, refine { "REFINE x3" }, goldMatch { "GOLD" }, aiVariants { "AI x3" }, compareMatch { "COMPARE" };
+    juce::TextButton magicVary { "MAGIC" }, magicCapture { "ORIGIN" }, magicRestore { "RESTORE" }, magicBack { "BRANCH <" };
     CandidateButton candidateA { "A", "NATURAL" }, candidateB { "B", "FM / HARMONIC" }, candidateC { "C", "WT / TEXTURE" };
     juce::Slider candidateMorph;
     juce::Label candidateMorphLabel;

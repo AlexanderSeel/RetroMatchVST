@@ -47,6 +47,12 @@ juce::AudioBuffer<float> OfflineRenderer::renderPatch (const VoiceParameters& pa
         if (noteOffSample >= start && noteOffSample < start + count)
             midi.addEvent (juce::MidiMessage::noteOff (1, midiNote), noteOffSample - start);
         engine.render (block, midi);
+        for (int channel = 0; channel < block.getNumChannels(); ++channel)
+        {
+            auto* samples = block.getWritePointer (channel);
+            for (int sample = 0; sample < count; ++sample)
+                if (! std::isfinite (samples[sample])) samples[sample] = 0.0f;
+        }
     }
     return out;
 }

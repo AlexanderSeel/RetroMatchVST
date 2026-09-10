@@ -746,6 +746,8 @@ VoiceParameters RetroMatchSynthAudioProcessor::readParams (const juce::ValueTree
     p.reverbDamping = v ("reverbDamping");
     p.stereoWidth = v ("stereoWidth");
     p.outputGainDb = v ("outputGain");
+    p.parallelCoreGain = v ("parallelCoreGain");
+    p.parallelFxGain = v ("parallelFxGain");
 
     p.tempoBpm = effectiveBpm.load (std::memory_order_relaxed);
     for (int i = 0; i < 4; ++i)
@@ -829,21 +831,28 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
                 if (mapping.cc == cc)
                     if (auto* parameter = apvts.getParameter (mapping.parameterId)) parameter->setValue (parameter->convertTo0to1 (value));
     }
+    float bpm = apvts.getRawParameterValue ("manualBpm")->load();
+    bool hostPlaying = true;
+    bool hostJustStarted = false;
+    if (apvts.getRawParameterValue ("tempoSource")->load() >= 0.5f)
+        if (auto* playHead = getPlayHead())
+            if (auto position = playHead->getPosition())
+            {
+                if (auto hostBpm = position->getBpm()) bpm = (float) *hostBpm;
+                if (auto playing = position->getIsPlaying()) hostPlaying = *playing;
+                if (auto ppq = position->getPpqPosition())
+                    hostJustStarted = *ppq <= 0.0001;
+            }
+    bpm = TempoSync::clampBpm (bpm);
+
     renderMidi.clear();
     renderMidi.addEvents (m, 0, b.getNumSamples(), 0);
     {
         const juce::ScopedTryLock lock (editorMidiLock);
         if (lock.isLocked()) { renderMidi.addEvents (editorMidi, 0, -1, 0); editorMidi.clear(); }
     }
-    melodyTransport.process (renderMidi, b.getNumSamples(), getSampleRate());
-
-    float bpm = apvts.getRawParameterValue ("manualBpm")->load();
-    if (apvts.getRawParameterValue ("tempoSource")->load() >= 0.5f)
-        if (auto* playHead = getPlayHead())
-            if (auto position = playHead->getPosition())
-                if (auto hostBpm = position->getBpm())
-                    bpm = (float) *hostBpm;
-    effectiveBpm.store (TempoSync::clampBpm (bpm), std::memory_order_relaxed);
+    melodyTransport.process (renderMidi, b.getNumSamples(), getSampleRate(), hostPlaying, hostJustStarted, bpm);
+    effectiveBpm.store (bpm, std::memory_order_relaxed);
 
     const auto mode = getReferenceAuditionMode();
     engine.setRoutingPlan (routingPlanPublisher.snapshot());
@@ -913,6 +922,19 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
     // and controls the complete instrument, including reference A/B audition.
     const float masterDb = apvts.getRawParameterValue ("masterOutputGain")->load();
     b.applyGain (juce::Decibels::decibelsToGain (masterDb));
+
+    // Last-resort output firewall: DSP safety policy rejects invalid generated
+    // states, but a runtime host/plugin fault must never leak NaN/Inf to the host.
+    for (int ch = 0; ch < b.getNumChannels(); ++ch)
+    {
+        auto* samples = b.getWritePointer (ch);
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            if (! std::isfinite (samples[i]))
+            {
+                samples[i] = 0.0f;
+                nonFiniteSampleCount.fetch_add (1, std::memory_order_relaxed);
+            }
+    }
 
     if (b.getNumSamples() > 0 && b.getNumChannels() > 0)
     {
@@ -1425,6 +1447,7 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
     set ("delayMix", q.delayMix); set ("delayTime", q.delayTime); set ("delayFeedback", q.delayFeedback);
     set ("reverbMix", q.reverbMix); set ("reverbSize", q.reverbSize); set ("reverbDamping", q.reverbDamping);
     set ("stereoWidth", q.stereoWidth); set ("outputGain", q.outputGainDb);
+    set ("parallelCoreGain", q.parallelCoreGain); set ("parallelFxGain", q.parallelFxGain);
 
     // The winning voice owns voice/module settings. The generated rack lifecycle
     // is handled separately so selecting/refining a candidate cannot accidentally
@@ -1748,6 +1771,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
     l.add (std::make_unique<P> ("userWavetableMix", "User Wavetable Mix", juce::NormalisableRange<float> (0, 1), 0.0f));
     l.add (std::make_unique<juce::AudioParameterChoice> ("distortionMode", "Distortion Mode", juce::StringArray { "Soft saturation", "Hard clip", "Sine fold" }, 0));
     l.add (std::make_unique<P> ("distortionMix", "Distortion Mix", juce::NormalisableRange<float> (0, 1), 1.0f));
+    l.add (std::make_unique<P> ("parallelCoreGain", "Parallel Core Gain", juce::NormalisableRange<float> (0, 1), 0.5f));
+    l.add (std::make_unique<P> ("parallelFxGain", "Parallel FX Gain", juce::NormalisableRange<float> (0, 1), 0.5f));
     l.add (std::make_unique<P> ("mainLayerGain", "Main Layer Level", juce::NormalisableRange<float> (0, 1), 1.0f));
     for (int i = 1; i <= VoiceParameters::extraLayerCount; ++i)
     {
@@ -1899,13 +1924,16 @@ bool RetroMatchSynthAudioProcessor::applyDirectedVariation (VariationDirection d
             return false;
     }
 
+    magicBranchHistory.push_back (snapshotCurrent());
+    if (magicBranchHistory.size() > 16) magicBranchHistory.erase (magicBranchHistory.begin());
     static constexpr const char* names[] {
         "Cinematic", "Atmospheric", "Organic", "Orchestral", "Staccato", "Percussive",
         "Techno", "Warm Analog", "Dark", "Bright", "Wide", "Intimate", "Rhythmic",
         "Fragile", "Aggressive", "Glitch"
     };
     const auto index = juce::jlimit (0, (int) std::size (names) - 1, (int) direction);
-    applyPresetParameters (variant, "Magic / " + juce::String (names[index]));
+    const auto changed = SoundMatcher::changedVariationDimensions (source, variant);
+    applyPresetParameters (variant, "Magic / " + juce::String (names[index]) + " / " + changed.joinIntoString (", "));
     currentCandidateFeatures.reset();
     lastMatch = {};
     return true;
@@ -1914,6 +1942,30 @@ bool RetroMatchSynthAudioProcessor::applyDirectedVariation (VariationDirection d
 void RetroMatchSynthAudioProcessor::captureMagicOrigin()
 {
     magicOriginSnapshot = snapshotCurrent();
+    magicBranchHistory.clear();
+}
+
+float RetroMatchSynthAudioProcessor::getMagicOriginDistance() const
+{
+    if (! magicOriginSnapshot.isValid()) return 0.0f;
+    return SoundMatcher::normalizedVariationDistance (readParams (magicOriginSnapshot, false), readParams ({}, false));
+}
+
+juce::StringArray RetroMatchSynthAudioProcessor::getMagicChangedDimensions() const
+{
+    if (! magicOriginSnapshot.isValid()) return { "NONE" };
+    return SoundMatcher::changedVariationDimensions (readParams (magicOriginSnapshot, false), readParams ({}, false));
+}
+
+bool RetroMatchSynthAudioProcessor::restoreMagicBranch (int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) magicBranchHistory.size())) return false;
+    const auto restored = magicBranchHistory[(size_t) index];
+    magicBranchHistory.erase (magicBranchHistory.begin() + index, magicBranchHistory.end());
+    applyEditingSnapshot (restored);
+    lastMatch = {};
+    currentCandidateFeatures.reset();
+    return true;
 }
 
 bool RetroMatchSynthAudioProcessor::restoreMagicOrigin()
@@ -1964,7 +2016,21 @@ bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
     const auto storedReference = main ? main->referenceWavetable : referenceWavetable;
     const auto storedUser = main ? main->userWavetable : userWavetable;
 
-    auto xml = canonicalState().createXml();
+    auto state = canonicalState();
+    if (magicOriginSnapshot.isValid())
+    {
+        juce::ValueTree origin ("MAGIC_ORIGIN");
+        origin.appendChild (magicOriginSnapshot.createCopy(), nullptr);
+        state.appendChild (origin, nullptr);
+    }
+    if (! magicBranchHistory.empty())
+    {
+        juce::ValueTree branches ("MAGIC_BRANCHES");
+        for (const auto& branch : magicBranchHistory)
+            if (branch.isValid()) branches.appendChild (branch.createCopy(), nullptr);
+        state.appendChild (branches, nullptr);
+    }
+    auto xml = state.createXml();
     if (! xml) return false;
     xml->setAttribute ("presetVersion", "1.4");
     if (storedReference && storedReference->valid) xml->setAttribute ("referenceWavetable", storedReference->toBase64());
@@ -1998,6 +2064,13 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
     const float preservedStrategy = apvts.getRawParameterValue ("resynthStrategy")->load();
     const float preservedComplexity = apvts.getRawParameterValue ("resynthComplexity")->load();
     apvts.replaceState (stateWithPost10Defaults (*xml));
+    const auto origin = apvts.state.getChildWithName ("MAGIC_ORIGIN");
+    magicOriginSnapshot = origin.isValid() ? origin.getChildWithName ("LAYER")
+                                           : apvts.state.getChildWithName ("LAYER");
+    magicBranchHistory.clear();
+    const auto branches = apvts.state.getChildWithName ("MAGIC_BRANCHES");
+    for (int i = 0; i < branches.getNumChildren() && magicBranchHistory.size() < 16; ++i)
+        if (branches.getChild (i).hasType ("LAYER")) magicBranchHistory.push_back (branches.getChild (i));
     auto restoreGlobal = [this] (const char* id, float value)
     {
         if (auto* parameter = apvts.getParameter (id))
@@ -2045,7 +2118,21 @@ void RetroMatchSynthAudioProcessor::getStateInformation (juce::MemoryBlock& d)
     const auto storedReference = main ? main->referenceWavetable : referenceWavetable;
     const auto storedUser = main ? main->userWavetable : userWavetable;
 
-    if (auto xml = canonicalState().createXml())
+    auto state = canonicalState();
+    if (magicOriginSnapshot.isValid())
+    {
+        juce::ValueTree origin ("MAGIC_ORIGIN");
+        origin.appendChild (magicOriginSnapshot.createCopy(), nullptr);
+        state.appendChild (origin, nullptr);
+    }
+    if (! magicBranchHistory.empty())
+    {
+        juce::ValueTree branches ("MAGIC_BRANCHES");
+        for (const auto& branch : magicBranchHistory)
+            if (branch.isValid()) branches.appendChild (branch.createCopy(), nullptr);
+        state.appendChild (branches, nullptr);
+    }
+    if (auto xml = state.createXml())
     {
         xml->setAttribute ("lightPalette", lightPalette.load());
         if (storedReference && storedReference->valid)
@@ -2082,6 +2169,13 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
             melodyTransport.stop();
             lightPalette.store (juce::jlimit (0, 3, xml->getIntAttribute ("lightPalette", 0)));
             apvts.replaceState (stateWithPost10Defaults (*xml));
+            const auto origin = apvts.state.getChildWithName ("MAGIC_ORIGIN");
+            magicOriginSnapshot = origin.isValid() ? origin.getChildWithName ("LAYER")
+                                                   : apvts.state.getChildWithName ("LAYER");
+            magicBranchHistory.clear();
+            const auto branches = apvts.state.getChildWithName ("MAGIC_BRANCHES");
+            for (int i = 0; i < branches.getNumChildren() && magicBranchHistory.size() < 16; ++i)
+                if (branches.getChild (i).hasType ("LAYER")) magicBranchHistory.push_back (branches.getChild (i));
             restoreLayers();
             rebuildRoutingPlanFromState();
             analysisStartSeconds.store ((float) xml->getDoubleAttribute ("analysisStartSeconds", 0.0));

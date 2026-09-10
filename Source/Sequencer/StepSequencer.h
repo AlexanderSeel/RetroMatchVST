@@ -38,6 +38,7 @@ struct Step
     float velocity = 1.0f;
     float gate = 0.85f;
     float probability = 1.0f;
+    float modulationProbability = 1.0f;
     int ratchet = 1;
     float microTiming = 0.0f; // fraction of a nominal step, bounded to +/-0.45
     bool glide = false;

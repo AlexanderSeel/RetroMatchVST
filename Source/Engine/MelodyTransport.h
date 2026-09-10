@@ -91,11 +91,12 @@ public:
     int getSequencerCurrentStep() const noexcept { return sequencerCurrentStep.load (std::memory_order_relaxed); }
     bool isSequencerRunning() const noexcept { return sequencerRunning.load (std::memory_order_relaxed); }
 
-    void process (juce::MidiBuffer& midi, int samples, double sr)
+    void process (juce::MidiBuffer& midi, int samples, double sr,
+                  bool hostPlaying = true, bool hostJustStarted = false, double hostBpm = 120.0)
     {
         if (samples <= 0 || sr <= 0.0) return;
         applySequencerCommands (midi, sr);
-        processSequencer (midi, samples);
+        processSequencer (midi, samples, hostPlaying, hostJustStarted, hostBpm);
 
         if (commandReady.load (std::memory_order_acquire))
         {
@@ -153,6 +154,7 @@ private:
     std::atomic<bool> sequencerCommandReady { true };
     std::atomic<int> sequencerCurrentStep { 0 };
     std::atomic<bool> sequencerRunning { false };
+    bool wasHostPlaying = false;
     bool pendingSequencerPatternDirty = true;
     bool appliedSequencerEnabled = false;
     double sequencerSampleRate = 0.0;
@@ -226,10 +228,13 @@ private:
                 return;
             }
     }
-    void processSequencer (juce::MidiBuffer& midi, int samples)
+    void processSequencer (juce::MidiBuffer& midi, int samples,
+                           bool hostPlaying, bool hostJustStarted, double hostBpm)
     {
         if (! appliedSequencerEnabled)
         {
+            if (sequencerRunning.load (std::memory_order_relaxed))
+                releaseSequencerNotes (midi, 0);
             sequencerRunning.store (false, std::memory_order_relaxed);
             return;
         }
@@ -260,8 +265,18 @@ private:
 
         drainSequencerNoteOffs (midi, samples);
         RetroMatchSequencer::Transport transport;
-        transport.playing = true;
-        transport.bpm = appliedSequencerSettings.internalBpm;
+        transport.playing = appliedSequencerSettings.clockSource == RetroMatchSequencer::ClockSource::internal
+                         || hostPlaying;
+        transport.justStarted = hostJustStarted || (hostPlaying && ! wasHostPlaying);
+        transport.bpm = appliedSequencerSettings.clockSource == RetroMatchSequencer::ClockSource::internal
+                     ? appliedSequencerSettings.internalBpm : hostBpm;
+        wasHostPlaying = hostPlaying;
+        if (! transport.playing)
+        {
+            releaseSequencerNotes (midi, 0);
+            sequencerRunning.store (false, std::memory_order_relaxed);
+            return;
+        }
         const int triggerCount = sequencer.processBlock (samples, transport, sequencerTriggers.data(), sequencerTriggerCapacity);
         for (int i = 0; i < triggerCount; ++i)
         {

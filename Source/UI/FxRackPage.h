@@ -194,7 +194,28 @@ public:
         : tempo (p), chorusSync (p, "chorusSync", "chorusDivision", "CHORUS"), delaySync (p, "delaySync", "delayDivision", "DELAY"),
           globalRack (p, "globalFxModule", "GLOBAL BUS"), rack (p, "fxModule", "INSTANCE")
     {
-        addAndMakeVisible (tempo); addAndMakeVisible (chorusSync); addAndMakeVisible (delaySync); addAndMakeVisible (tabs);
+        addAndMakeVisible (tempo); addAndMakeVisible (chorusSync); addAndMakeVisible (delaySync);
+        addAndMakeVisible (parallelCore); addAndMakeVisible (parallelFx);
+        for (auto* label : { &parallelCoreLabel, &parallelFxLabel })
+        {
+            addAndMakeVisible (*label);
+            label->setColour (juce::Label::textColourId, findColour (RetroLookAndFeel::secondaryLed));
+            label->setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+            label->setJustificationType (juce::Justification::centred);
+        }
+        parallelCoreLabel.setText ("CORE", juce::dontSendNotification);
+        parallelFxLabel.setText ("FX", juce::dontSendNotification);
+        addAndMakeVisible (tabs);
+        for (auto* slider : { &parallelCore, &parallelFx })
+        {
+            slider->setSliderStyle (juce::Slider::LinearHorizontal);
+            slider->setTextBoxStyle (juce::Slider::TextBoxRight, false, 46, 18);
+            slider->setNumDecimalPlacesToDisplay (2);
+        }
+        parallelCore.setTooltip ("Parallel Core branch gain. The Core and FX branch gains are normalized together to prevent accidental level multiplication.");
+        parallelFx.setTooltip ("Parallel FX branch gain. The Core and FX branch gains are normalized together to prevent accidental level multiplication.");
+        parallelCoreAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, "parallelCoreGain", parallelCore);
+        parallelFxAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, "parallelFxGain", parallelFx);
         tabs.addTab ("GLOBAL BUS", juce::Colour (0xff101719), &globalRack, false);
         tabs.addTab ("INSTANCE RACK", juce::Colour (0xff101719), &rack, false);
         tabs.addTab ("BUILT-IN FX", juce::Colour (0xff101719), builtIn, false);
@@ -203,14 +224,21 @@ public:
     {
         auto r = getLocalBounds();
         auto clock = r.removeFromTop (38).reduced (8, 3);
-        tempo.setBounds (clock.removeFromLeft (juce::jmax (330, getWidth() / 2)));
+        tempo.setBounds (clock.removeFromLeft (juce::jmax (280, getWidth() / 3)));
         chorusSync.setBounds (clock.removeFromLeft (170));
-        delaySync.setBounds (clock.removeFromLeft (170));
+        delaySync.setBounds (clock.removeFromLeft (150));
+        auto core = clock.removeFromLeft (145).reduced (2);
+        auto fx = clock.removeFromLeft (145).reduced (2);
+        parallelCoreLabel.setBounds (core.removeFromLeft (34)); parallelCore.setBounds (core);
+        parallelFxLabel.setBounds (fx.removeFromLeft (24)); parallelFx.setBounds (fx);
         tabs.setBounds (r);
     }
 private:
     TempoSyncBar tempo;
     TempoSyncSelector chorusSync, delaySync;
+    juce::Label parallelCoreLabel, parallelFxLabel;
+    juce::Slider parallelCore, parallelFx;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> parallelCoreAttachment, parallelFxAttachment;
     ModularFxPage globalRack, rack;
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
 };

@@ -105,6 +105,10 @@ struct VoiceParameters
     float reverbMix = 0.0f, reverbSize = 0.45f, reverbDamping = 0.45f;
     float stereoWidth = 1.0f;
     float outputGainDb = -3.0f;
+    // Normalized gains for the supported parallel FX split. The pair is
+    // normalized at mix time, so changing either control cannot create gain.
+    float parallelCoreGain = 0.5f;
+    float parallelFxGain = 0.5f;
 
     // Clock metadata is global at render time. Stored layer snapshots retain
     // their free-running values; SynthEngine overwrites these metadata fields from

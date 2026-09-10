@@ -229,6 +229,23 @@ if(RETROMATCH_BUILD_TESTS)
     juce::juce_recommended_warning_flags)
   add_test(NAME RetroMatchPresetLibrary COMMAND RetroMatchPresetLibraryTests)
 
+  juce_add_console_app(RetroMatchPresetPackSafetyTests PRODUCT_NAME "RetroMatch Preset Pack Safety Tests")
+  juce_generate_juce_header(RetroMatchPresetPackSafetyTests)
+  target_sources(RetroMatchPresetPackSafetyTests PRIVATE
+    Tests/PresetPackSafetyTests.cpp)
+  target_compile_definitions(RetroMatchPresetPackSafetyTests PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0)
+  target_link_libraries(RetroMatchPresetPackSafetyTests PRIVATE
+    juce::juce_data_structures
+    juce::juce_audio_basics
+    juce::juce_dsp
+    juce::juce_core
+    PUBLIC
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+  add_test(NAME RetroMatchPresetPackSafety COMMAND RetroMatchPresetPackSafetyTests)
+
   add_executable(RetroMatchSequencerTests
     Tests/SequencerCoreTests.cpp
     Source/Sequencer/StepSequencer.cpp)

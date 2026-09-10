@@ -169,6 +169,7 @@ public:
 
     float getOutputPeakLeft() const noexcept { return outputPeakLeft.load (std::memory_order_relaxed); }
     float getOutputPeakRight() const noexcept { return outputPeakRight.load (std::memory_order_relaxed); }
+    std::uint64_t getNonFiniteSampleCount() const noexcept { return nonFiniteSampleCount.load (std::memory_order_relaxed); }
 
     MatchResult fitReference();
     MatchResult refineReference (SoundMatcher::ProgressCallback progress = {}, SoundMatcher::CancelCallback cancel = {});
@@ -242,6 +243,10 @@ public:
     void captureMagicOrigin();
     bool restoreMagicOrigin();
     bool hasMagicOrigin() const noexcept { return magicOriginSnapshot.isValid(); }
+    float getMagicOriginDistance() const;
+    juce::StringArray getMagicChangedDimensions() const;
+    int getMagicBranchCount() const noexcept { return (int) magicBranchHistory.size(); }
+    bool restoreMagicBranch (int index);
     juce::String getPresetName() const { return apvts.state.getProperty ("patchName", "Custom patch").toString(); }
     bool loadPreset (const juce::File&);
     bool exportPreviewWav (const juce::File&, float seconds = 2.5f) const;
@@ -279,6 +284,7 @@ private:
     std::atomic<bool> midiLearning { false };
     std::atomic<float> outputPeakLeft { 0.0f };
     std::atomic<float> outputPeakRight { 0.0f };
+    std::atomic<std::uint64_t> nonFiniteSampleCount { 0 };
     // Transient Compare correction state. It intentionally stays out of APVTS/session
     // automation until KEEP explicitly promotes the adjusted voice into the working patch.
     std::array<CompareFineTune::Values, 3> compareFineTuneValuesByCandidate {};
@@ -294,6 +300,7 @@ private:
     std::atomic<std::shared_ptr<const VoiceParameters>> editingMain;
     juce::ValueTree editingMainSnapshot;
     juce::ValueTree magicOriginSnapshot;
+    std::vector<juce::ValueTree> magicBranchHistory;
     juce::ValueTree snapshotCurrent() const;
     juce::ValueTree canonicalState();
     void applyEditingSnapshot (const juce::ValueTree&);

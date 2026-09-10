@@ -862,6 +862,12 @@ private:
         for (const int samples : latencyPresets)
             latencyMenu.addItem (100 + samples, juce::String (samples) + " samples", true, latency == samples);
         menu.addSubMenu ("DECLARED LATENCY", latencyMenu);
+        const bool removable = modelNode != nullptr
+                            && modelNode->type != PatchGraph::NodeType::master
+                            && modelNode->type != PatchGraph::NodeType::clock
+                            && ! modelNode->locked;
+        menu.addSeparator();
+        menu.addItem (700, "REMOVE NODE (UNDO AVAILABLE)", removable);
         juce::Component::SafePointer<SignalLabPage> safeThis (this);
         const auto id = node.id;
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safeThis, id] (int result)
@@ -870,6 +876,26 @@ private:
             if (result == 1)
             {
                 safeThis->toggleNodeLock (id);
+                return;
+            }
+            if (result == 700)
+            {
+                safeThis->pushUndoState();
+                juce::String reason;
+                if (! safeThis->graphModel.removeNode (id, &reason))
+                {
+                    safeThis->graphValidationMessage = reason;
+                    safeThis->repaint();
+                    return;
+                }
+                safeThis->selectedNodeId.clear();
+                safeThis->selectedEdgeKey.clear();
+                safeThis->restoredNodePositions.erase (id.toStdString());
+                safeThis->restoredNodeLocks.erase (id.toStdString());
+                safeThis->restoredNodeRoutingModes.erase (id.toStdString());
+                safeThis->stageGraphStateForPersistence();
+                safeThis->flushGraphStatePersistence();
+                safeThis->repaint();
                 return;
             }
             if (result < 100 || result > 612) return;
@@ -1046,7 +1072,125 @@ private:
     {
         if (edge.editKind == EdgeEditKind::modulationRoute) showEditRouteMenu (edge.layer, edge.slot);
         else if (edge.editKind == EdgeEditKind::layerCombine) showCombineMenu (edge.layer);
-        else showFixedConnectionMenu();
+        else
+        {
+            const auto modelEdge = std::find_if (graphModel.edges.begin(), graphModel.edges.end(),
+                                                 [&] (const auto& candidate) { return candidate.id == edge.key; });
+            if (modelEdge == graphModel.edges.end() || ! modelEdge->editable || modelEdge->type != PatchGraph::PortType::audio)
+            {
+                showFixedConnectionMenu();
+                return;
+            }
+
+            juce::PopupMenu menu;
+            menu.addSectionHeader ("EDIT AUDIO CONNECTION");
+            menu.addItem (1, "INSERT UTILITY (GAIN / PAN / WIDTH)");
+            menu.addItem (2, "DISCONNECT (UNDO TO RESTORE)");
+            juce::PopupMenu mergeMenu;
+            std::vector<juce::String> mergeEdgeIds;
+            for (const auto& candidate : graphModel.edges)
+                if (candidate.id != edge.key && candidate.editable && candidate.type == PatchGraph::PortType::audio
+                    && candidate.toNode == modelEdge->toNode && candidate.toPort == modelEdge->toPort)
+                {
+                    mergeEdgeIds.push_back (candidate.id);
+                    const auto* source = graphModel.findNode (candidate.fromNode);
+                    mergeMenu.addItem (10000 + (int) mergeEdgeIds.size() - 1,
+                                       "WITH " + (source != nullptr ? source->title : candidate.fromNode));
+                }
+            menu.addSubMenu ("MERGE FAN-IN", mergeMenu, ! mergeEdgeIds.empty());
+            juce::Component::SafePointer<SignalLabPage> safeThis (this);
+            const auto edgeId = edge.key;
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+                                [safeThis, edgeId, mergeEdgeIds] (int result)
+            {
+                if (safeThis == nullptr) return;
+                if (result >= 10000 && result < 10000 + (int) mergeEdgeIds.size())
+                {
+                    const auto secondEdgeId = mergeEdgeIds[(size_t) (result - 10000)];
+                    const auto first = std::find_if (safeThis->graphModel.edges.begin(), safeThis->graphModel.edges.end(),
+                                                     [&] (const auto& candidate) { return candidate.id == edgeId; });
+                    if (first == safeThis->graphModel.edges.end()) return;
+                    PatchGraph::Node mixer;
+                    mixer.id = "MIXER:" + edgeId + ":" + secondEdgeId;
+                    mixer.type = PatchGraph::NodeType::mixer;
+                    mixer.title = "MIXER / NORMALIZED FAN-IN";
+                    mixer.ports = {
+                        { "audio.in.a", PatchGraph::PortType::audio, PatchGraph::PortDirection::input, false, false },
+                        { "audio.in.b", PatchGraph::PortType::audio, PatchGraph::PortDirection::input, false, false },
+                        { "audio.out", PatchGraph::PortType::audio, PatchGraph::PortDirection::output, true, false }
+                    };
+                    if (const auto* destination = safeThis->graphModel.findNode (first->toNode))
+                    {
+                        mixer.position = destination->position;
+                        mixer.position.x -= 72.0f;
+                        mixer.positionValid = destination->positionValid;
+                    }
+                    safeThis->pushUndoState();
+                    juce::String reason;
+                    if (! safeThis->graphModel.mergeEdges (edgeId, secondEdgeId, std::move (mixer), &reason))
+                    {
+                        safeThis->graphValidationMessage = reason;
+                        safeThis->repaint();
+                        return;
+                    }
+                    safeThis->selectedEdgeKey.clear();
+                    safeThis->stageGraphStateForPersistence();
+                    safeThis->flushGraphStatePersistence();
+                    safeThis->repaint();
+                    return;
+                }
+                if (result == 2)
+                {
+                    safeThis->pushUndoState();
+                    PatchGraph::Edge removed;
+                    juce::String reason;
+                    if (! safeThis->graphModel.disconnectEdge (edgeId, &removed, &reason))
+                    {
+                        safeThis->graphValidationMessage = reason;
+                        safeThis->repaint();
+                        return;
+                    }
+                    safeThis->selectedEdgeKey.clear();
+                    safeThis->stageGraphStateForPersistence();
+                    safeThis->flushGraphStatePersistence();
+                    safeThis->repaint();
+                    return;
+                }
+                if (result != 1) return;
+                const auto original = std::find_if (safeThis->graphModel.edges.begin(), safeThis->graphModel.edges.end(),
+                                                    [&] (const auto& candidate) { return candidate.id == edgeId; });
+                if (original == safeThis->graphModel.edges.end()) return;
+
+                PatchGraph::Node utility;
+                utility.id = "UTILITY:" + edgeId + ":GAINPANWIDTH";
+                utility.type = PatchGraph::NodeType::utility;
+                utility.title = "GAIN / PAN / WIDTH";
+                utility.ports = {
+                    { "audio.in", PatchGraph::PortType::audio, PatchGraph::PortDirection::input, false, false },
+                    { "audio.out", PatchGraph::PortType::audio, PatchGraph::PortDirection::output, true, false }
+                };
+                const auto* from = safeThis->graphModel.findNode (original->fromNode);
+                const auto* to = safeThis->graphModel.findNode (original->toNode);
+                if (from != nullptr && to != nullptr)
+                {
+                    utility.position.x = (from->position.x + to->position.x) * 0.5f;
+                    utility.position.y = (from->position.y + to->position.y) * 0.5f;
+                    utility.positionValid = from->positionValid && to->positionValid;
+                }
+                safeThis->pushUndoState();
+                juce::String reason;
+                if (! safeThis->graphModel.insertNodeOnEdge (edgeId, std::move (utility), &reason))
+                {
+                    safeThis->graphValidationMessage = reason;
+                    safeThis->repaint();
+                    return;
+                }
+                safeThis->selectedEdgeKey.clear();
+                safeThis->stageGraphStateForPersistence();
+                safeThis->flushGraphStatePersistence();
+                safeThis->repaint();
+            });
+        }
     }
 
     void showModHubMenu (int layer)
@@ -1553,6 +1697,25 @@ private:
                 pushUndoState();
                 setParameterValue ("layer" + juce::String (edge.layer + 1) + "Enabled", 0.0f);
                 selectedEdgeKey.clear();
+                repaint();
+                return true;
+            }
+            const auto modelEdge = std::find_if (graphModel.edges.begin(), graphModel.edges.end(),
+                                                 [&] (const auto& candidate) { return candidate.id == edge.key; });
+            if (modelEdge != graphModel.edges.end() && modelEdge->editable && modelEdge->type == PatchGraph::PortType::audio)
+            {
+                pushUndoState();
+                PatchGraph::Edge removed;
+                juce::String reason;
+                if (! graphModel.disconnectEdge (edge.key, &removed, &reason))
+                {
+                    graphValidationMessage = reason;
+                    repaint();
+                    return false;
+                }
+                selectedEdgeKey.clear();
+                stageGraphStateForPersistence();
+                flushGraphStatePersistence();
                 repaint();
                 return true;
             }

@@ -140,10 +140,10 @@ The existing Patch Map foundation is usable; finish a small set of deterministic
 
 - [~] Editable audio fan-in reorder is now validated and serialized through the patch model; explicit pre/post processing-node ownership and UI actions remain open.
 - [~] Centralize bounded Gain/Pan/Width operations in allocation-free routing utilities; generalized graph Split/Merge node execution remains open.
-- [~] Added allocation-free normalized parallel branch mixing with deterministic compensation; user-facing branch dry/wet/gain controls remain open.
+- [~] Added allocation-free normalized parallel branch mixing with deterministic compensation; bounded Parallel Core Gain and Parallel FX Gain controls now drive the supported split, while per-node branch controls remain open.
 - [~] Preserve/compute latency across routed oversampled/nonlinear nodes; patch nodes now expose validated editing, persist bounded declared latency and DspRouting compilation computes deterministic maximum audio-path latency, while runtime delay application for arbitrary future graph processors remains open.
 - [~] Add allocation-free atomic peak meters for the main bus and every rendered companion branch, plus Patch Map instance solo/audition; solo source state now persists through the validated graph and atomic routing plan, while richer audition presentation remains open.
-- [~] Add validated model-level insert, merge, disconnect/restore edge and node-removal actions; generic node context now exposes bounded declared-latency presets, while insert/merge/remove UI actions remain open.
+- [~] Add validated model-level insert, merge, disconnect/restore edge and node-removal actions; generic node context exposes bounded declared-latency presets and undoable remove, while editable audio edges now expose utility insertion, compatible fan-in merge and disconnect-with-undo restoration.
 - [x] Add persistent node-lock state and locked-position UI across Patch Map node types, plus modifier-click multi-select/group movement; minimap remains deferred unless eight-instance graphs prove it useful.
 - [ ] Stress-test graph edits while audio is running.
 
@@ -179,9 +179,9 @@ Candidate A/B/C reproduces the exact rack that was scored, including layers/glob
 
 ## E1. Versioned pack format
 
-- [ ] Add ZIP-compatible `.rmpack` with manifest: stable pack/patch IDs, version, author, description, tags/categories, minimum schema/plugin version and asset list.
+- [~] Add ZIP-compatible `.rmpack` with manifest: typed stable pack/patch IDs, version, author, description, tags/categories, minimum schema/plugin version and asset list; ZIP archive integration remains open.
 - [ ] Reuse versioned `.rmsynth` patch data and include only required owned assets.
-- [~] Validate paths/sizes; reusable pack-safety helpers now validate manifest identity/assets, reject absolute paths, traversal components and drive-qualified paths, enforce asset limits and verify library-root containment, while ZIP archive integration remains open.
+- [~] Validate paths/sizes; reusable pack-safety helpers now provide a typed manifest model, validated `manifest.json` read/write, bounded metadata/tag lists with unique patch IDs, SHA-256 format and asset-integrity verification, path traversal protection, asset limits and library-root containment, with dedicated round-trip/tamper/traversal regressions; ZIP archive integration remains open.
 - [ ] Handle re-import/update conflicts explicitly: Ask / Keep / Replace / Import as Copy.
 
 ## E2. Library operations
@@ -204,7 +204,7 @@ Candidate A/B/C reproduces the exact rack that was scored, including layers/glob
 
 ## F1. Real-time core
 
-- [x] Host-sync/internal clock, 1-64 steps, musical divisions including dotted/triplet, swing and 1-4 octave range.
+- [x] Host-sync/internal clock, 1-64 steps, musical divisions including dotted/triplet, swing and 1-4 octave range; DAW play/stop, restart-at-transport-start and host BPM now reach the audio-thread sequencer transport.
 - [x] Modes: Up, Down, Up/Down, Down/Up, Played Order, Chord, Random, Walk and Pattern.
 - [x] Latch/hold and explicit restart/reset/free-run behavior.
 - [x] Fixed/preallocated pattern state; no locks/allocations in the audio callback.
@@ -212,14 +212,14 @@ Candidate A/B/C reproduces the exact rack that was scored, including layers/glob
 ## F2. Step and modulation data
 
 - [x] Per-step pitch/degree, octave, velocity/accent, gate, rest, tie, probability, ratchet, bounded micro-timing, optional glide and macro values.
-- [~] Two per-step macro lanes are present and bounded; destination binding and Hold/Linear/Smooth/bounded-random interpolation remain open.
-- [~] Per-step probability is implemented; independent modulation probability and polymetric lane rate multipliers remain open.
+- [~] Two per-step macro lanes and independent modulation probability are bounded, editable and persisted; destination binding and Hold/Linear/Smooth/bounded-random interpolation remain open.
+- [~] Per-step note probability and independent modulation probability are implemented and persisted; polymetric lane rate multipliers remain open.
 
 ## F3. UI/persistence/content
 
 - [~] Sequencer UI exposes the active pattern and editing controls; a large paged/zoomable editor with dedicated tie/probability/ratchet lanes remains open.
 - [x] Copy/paste/duplicate/rotate/reverse/invert/constrained-randomize and bounded humanize transforms are implemented.
-- [ ] Curated reusable pattern library independent of synth presets.
+- [~] Curated reusable pattern library independent of synth presets now provides eight bounded starting patterns and a sequencer UI loader; user-authored pattern files and larger browser remain open.
 - [~] Active sequence state is persisted with the plug-in state; reusable pattern files and `.rmpack` inclusion remain open.
 - [x] MIDI output remains deferred while the internal sequencer transport is stabilized.
 
@@ -238,19 +238,19 @@ Magic deliberately evolves a sample/patch while preserving a user-selected amoun
 
 ## G2. Initial semantic directions
 
-- [~] Cinematic, Atmospheric, Organic, Orchestral, Staccato, Percussive
-- [~] Techno, Trance, Digital/FM, Warm/Analog
-- [~] Dark/Bright, Wide/Intimate, Rhythmic, Fragile, Aggressive, Glitch/Experimental
+- [x] Cinematic, Atmospheric, Organic, Orchestral, Staccato, Percussive
+- [x] Techno, Trance, Digital/FM, Warm/Analog
+- [x] Dark/Bright, Wide/Intimate, Rhythmic, Fragile, Aggressive, Glitch/Experimental
 
 Each direction must map to an explicit bounded set of synthesis/routing dimensions. Descriptive labels are not permission for arbitrary randomization.
 
 ## G3. Identity preservation and safety
 
-- [~] Identity/intensity control now scales directed mutation depth and remains bounded to 0..1; immutable origin distance reporting is still open.
+- [~] Identity/intensity control now scales directed mutation depth and remains bounded to 0..1; the editor exposes subtle/medium/strong/maximum choices, and the processor exposes bounded normalized distance from the immutable Magic origin, while rendered branch-history reporting remains open.
 - [~] Directed Magic variations now reuse the configured pitch/oscillator/FM/envelope/filter/modulation/FX locks after mutation; lifecycle and Patch Map routing locks remain separate follow-up work.
-- [~] Processor now captures an in-memory Magic origin on the first directed variation and exposes explicit capture/restore actions; persistent origin and branch history remain open.
+- [~] Processor captures a Magic origin on the first directed variation, exposes explicit capture/restore actions, keeps and persists a bounded 16-entry branch history with backward-walking restore APIs, and persists that origin through plug-in/preset state.
 - [~] Directed variations are finite/range-clamped, preserve the loaded reference lifecycle, and the processor renders/evaluates them before applying, while KEEP/APPLY and no-reference safety rendering remain open.
-- [ ] Show changed dimensions and do not report Match similarity as though creative transformation were recovery accuracy.
+- [~] Directed Magic labels now include bounded changed-dimension reporting and clear Match state; processor exposes origin-relative dimensions/distance and the editor now provides origin/branch restore controls with status-line diff reporting, while a dedicated audition/diff panel remains open.
 
 ---
 
@@ -261,7 +261,7 @@ Each direction must map to an explicit bounded set of synthesis/routing dimensio
 - [ ] pluginval/auval coverage where practical.
 - [ ] Session/preset migration fixtures for released schemas.
 - [ ] Stress/soak tests for graph edits, candidate background work, preset browsing and sequencer transitions.
-- [ ] Zero non-finite output in automated safety renders; bounded clipping/headroom policy documented.
+- [~] Live output and OfflineRenderer now have final non-finite firewalls; live invalid-sample counts are exposed atomically, while automated zero-nonfinite assertions and final clipping/headroom verification remain open.
 - [ ] Final listening pass on reference fixtures and representative factory content.
 
 ---

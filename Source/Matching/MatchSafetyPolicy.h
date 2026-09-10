@@ -38,7 +38,7 @@ inline bool compatible (const VoiceParameters& p, int depth = 0) noexcept
         p.sustain, p.release, p.cutoff, p.resonance, p.lfoRate, p.lfoPitch, p.lfoCutoff,
         p.lfoAmp, p.msegDepth, p.tempoBpm, p.chorusMix, p.chorusRate, p.chorusDepth,
         p.delayMix, p.delayTime, p.delayFeedback, p.reverbMix, p.reverbSize, p.reverbDamping,
-        p.stereoWidth, p.outputGainDb, p.mainLayerGain };
+        p.stereoWidth, p.outputGainDb, p.parallelCoreGain, p.parallelFxGain, p.mainLayerGain };
     for (const auto value : values)
         if (! finite (value)) return false;
 
@@ -68,6 +68,7 @@ inline bool compatible (const VoiceParameters& p, int depth = 0) noexcept
         || ! between (p.sustain, 0.0f, 1.0f) || ! between (p.cutoff, 20.0f, 20000.0f)
         || ! between (p.resonance, 0.0f, 1.0f) || ! between (p.stereoWidth, 0.0f, 2.0f)
         || ! between (p.mainLayerGain, 0.0f, 1.0f) || ! between (p.outputGainDb, -48.0f, 12.0f)
+        || ! between (p.parallelCoreGain, 0.0f, 1.0f) || ! between (p.parallelFxGain, 0.0f, 1.0f)
         || ! between (p.tempoBpm, 40.0f, 300.0f) || ! between (p.masterTuneCents, -1200.0f, 1200.0f)
         || ! between (p.attack, 0.0f, 8.0f) || ! between (p.decay, 0.0f, 8.0f)
         || ! between (p.release, 0.0f, 8.0f) || ! between (p.lfoRate, 0.0f, 30.0f)

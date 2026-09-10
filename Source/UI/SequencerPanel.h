@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../PluginProcessor.h"
+#include "../Sequencer/PatternLibrary.h"
 #include "RetroLookAndFeel.h"
 #include <algorithm>
 #include <memory>
@@ -21,9 +22,9 @@ public:
         status.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
         status.setColour (juce::Label::textColourId, findColour (RetroLookAndFeel::secondaryLed));
 
-        for (auto* c : std::array<juce::Component*, 15> { &enabled, &mode, &division, &bpm, &length, &swing, &latch,
+        for (auto* c : std::array<juce::Component*, 16> { &enabled, &mode, &division, &bpm, &length, &swing, &latch,
                                                            &rootNote, &octaveRange, &restartMode, &previousPage, &nextPage,
-                                                           &randomize, &reverse, &clear })
+                                                           &randomize, &reverse, &clear, &patternTemplate })
             addAndMakeVisible (*c);
         addAndMakeVisible (rotateLeft); addAndMakeVisible (rotateRight);
 
@@ -33,6 +34,9 @@ public:
         division.addItemList ({ "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/8T", "1/16T", "1/8.", "1/16." }, 1);
         octaveRange.addItemList ({ "1 OCT", "2 OCT", "3 OCT", "4 OCT" }, 1);
         restartMode.addItemList ({ "FREE RUN", "TRANSPORT", "FIRST NOTE" }, 1);
+        for (int i = 0; i < RetroMatchSequencer::patternTemplateCount; ++i)
+            patternTemplate.addItem (RetroMatchSequencer::makePatternTemplate (i).name, i + 1);
+        patternTemplate.setTooltip ("Load a reusable sequencer pattern independent of the current synth preset. Loading replaces the editable steps.");
         for (int midiNote = 0; midiNote < 128; ++midiNote)
             rootNote.addItem ("ROOT " + juce::MidiMessage::getMidiNoteName (midiNote, true, true, 3), midiNote + 1);
         bpm.setRange (20.0, 400.0, 1.0); bpm.setTextValueSuffix (" BPM");
@@ -57,8 +61,8 @@ public:
             };
         }
 
-        for (auto* c : std::array<juce::Component*, 13> { &stepLabel, &rest, &tie, &glide, &pitch, &octave, &velocity,
-                                                           &gate, &probability, &ratchet, &microTiming, &macro1, &macro2 })
+        for (auto* c : std::array<juce::Component*, 14> { &stepLabel, &rest, &tie, &glide, &pitch, &octave, &velocity,
+                                                           &gate, &probability, &modulationProbability, &ratchet, &microTiming, &macro1, &macro2 })
             addAndMakeVisible (*c);
         rest.setButtonText ("REST"); tie.setButtonText ("TIE"); glide.setButtonText ("GLIDE");
         stepLabel.setJustificationType (juce::Justification::centredLeft);
@@ -70,6 +74,7 @@ public:
         configureStepSlider (velocity, 0, 100, 1, " %");
         configureStepSlider (gate, 2, 100, 1, " %");
         configureStepSlider (probability, 0, 100, 1, " %");
+        configureStepSlider (modulationProbability, 0, 100, 1, " %");
         configureStepSlider (ratchet, 1, 8, 1, " x");
         configureStepSlider (microTiming, -45, 45, 1, " %");
         configureStepSlider (macro1, 0, 100, 1, " %");
@@ -77,12 +82,13 @@ public:
 
         mode.setTooltip ("Arp modes use held MIDI notes. PATTERN uses ROOT + per-step pitch/octave and runs without held notes.");
         rootNote.setTooltip ("Base MIDI note for PATTERN mode. Each step adds its pitch and octave offsets to this root.");
-        division.setTooltip ("Internal sequencer clock division. Host clock wiring is intentionally deferred until transport position is supplied to the core.");
+        division.setTooltip ("Step division. In DAW Tempo mode, steps follow the host play/stop state and BPM; Manual BPM runs independently.");
         swing.setTooltip ("Alternating swing while preserving each two-step pair duration.");
         latch.setTooltip ("Keep held arpeggiator notes active after key release.");
         octaveRange.setTooltip ("Arpeggiator octave span for held-note modes. Pattern mode keeps using each step's explicit pitch/octave.");
         restartMode.setTooltip ("FREE RUN keeps phase, TRANSPORT follows a transport-start reset when supplied, FIRST NOTE restarts when a new held-note phrase begins.");
         probability.setTooltip ("Independent note trigger probability for this step.");
+        modulationProbability.setTooltip ("Independent probability for applying this step's two macro modulation values; note triggering is unaffected.");
         microTiming.setTooltip ("Bounded offset within the nominal step, +/-45% maximum.");
         macro1.setTooltip ("Step modulation lane 1 value (stored now; destination routing comes with modulation-lane wiring).");
         macro2.setTooltip ("Step modulation lane 2 value (stored now; destination routing comes with modulation-lane wiring).");
@@ -110,11 +116,12 @@ public:
         rotateLeft.onClick = [this] { rotatePattern (-1); };
         rotateRight.onClick = [this] { rotatePattern (1); };
         clear.onClick = [this] { clearPattern(); };
+        patternTemplate.onChange = [this] { loadPatternTemplate (patternTemplate.getSelectedId() - 1); };
 
         auto stepChanged = [this] { commitSelectedStep(); };
         rest.onClick = stepChanged; tie.onClick = stepChanged; glide.onClick = stepChanged;
         pitch.onValueChange = stepChanged; octave.onValueChange = stepChanged; velocity.onValueChange = stepChanged;
-        gate.onValueChange = stepChanged; probability.onValueChange = stepChanged; ratchet.onValueChange = stepChanged;
+        gate.onValueChange = stepChanged; probability.onValueChange = stepChanged; modulationProbability.onValueChange = stepChanged; ratchet.onValueChange = stepChanged;
         microTiming.onValueChange = stepChanged; macro1.onValueChange = stepChanged; macro2.onValueChange = stepChanged;
 
         loadState();
@@ -140,6 +147,7 @@ public:
         auto tools = area.removeFromTop (30);
         octaveRange.setBounds (tools.removeFromLeft (82).reduced (2)); restartMode.setBounds (tools.removeFromLeft (110).reduced (2));
         previousPage.setBounds (tools.removeFromLeft (58).reduced (2)); nextPage.setBounds (tools.removeFromLeft (58).reduced (2));
+        patternTemplate.setBounds (tools.removeFromLeft (112).reduced (2));
         randomize.setBounds (tools.removeFromLeft (94).reduced (2)); reverse.setBounds (tools.removeFromLeft (76).reduced (2));
         rotateLeft.setBounds (tools.removeFromLeft (76).reduced (2)); rotateRight.setBounds (tools.removeFromLeft (76).reduced (2));
         clear.setBounds (tools.removeFromLeft (62).reduced (2)); status.setBounds (tools.reduced (2));
@@ -158,7 +166,8 @@ public:
         layoutLabeledSlider (first.removeFromLeft (first.getWidth() / 5), octave, "OCTAVE");
         layoutLabeledSlider (first.removeFromLeft (first.getWidth() / 4), velocity, "VELOCITY");
         layoutLabeledSlider (first.removeFromLeft (first.getWidth() / 3), gate, "GATE");
-        layoutLabeledSlider (first.removeFromLeft (first.getWidth() / 2), probability, "PROBABILITY");
+        layoutLabeledSlider (first.removeFromLeft (first.getWidth() / 3), probability, "NOTE PROB");
+        layoutLabeledSlider (first.removeFromLeft (first.getWidth() / 2), modulationProbability, "MOD PROB");
         layoutLabeledSlider (first, ratchet, "RATCHET");
         auto second = area.removeFromTop (58);
         layoutLabeledSlider (second.removeFromLeft (second.getWidth() / 3), microTiming, "MICRO TIME");
@@ -189,8 +198,9 @@ private:
     juce::ComboBox mode, division, rootNote, octaveRange, restartMode;
     juce::Slider bpm, length, swing;
     juce::TextButton previousPage, nextPage, randomize, reverse, rotateLeft, rotateRight, clear;
+    juce::ComboBox patternTemplate;
     std::array<juce::TextButton, stepsPerPage> stepButtons;
-    juce::Slider pitch, octave, velocity, gate, probability, ratchet, microTiming, macro1, macro2;
+    juce::Slider pitch, octave, velocity, gate, probability, modulationProbability, ratchet, microTiming, macro1, macro2;
     std::vector<std::unique_ptr<juce::Label>> labels;
     std::vector<std::pair<juce::Slider*, juce::Label*>> sliderLabels;
 
@@ -269,7 +279,7 @@ private:
         step.rest = rest.getToggleState(); step.tie = tie.getToggleState(); step.glide = glide.getToggleState();
         step.semitone = (int) std::lround (pitch.getValue()); step.octave = (int) std::lround (octave.getValue());
         step.velocity = (float) velocity.getValue() * 0.01f; step.gate = (float) gate.getValue() * 0.01f;
-        step.probability = (float) probability.getValue() * 0.01f; step.ratchet = (int) std::lround (ratchet.getValue());
+        step.probability = (float) probability.getValue() * 0.01f; step.modulationProbability = (float) modulationProbability.getValue() * 0.01f; step.ratchet = (int) std::lround (ratchet.getValue());
         step.microTiming = (float) microTiming.getValue() * 0.01f;
         step.macro[0] = (float) macro1.getValue() * 0.01f; step.macro[1] = (float) macro2.getValue() * 0.01f;
         proc.melodyTransport.setSequencerStep (selectedStep, step);
@@ -285,7 +295,7 @@ private:
         rest.setToggleState (step.rest, juce::dontSendNotification); tie.setToggleState (step.tie, juce::dontSendNotification); glide.setToggleState (step.glide, juce::dontSendNotification);
         pitch.setValue (step.semitone, juce::dontSendNotification); octave.setValue (step.octave, juce::dontSendNotification);
         velocity.setValue (step.velocity * 100.0f, juce::dontSendNotification); gate.setValue (step.gate * 100.0f, juce::dontSendNotification);
-        probability.setValue (step.probability * 100.0f, juce::dontSendNotification); ratchet.setValue (step.ratchet, juce::dontSendNotification);
+        probability.setValue (step.probability * 100.0f, juce::dontSendNotification); modulationProbability.setValue (step.modulationProbability * 100.0f, juce::dontSendNotification); ratchet.setValue (step.ratchet, juce::dontSendNotification);
         microTiming.setValue (step.microTiming * 100.0f, juce::dontSendNotification);
         macro1.setValue (step.macro[0] * 100.0f, juce::dontSendNotification); macro2.setValue (step.macro[1] * 100.0f, juce::dontSendNotification);
         updating = false;
@@ -323,6 +333,23 @@ private:
         proc.melodyTransport.clearSequencerPattern();
         for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i) stepState[(size_t) i] = proc.melodyTransport.getSequencerStep (i);
         saveState(); refreshStepEditor(); refreshStepButtons();
+    }
+
+    void loadPatternTemplate (int index)
+    {
+        if (index < 0 || index >= RetroMatchSequencer::patternTemplateCount) return;
+        const auto pattern = RetroMatchSequencer::makePatternTemplate (index);
+        settings.length = pattern.length;
+        stepState = pattern.steps;
+        settings.mode = RetroMatchSequencer::Mode::pattern;
+        pushPattern();
+        updating = true;
+        length.setValue (settings.length, juce::dontSendNotification);
+        mode.setSelectedId ((int) settings.mode + 1, juce::dontSendNotification);
+        updating = false;
+        commitSettings();
+        page = 0; selectedStep = 0;
+        refreshModeControls(); refreshStepEditor(); refreshStepButtons();
     }
 
     void reversePattern()
@@ -380,7 +407,7 @@ private:
                 step.enabled = (bool) child.getProperty ("enabled", true); step.rest = (bool) child.getProperty ("rest", false); step.tie = (bool) child.getProperty ("tie", false);
                 step.semitone = (int) child.getProperty ("semitone", 0); step.octave = (int) child.getProperty ("octave", 0);
                 step.velocity = (float) child.getProperty ("velocity", 1.0f); step.gate = (float) child.getProperty ("gate", 0.85f);
-                step.probability = (float) child.getProperty ("probability", 1.0f); step.ratchet = (int) child.getProperty ("ratchet", 1);
+                step.probability = (float) child.getProperty ("probability", 1.0f); step.modulationProbability = (float) child.getProperty ("modulationProbability", 1.0f); step.ratchet = (int) child.getProperty ("ratchet", 1);
                 step.microTiming = (float) child.getProperty ("microTiming", 0.0f); step.glide = (bool) child.getProperty ("glide", false);
                 step.macro[0] = (float) child.getProperty ("macro1", 0.5f); step.macro[1] = (float) child.getProperty ("macro2", 0.5f);
                 stepState[(size_t) index] = step;
@@ -415,7 +442,7 @@ private:
             juce::ValueTree child ("STEP");
             child.setProperty ("index", i, nullptr); child.setProperty ("enabled", step.enabled, nullptr); child.setProperty ("rest", step.rest, nullptr); child.setProperty ("tie", step.tie, nullptr);
             child.setProperty ("semitone", step.semitone, nullptr); child.setProperty ("octave", step.octave, nullptr); child.setProperty ("velocity", step.velocity, nullptr);
-            child.setProperty ("gate", step.gate, nullptr); child.setProperty ("probability", step.probability, nullptr); child.setProperty ("ratchet", step.ratchet, nullptr);
+            child.setProperty ("gate", step.gate, nullptr); child.setProperty ("probability", step.probability, nullptr); child.setProperty ("modulationProbability", step.modulationProbability, nullptr); child.setProperty ("ratchet", step.ratchet, nullptr);
             child.setProperty ("microTiming", step.microTiming, nullptr); child.setProperty ("glide", step.glide, nullptr); child.setProperty ("macro1", step.macro[0], nullptr); child.setProperty ("macro2", step.macro[1], nullptr);
             state.appendChild (child, nullptr);
         }

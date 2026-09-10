@@ -733,7 +733,7 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
 
     // Correlated-unity compensation: 0.5 + 0.5 prevents a dry/dry split from
     // producing the +6 dB jump that a raw sum would introduce.
-    RoutingUtilities::mixParallel (audio, parallelFxScratch, 0.5f, 0.5f);
+    RoutingUtilities::mixParallel (audio, parallelFxScratch, current.parallelCoreGain, current.parallelFxGain);
 
     moduleRack.process (audio, current.fxModules, 1, current.tempoBpm);
     audio.applyGain (juce::Decibels::decibelsToGain (current.outputGainDb));

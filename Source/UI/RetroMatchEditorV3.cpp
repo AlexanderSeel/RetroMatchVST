@@ -492,6 +492,60 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
         options.escapeKeyTriggersCloseButton = true; options.useNativeTitleBar = true; options.resizable = true; options.componentToCentreAround = this;
         if (auto* window = options.launchAsync()) window->setResizeLimits (780, 520, 1600, 1050);
     };
+    addAndMakeVisible (magicVary);
+    for (auto* button : { &magicCapture, &magicRestore, &magicBack }) addAndMakeVisible (*button);
+    magicVary.setTooltip ("Choose a bounded semantic Magic direction and generate a safe variation.");
+    magicCapture.setTooltip ("Capture the current patch as the immutable Magic origin and clear branch history.");
+    magicRestore.setTooltip ("Restore the immutable Magic origin.");
+    magicBack.setTooltip ("Restore the most recent bounded Magic branch snapshot.");
+    magicVary.onClick = [this]
+    {
+        static constexpr const char* names[] { "Cinematic", "Atmospheric", "Organic", "Orchestral", "Staccato", "Percussive", "Techno", "Warm Analog", "Dark", "Bright", "Wide", "Intimate", "Rhythmic", "Fragile", "Aggressive", "Glitch" };
+        juce::PopupMenu menu;
+        static constexpr float intensities[] { 0.15f, 0.35f, 0.65f, 1.0f };
+        static constexpr const char* intensityNames[] { "SUBTLE", "MEDIUM", "STRONG", "MAXIMUM" };
+        for (int i = 0; i < (int) std::size (names); ++i)
+        {
+            juce::PopupMenu levels;
+            for (int j = 0; j < (int) std::size (intensities); ++j)
+                levels.addItem (1000 + i * 10 + j, intensityNames[j]);
+            menu.addSubMenu (names[i], levels);
+        }
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&magicVary), [this] (int result)
+        {
+            if (result < 1000 || result >= 1160) return;
+            const int packed = result - 1000;
+            const int directionIndex = packed / 10, intensityIndex = packed % 10;
+            if (! juce::isPositiveAndBelow (directionIndex, 16) || ! juce::isPositiveAndBelow (intensityIndex, 4)) return;
+            static constexpr float intensities[] { 0.15f, 0.35f, 0.65f, 1.0f };
+            const auto direction = (VariationDirection) directionIndex;
+            const bool applied = proc.applyDirectedVariation (direction, intensities[intensityIndex], juce::Random::getSystemRandom().nextInt64());
+            status.setText (applied ? "Magic applied. Distance " + juce::String (proc.getMagicOriginDistance() * 100.0f, 1)
+                                       + "% / changed: " + proc.getMagicChangedDimensions().joinIntoString (", ")
+                                    : "Magic variation rejected by safety policy.", juce::dontSendNotification);
+        });
+    };
+    magicCapture.onClick = [this]
+    {
+        proc.captureMagicOrigin();
+        status.setText ("Magic origin captured.", juce::dontSendNotification);
+    };
+    magicRestore.onClick = [this]
+    {
+        status.setText (proc.restoreMagicOrigin() ? "Magic origin restored." : "No Magic origin has been captured.", juce::dontSendNotification);
+    };
+    magicBack.onClick = [this]
+    {
+        const int count = proc.getMagicBranchCount();
+        if (count <= 0 || ! proc.restoreMagicBranch (count - 1))
+        {
+            status.setText ("No Magic branch is available.", juce::dontSendNotification);
+            return;
+        }
+        status.setText ("Magic branch restored. Distance " + juce::String (proc.getMagicOriginDistance() * 100.0f, 1)
+                            + "% / changed: " + proc.getMagicChangedDimensions().joinIntoString (", "),
+                        juce::dontSendNotification);
+    };
 
     candidateMorphLabel.setText ("A  <  MORPH  >  C", juce::dontSendNotification);
     candidateMorphLabel.setColour (juce::Label::textColourId, goldColour (*this));
@@ -1302,12 +1356,16 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     }
 
     auto actionRow = w.removeFromTop (36);
-    const int buttonW = actionRow.getWidth() / 5;
+    const int buttonW = actionRow.getWidth() / 9;
     quick.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     refine.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     goldMatch.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     aiVariants.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    compareMatch.setBounds (actionRow.reduced (2, 0));
+    compareMatch.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
+    magicVary.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
+    magicCapture.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
+    magicRestore.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
+    magicBack.setBounds (actionRow.reduced (2, 0));
     w.removeFromTop (5);
 
     auto footer = w.removeFromBottom (76);

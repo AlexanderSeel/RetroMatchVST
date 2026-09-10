@@ -5,6 +5,7 @@
 #include "SimilarityScorer.h"
 #include "RenderTelemetry.h"
 #include <functional>
+#include <cmath>
 
 struct MatchSettings
 {
@@ -120,6 +121,64 @@ public:
         applyLocks (result, source, lockSettings);
         clamp (result);
         return result;
+    }
+    static juce::StringArray changedVariationDimensions (const VoiceParameters& source,
+                                                         const VoiceParameters& variant)
+    {
+        juce::StringArray changed;
+        const auto differs = [] (float a, float b) { return std::abs (a - b) > 0.0005f; };
+        if (source.masterTuneCents != variant.masterTuneCents || source.osc2Semitones != variant.osc2Semitones
+            || differs (source.osc2Detune, variant.osc2Detune)) changed.add ("PITCH");
+        if (source.osc1Wave != variant.osc1Wave || source.osc2Wave != variant.osc2Wave
+            || differs (source.osc1Mix, variant.osc1Mix) || differs (source.osc2Mix, variant.osc2Mix)
+            || differs (source.wavetableMix, variant.wavetableMix) || differs (source.supersawMix, variant.supersawMix)) changed.add ("OSCILLATORS");
+        if (differs (source.fmAmount, variant.fmAmount) || differs (source.fmMix, variant.fmMix)
+            || source.fmAlgorithm != variant.fmAlgorithm) changed.add ("FM");
+        if (differs (source.attack, variant.attack) || differs (source.decay, variant.decay)
+            || differs (source.sustain, variant.sustain) || differs (source.release, variant.release)) changed.add ("ENVELOPE");
+        if (differs (source.cutoff, variant.cutoff) || differs (source.resonance, variant.resonance)) changed.add ("FILTER");
+        if (differs (source.lfoRate, variant.lfoRate) || differs (source.lfoAmp, variant.lfoAmp)
+            || source.mseg.enabled != variant.mseg.enabled || differs (source.msegDepth, variant.msegDepth)) changed.add ("MODULATION");
+        if (differs (source.chorusMix, variant.chorusMix) || differs (source.delayMix, variant.delayMix)
+            || differs (source.reverbMix, variant.reverbMix) || differs (source.drive, variant.drive)) changed.add ("FX");
+        if (differs (source.stereoWidth, variant.stereoWidth) || differs (source.unisonSpread, variant.unisonSpread)) changed.add ("STEREO");
+        if (changed.isEmpty()) changed.add ("NONE");
+        return changed;
+    }
+    // A bounded, parameter-space branch distance for Magic UI/telemetry. This is
+    // intentionally independent from rendered similarity: it reports how much the
+    // controls moved from the immutable origin, not whether the result matches a sample.
+    static float normalizedVariationDistance (const VoiceParameters& source,
+                                              const VoiceParameters& variant) noexcept
+    {
+        double sum = 0.0;
+        int count = 0;
+        const auto add = [&] (float a, float b, float range)
+        {
+            if (! std::isfinite (a) || ! std::isfinite (b)) return;
+            sum += juce::jlimit (0.0, 1.0, std::abs ((double) a - b) / juce::jmax (0.0001, (double) range));
+            ++count;
+        };
+        add (source.masterTuneCents, variant.masterTuneCents, 2400.0f);
+        add (source.osc2Semitones, variant.osc2Semitones, 48.0f);
+        add (source.osc1Mix, variant.osc1Mix, 1.0f); add (source.osc2Mix, variant.osc2Mix, 1.0f);
+        add (source.subMix, variant.subMix, 1.0f); add (source.noiseMix, variant.noiseMix, 1.0f);
+        add (source.wavetableMix, variant.wavetableMix, 1.0f); add (source.supersawMix, variant.supersawMix, 1.0f);
+        add (source.fmAmount, variant.fmAmount, 1.0f); add (source.fmMix, variant.fmMix, 1.0f);
+        add (source.attack, variant.attack, 2.0f); add (source.decay, variant.decay, 2.0f);
+        add (source.sustain, variant.sustain, 1.0f); add (source.release, variant.release, 2.0f);
+        add (source.cutoff, variant.cutoff, 19000.0f); add (source.resonance, variant.resonance, 1.0f);
+        add (source.lfoRate, variant.lfoRate, 20.0f); add (source.lfoAmp, variant.lfoAmp, 1.0f);
+        add (source.chorusMix, variant.chorusMix, 1.0f); add (source.delayMix, variant.delayMix, 1.0f);
+        add (source.reverbMix, variant.reverbMix, 1.0f); add (source.drive, variant.drive, 1.0f);
+        add (source.stereoWidth, variant.stereoWidth, 2.0f); add (source.outputGainDb, variant.outputGainDb, 24.0f);
+        for (int i = 0; i < VoiceParameters::extraLayerCount; ++i)
+        {
+            add (source.layerGain[(size_t) i], variant.layerGain[(size_t) i], 1.0f);
+            add (source.layerPan[(size_t) i], variant.layerPan[(size_t) i], 1.0f);
+            add (source.layerTune[(size_t) i], variant.layerTune[(size_t) i], 48.0f);
+        }
+        return count > 0 ? (float) juce::jlimit (0.0, 1.0, sum / (double) count) : 0.0f;
     }
     static MatchResult evaluateFit (const SoundFeatures& reference, const VoiceParameters& params,
                                     const MatchSettings& settings = {});

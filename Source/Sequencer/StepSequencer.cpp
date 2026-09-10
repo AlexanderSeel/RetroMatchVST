@@ -39,6 +39,7 @@ Step Core::sanitizedStep (Step value) noexcept
     value.velocity = bounded (0.0f, 1.0f, value.velocity);
     value.gate = bounded (0.02f, 1.0f, value.gate);
     value.probability = bounded (0.0f, 1.0f, value.probability);
+    value.modulationProbability = bounded (0.0f, 1.0f, value.modulationProbability);
     value.ratchet = bounded (1, 8, value.ratchet);
     value.microTiming = bounded (-0.45f, 0.45f, value.microTiming);
     for (auto& macro : value.macro)
@@ -137,6 +138,7 @@ void Core::randomizePattern (std::uint32_t seed, int minSemitone, int maxSemiton
         step.velocity = 0.62f + nextRandom01() * 0.38f;
         step.gate = 0.35f + nextRandom01() * 0.65f;
         step.probability = 0.78f + nextRandom01() * 0.22f;
+        step.modulationProbability = 0.70f + nextRandom01() * 0.30f;
         const float ratchetChance = nextRandom01();
         step.ratchet = ratchetChance > 0.93f ? 3 : (ratchetChance > 0.80f ? 2 : 1);
         step.microTiming = (nextRandom01() * 2.0f - 1.0f) * 0.08f;
@@ -410,7 +412,9 @@ void Core::scheduleStep (int stepIndex, double gridOffset, double stepSamples,
         trigger.ratchetIndex = ratchetIndex;
         trigger.glide = step.glide;
         trigger.tie = step.tie;
-        trigger.macro = step.macro;
+    trigger.macro = step.macro;
+    if (step.modulationProbability < 1.0f && nextRandom01() > step.modulationProbability)
+        trigger.macro = {{ 0.5f, 0.5f }};
         return trigger;
     };
 
