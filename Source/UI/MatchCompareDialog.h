@@ -118,7 +118,7 @@ public:
         auto r = getLocalBounds().reduced (18);
         r.removeFromTop (48);
 
-        auto top = r.removeFromTop (38);
+        auto top = r.removeFromTop (42);
         candidateA.setBounds (top.removeFromLeft (58).reduced (2));
         candidateB.setBounds (top.removeFromLeft (58).reduced (2));
         candidateC.setBounds (top.removeFromLeft (58).reduced (2));
@@ -128,13 +128,16 @@ public:
         mix.setBounds (top.removeFromLeft (84).reduced (2));
         stop.setBounds (top.removeFromLeft (76).reduced (2));
 
-        auto tune = r.removeFromTop (96).reduced (2, 3);
-        auto tuneButtons = tune.removeFromRight (310);
-        auto tuneRow1 = tuneButtons.removeFromTop (30);
+        auto tune = r.removeFromTop (132).reduced (10, 7);
+        // Keep the POST-ANALYSIS title/status in a dedicated header band.
+        tune.removeFromTop (28);
+        auto tuneButtons = tune.removeFromRight (330);
+        auto tuneRow1 = tuneButtons.removeFromTop (36);
         baseline.setBounds (tuneRow1.removeFromLeft (96).reduced (2));
         adjusted.setBounds (tuneRow1.removeFromLeft (96).reduced (2));
         resetTune.setBounds (tuneRow1.removeFromLeft (92).reduced (2));
-        auto tuneRow2 = tuneButtons.removeFromTop (30);
+        tuneButtons.removeFromTop (4);
+        auto tuneRow2 = tuneButtons.removeFromTop (36);
         measureTune.setBounds (tuneRow2.removeFromLeft (86).reduced (2));
         autoNudge.setBounds (tuneRow2.removeFromLeft (104).reduced (2));
         keepTune.setBounds (tuneRow2.removeFromLeft (104).reduced (2));
@@ -142,8 +145,8 @@ public:
         for (size_t i = 0; i < fineTune.size(); ++i)
         {
             auto c = tune.removeFromLeft (i + 1 == fineTune.size() ? tune.getWidth() : cell);
-            fineTuneLabels[i].setBounds (c.removeFromTop (16));
-            fineTune[i].setBounds (c.reduced (2, 0));
+            fineTuneLabels[i].setBounds (c.removeFromTop (18));
+            fineTune[i].setBounds (c.reduced (3, 1));
         }
     }
 
@@ -205,7 +208,7 @@ public:
         const SoundFeatures* adjustedFeatures = measuredAdjusted && measuredAdjusted->candidateFeatures.duration > 0.0f
                                               ? &measuredAdjusted->candidateFeatures : nullptr;
         auto body = getLocalBounds().reduced (22);
-        auto fineTunePanel = body.withTrimmedTop (82).withHeight (96).toFloat().reduced (1.0f);
+        auto fineTunePanel = body.withTrimmedTop (86).withHeight (132).toFloat().reduced (1.0f);
         panel (g, fineTunePanel, "POST-ANALYSIS CORRECTION", cyan);
         juce::String correctionStatus;
         if (proc.isCompareFineTunePending()) correctionStatus = "ADJUSTED AUDIO · SCORE/TRACE PENDING MEASURE";
@@ -219,12 +222,14 @@ public:
         g.setColour (proc.isCompareFineTunePending() ? gold : (measuredAdjusted ? cyan : juce::Colour (0xff82928d)));
         g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
         g.drawText (correctionStatus,
-                    fineTunePanel.withTrimmedLeft (fineTunePanel.getWidth() - 390.0f).withHeight (22.0f).reduced (4.0f, 0.0f),
+                    fineTunePanel.withTrimmedLeft (250.0f).withTrimmedRight (10.0f).withHeight (24.0f),
                     juce::Justification::centredRight, true);
-        body.removeFromTop (180);
+        body.removeFromTop (224);
 
-        auto waveArea = body.removeFromTop (body.getHeight() * 34 / 100).toFloat().reduced (3.0f);
-        auto spectrumArea = body.removeFromTop (body.getHeight() * 52 / 100).toFloat().reduced (3.0f);
+        // Similarity is a decision surface, not a footer. Give its percentage,
+        // delta and progress bar independent vertical rows.
+        auto waveArea = body.removeFromTop (body.getHeight() * 30 / 100).toFloat().reduced (3.0f);
+        auto spectrumArea = body.removeFromTop (body.getHeight() * 56 / 100).toFloat().reduced (3.0f);
         auto metricsArea = body.toFloat().reduced (3.0f);
 
         panel (g, waveArea, "WAVEFORM / ENVELOPE", led);
@@ -566,7 +571,7 @@ private:
         {
             auto cell = juce::Rectangle<float> (r.getX() + (i % columns) * cw,
                                                 r.getY() + (i / columns) * rh,
-                                                cw, rh).reduced (7.0f, 5.0f);
+                                                cw, rh).reduced (5.0f, 4.0f);
             const auto accent = i == 0 ? gold : led;
             g.setGradientFill (juce::ColourGradient (juce::Colour (0xff253236), cell.getTopLeft(),
                                                      juce::Colour (0xff172326), cell.getBottomLeft(), false));
@@ -574,13 +579,14 @@ private:
             g.setColour (juce::Colour (0xff53666a));
             g.drawRoundedRectangle (cell, 5.0f, 1.0f);
 
-            auto content = cell.reduced (10.0f, 6.0f);
-            auto titleArea = content.removeFromTop (18.0f);
+            auto content = cell.reduced (10.0f, 7.0f);
+            auto titleArea = content.removeFromTop (16.0f);
             g.setColour (juce::Colour (0xffd4dfdb));
             g.setFont (juce::Font (juce::FontOptions (9.5f, juce::Font::bold)));
             g.drawText (values[(size_t) i].name, titleArea, juce::Justification::centredLeft);
 
-            auto bar = content.removeFromBottom (8.0f);
+            auto bar = content.removeFromBottom (9.0f);
+            content.removeFromBottom (5.0f);
             auto valueArea = content;
             g.setColour (accent);
             g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));

@@ -38,7 +38,12 @@ public:
         lastPersistedGraphFingerprint = restored.fingerprint();
         for (const auto& node : restored.nodes)
         {
-            if (node.positionValid) restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };
+            // The BIG map is a presentation/editor surface, not a magnified copy
+            // of the compact map's persisted manual geometry. Start it from the
+            // canonical signal-flow layout so a displaced compact node cannot
+            // create metres of dead space in the large window.
+            if (! mapOnlyMode && node.positionValid)
+                restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };
             if (node.routingMode != 0) restoredNodeRoutingModes[node.id.toStdString()] = node.routingMode;
         }
         for (const auto& edge : restored.edges)
@@ -986,7 +991,10 @@ private:
 
     void stageGraphStateForPersistence()
     {
-        if (graphModel.nodes.empty()) return;
+        // BIG view deliberately owns presentation-only node positions. Audio,
+        // modulation and topology edits already commit through their parameters;
+        // do not overwrite the compact map's saved geometry on every repaint.
+        if (mapOnlyMode || graphModel.nodes.empty()) return;
         graphModel.view.pan = { graphPan.x, graphPan.y };
         graphModel.view.zoom = graphZoom;
         graphModel.view.snapToGrid = snapToGrid;
@@ -1508,8 +1516,9 @@ private:
         toolbarButtons.clear();
         const bool compactHeader = mapOnlyMode || header.getHeight() > 40.0f;
         const bool veryNarrow = header.getWidth() < 620.0f;
-        const float gap = veryNarrow ? 3.0f : 4.0f;
-        const float h = compactHeader ? 22.0f : 20.0f;
+        const float gap = veryNarrow ? 4.0f : 6.0f;
+        // 28 px is the minimum practical toolbar hit target at JUCE logical scale.
+        const float h = mapOnlyMode ? 30.0f : (compactHeader ? 26.0f : 24.0f);
         struct Def { const char* label; float width; ToolbarAction action; };
         const Def defs[] {{ "BIG", 42, ToolbarAction::expand }, { "UNDO", 48, ToolbarAction::undo }, { "REDO", 48, ToolbarAction::redo },
                           { "AUTO", 48, ToolbarAction::autoArrange }, { "FIT", 40, ToolbarAction::fit }, { "-", 26, ToolbarAction::zoomOut },
@@ -1519,7 +1528,7 @@ private:
         for (const auto& d : defs)
             if (! (mapOnlyMode && d.action == ToolbarAction::expand)) total += (veryNarrow ? juce::jmax (24.0f, d.width - 6.0f) : d.width) + gap;
 
-        auto buttonRow = compactHeader ? header.removeFromBottom (26.0f) : header;
+        auto buttonRow = compactHeader ? header.removeFromBottom (mapOnlyMode ? 36.0f : 30.0f) : header;
         float x = compactHeader ? buttonRow.getX() + 6.0f : buttonRow.getRight() - total - 6.0f;
         for (const auto& d : defs)
         {
@@ -1563,7 +1572,7 @@ private:
     {
         g.setColour (juce::Colour (0xff03080b)); g.fillRoundedRectangle (bounds, 7);
         g.setColour (juce::Colour (0xff506166)); g.drawRoundedRectangle (bounds, 7, 1);
-        const float headerHeight = mapOnlyMode ? 58.0f : (bounds.getWidth() < 980.0f ? 56.0f : 30.0f);
+        const float headerHeight = mapOnlyMode ? 72.0f : (bounds.getWidth() < 980.0f ? 56.0f : 30.0f);
         auto header = bounds.removeFromTop (headerHeight);
         graphViewport = bounds.reduced (4);
 

@@ -222,7 +222,7 @@ public:
         }
 
         area.removeFromTop (7);
-        auto utility = area.removeFromTop (34);
+        auto utility = area.removeFromTop (40);
         normalizePreview.setBounds (utility.removeFromLeft (198).reduced (2));
         fullSelection.setBounds (utility.removeFromLeft (120).reduced (2));
         fitSelection.setBounds (utility.removeFromLeft (120).reduced (2));
@@ -231,9 +231,11 @@ public:
         resetEdits.setBounds (utility.removeFromLeft (105).reduced (2));
 
         area.removeFromTop (5);
-        actionSectionBounds = area.removeFromTop (72).toFloat();
-        auto actions = actionSectionBounds.toNearestInt().reduced (9, 7);
+        actionSectionBounds = area.removeFromTop (86).toFloat();
+        auto actions = actionSectionBounds.toNearestInt().reduced (9, 6);
         actions.removeFromTop (22);
+        // Never collapse a primary action into a thin text strip.
+        if (actions.getHeight() > 42) actions = actions.withHeight (juce::jmax (36, actions.getHeight()));
         const int third = actions.getWidth() / 3;
         applyResynth.setBounds (actions.removeFromLeft (third).reduced (2));
         useForMidi.setBounds (actions.removeFromLeft (third).reduced (2));

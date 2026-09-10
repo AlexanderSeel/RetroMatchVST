@@ -1231,7 +1231,7 @@ void RetroMatchSynthAudioProcessorEditor::resized()
         keyboardOctave.setBounds (0, 0, 0, 0);
     }
 
-    const int workspaceWidth = juce::jlimit (340, 420, (int) std::round (outer.getWidth() * 0.30));
+    const int workspaceWidth = juce::jlimit (390, 520, (int) std::round (outer.getWidth() * 0.34));
     workspaceBounds = outer.removeFromLeft (workspaceWidth);
     outer.removeFromLeft (14);
 
@@ -1243,7 +1243,7 @@ void RetroMatchSynthAudioProcessorEditor::resized()
 
     auto w = workspaceBounds.reduced (12);
     w.removeFromTop (10);
-    load.setBounds (w.removeFromTop (34));
+    load.setBounds (w.removeFromTop (38));
     w.removeFromTop (5);
 
     auto methodRow = w.removeFromTop (28);
@@ -1264,7 +1264,7 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     resetReferencePitch.setBounds (pitchRow.reduced (2, 1));
     w.removeFromTop (4);
 
-    auto auditionRow = w.removeFromTop (30);
+    auto auditionRow = w.removeFromTop (34);
     const int modeW = juce::jlimit (56, 76, (auditionRow.getWidth() - 145) / 3);
     auditionSynth.setBounds (auditionRow.removeFromLeft (modeW).reduced (1, 1));
     auditionReference.setBounds (auditionRow.removeFromLeft (modeW).reduced (1, 1));
@@ -1301,7 +1301,7 @@ void RetroMatchSynthAudioProcessorEditor::resized()
         pipelineBounds = {};
     }
 
-    auto actionRow = w.removeFromTop (32);
+    auto actionRow = w.removeFromTop (36);
     const int buttonW = actionRow.getWidth() / 5;
     quick.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     refine.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
@@ -1319,8 +1319,8 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     footer.removeFromTop (3);
     status.setBounds (footer);
 
-    const int candidateGap = 5;
-    const int cardH = juce::jmax (24, (w.getHeight() - candidateGap * 2) / 3);
+    const int candidateGap = 7;
+    const int cardH = juce::jmax (34, (w.getHeight() - candidateGap * 2) / 3);
     candidateA.setBounds (w.removeFromTop (cardH));
     w.removeFromTop (candidateGap);
     candidateB.setBounds (w.removeFromTop (cardH));
