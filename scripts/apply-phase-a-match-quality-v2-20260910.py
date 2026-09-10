@@ -19,9 +19,23 @@ text = text.replace(old, new)
 namespace = {"__name__": "__main__", "__file__": str(source_path)}
 exec(compile(text, str(source_path), "exec"), namespace)
 
+replace_exact = namespace["replace_exact"]
+
+# The texture profile now owns a local evidence variable, therefore give the switch case
+# an explicit scope so MSVC/Clang never jump across its initialization.
+replace_exact(
+    "Source/Matching/SoundMatcherCore.inc",
+    "        case 5: // Texture / chopped-table reconstruction.\n            if (hasReferenceTable)",
+    "        case 5: // Texture / chopped-table reconstruction.\n        {\n            if (hasReferenceTable)",
+)
+replace_exact(
+    "Source/Matching/SoundMatcherCore.inc",
+    "            p.extraLfoRate[0] = juce::jlimit (0.05f, 1.8f, 0.10f + reference.spectralMotion * 2.4f);\n            break;\n\n\n        case 6:",
+    "            p.extraLfoRate[0] = juce::jlimit (0.05f, 1.8f, 0.10f + reference.spectralMotion * 2.4f);\n            break;\n        }\n\n\n        case 6:",
+)
+
 # Gold uses the same fields on separate lines, so keep its matching seed neutral unless
 # the user explicitly enabled the FX lock.
-replace_exact = namespace["replace_exact"]
 replace_exact(
     "Source/PluginProcessor.cpp",
     """        seed.distortionMode = authored.distortionMode;
@@ -32,4 +46,4 @@ replace_exact(
         seed.layers.fill (nullptr);""",
 )
 
-print("Phase A v2 staging correction applied")
+print("Phase A v3 staging correction applied")
