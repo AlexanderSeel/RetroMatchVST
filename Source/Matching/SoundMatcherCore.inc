@@ -108,16 +108,24 @@ void applyAlgorithmProfile (VoiceParameters& p, int algorithm, const SoundFeatur
             break;
 
         case 5: // Texture / chopped-table reconstruction.
+        {
             if (hasReferenceTable) p.referenceWavetableMix = juce::jmax (p.referenceWavetableMix, 0.58f);
             p.wavetableMix = juce::jmax (p.wavetableMix, 0.18f + motion * 0.28f);
-            p.wavefold = juce::jmax (p.wavefold, juce::jlimit (0.03f, 0.32f, reference.highEnergyRatio * 0.55f));
+            const float foldEvidence = juce::jmax (0.0f, reference.highEnergyRatio - 0.14f)
+                                     * juce::jlimit (0.0f, 1.0f, 1.0f - reference.spectralFlatness) * 0.85f;
+            p.wavefold = juce::jmax (p.wavefold, juce::jlimit (0.0f, 0.28f, foldEvidence));
             p.noiseMix = juce::jmax (p.noiseMix, juce::jlimit (0.0f, 0.18f, reference.spectralFlatness * 0.22f));
             p.mseg.enabled = true; p.mseg.loopEnabled = true; p.msegTarget = (int) ModDestination::wavetablePosition;
             p.msegDepth = juce::jlimit (0.26f, 0.72f, 0.30f + motion * 0.36f);
-            p.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::wavefold,
-                                   juce::jlimit (0.10f, 0.42f, 0.12f + motion * 0.30f) };
+            if (p.wavefold > 0.02f)
+                p.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::wavefold,
+                                       juce::jlimit (0.05f, 0.24f, 0.06f + motion * 0.18f) };
+            else
+                p.modGraphSlots[0] = { (int) ModSource::mseg1, (int) ModDestination::cutoff,
+                                       juce::jlimit (0.04f, 0.18f, 0.04f + motion * 0.12f) };
             p.extraLfoRate[0] = juce::jlimit (0.05f, 1.8f, 0.10f + reference.spectralMotion * 2.4f);
             break;
+        }
 
 
         case 6: // FX / guitar chain: rebuild body first, then an ordered pedal/amp-style chain.
@@ -175,17 +183,27 @@ void applyAlgorithmProfile (VoiceParameters& p, int algorithm, const SoundFeatur
                                               reference.spectralRolloffHz > 800.0f ? reference.spectralRolloffHz * 0.82f
                                                                                   : reference.spectralCentroidHz * 2.6f + 1900.0f);
             const float compression = juce::jlimit (0.18f, 0.62f, 0.46f - reference.transientScore * 0.18f + reference.sustainLevel * 0.18f);
-            const int driveType = reference.inharmonicity > 0.24f && reference.highEnergyRatio > 0.10f ? 4 : 3;
-            const float driveAmount = juce::jlimit (0.08f, 0.68f,
-                                                    0.08f + reference.inharmonicity * 1.25f
-                                                          + juce::jmax (0.0f, reference.highEnergyRatio - 0.08f) * 1.10f);
+            // FX/Guitar does not automatically mean distortion. Require a combination of
+            // upper-harmonic and complex-spectrum evidence before inserting a nonlinear stage.
+            const float nonlinearEvidence = juce::jlimit (0.0f, 1.0f,
+                juce::jmax (0.0f, reference.highEnergyRatio - 0.16f) * 1.55f
+              + juce::jmax (0.0f, reference.inharmonicity - 0.20f) * 1.45f);
+            const bool wantsDrive = nonlinearEvidence > 0.20f;
+            const bool wantsHardClip = nonlinearEvidence > 0.72f
+                                     && reference.highEnergyRatio > 0.20f
+                                     && reference.inharmonicity > 0.30f;
+            const int driveType = wantsHardClip ? 4 : 3;
+            const float driveAmount = juce::jlimit (0.03f, 0.42f, 0.03f + nonlinearEvidence * 0.34f);
 
             prime (p.fxModules[0], 2, 0, amountForCutoff (hpHz), 0.0f, 0.06f, 1.0f);                    // HPF
             prime (p.fxModules[1], 13, 0, compression, 0.05f + reference.transientScore * 0.10f,
                    0.20f + reference.sustainLevel * 0.24f, 0.72f);                                      // compressor
-            prime (p.fxModules[2], driveType, 0, driveAmount,
-                   juce::jlimit (0.18f, 0.86f, 0.60f - reference.highEnergyRatio * 0.55f), 0.50f,
-                   juce::jlimit (0.32f, 0.92f, 0.38f + driveAmount * 0.72f));                            // drive
+            if (wantsDrive)
+                prime (p.fxModules[2], driveType, 0, driveAmount,
+                       juce::jlimit (0.18f, 0.78f, 0.56f - reference.highEnergyRatio * 0.42f), 0.50f,
+                       juce::jlimit (0.08f, 0.48f, 0.08f + nonlinearEvidence * 0.36f));                   // evidenced drive
+            else
+                p.fxModules[2] = {};
             prime (p.fxModules[3], 1, 0, amountForCutoff (cabHz), 0.0f, 0.05f, 1.0f);                    // cab / speaker LPF
 
             const bool wantsModulation = reference.stereoWidth > 0.16f || reference.spectralMotion > 0.055f;
@@ -283,7 +301,9 @@ MatchResult SoundMatcher::initialFit (const SoundFeatures& f)
     p.supersawMix = juce::jlimit (0.0f, 0.42f, f.stereoWidth * 0.45f + juce::jmax (0.0f, f.harmonicity - 0.65f) * 0.35f);
     p.unisonDetune = juce::jlimit (4.0f, 42.0f, 8.0f + f.stereoWidth * 30.0f);
     p.unisonSpread = juce::jlimit (0.15f, 1.0f, 0.35f + f.stereoWidth * 0.65f);
-    p.wavefold = juce::jlimit (0.0f, 0.32f, juce::jmax (0.0f, f.highEnergyRatio - 0.10f) * (1.0f - f.spectralFlatness) * 1.3f);
+    // Nonlinear colour must be earned by a synthesis profile, not inferred from brightness alone.
+    // A clean saw/string/pluck can have substantial high-frequency energy without any clipping/folding.
+    p.wavefold = 0.0f;
     p.harmonicTilt = juce::jlimit (0.55f, 3.2f, 2.4f - f.highEnergyRatio * 5.0f);
     p.oddEvenBalance = juce::jlimit (0.0f, 1.0f, f.oddHarmonicRatio);
 
@@ -320,7 +340,8 @@ MatchResult SoundMatcher::initialFit (const SoundFeatures& f)
     }
     p.pulseWidth = juce::jlimit (0.15f, 0.85f, 0.5f + (f.oddHarmonicRatio - 0.5f) * 0.45f);
 
-    p.drive = juce::jlimit (0.0f, 0.45f, (f.highEnergyRatio - 0.12f) * 0.8f);
+    // Start every unconstrained match with neutral drive. Algorithm-specific evidence may add it later.
+    p.drive = 0.0f;
     p.chorusMix = juce::jlimit (0.0f, 0.45f, f.stereoWidth * 0.65f);
     p.reverbMix = juce::jlimit (0.0f, 0.40f, juce::jmax (0.0f, f.releaseSeconds - 0.15f) * 0.16f);
     p.stereoWidth = juce::jlimit (0.7f, 1.8f, 1.0f + f.stereoWidth * 0.75f);
@@ -383,7 +404,7 @@ MatchResult SoundMatcher::evaluateFit (const SoundFeatures& reference, const Voi
         result.effectProbeSimilarity = EffectChainProbe::score (reference, params);
         // The musical render remains dominant. The probe only separates effect-chain
         // colour/tail candidates that can look similar from one played note.
-        result.similarity.total = juce::jlimit (0.0f, 1.0f, result.similarity.total * 0.86f + result.effectProbeSimilarity * 0.14f);
+        result.similarity.total = juce::jlimit (0.0f, 1.0f, result.similarity.total * 0.95f + result.effectProbeSimilarity * 0.05f);
     }
     result.confidence = result.similarity.total;
     result.evaluatedCandidates = 1;
@@ -408,7 +429,9 @@ VoiceParameters SoundMatcher::mutate (const VoiceParameters& source, juce::Rando
     p.supersawMix = mutateLinear (p.supersawMix, 0.0f, 1.0f, amount, random);
     p.unisonDetune = mutateLinear (p.unisonDetune, 0.0f, 70.0f, amount * 0.65f, random);
     p.unisonSpread = mutateLinear (p.unisonSpread, 0.0f, 1.0f, amount * 0.7f, random);
-    p.wavefold = mutateLinear (p.wavefold, 0.0f, 1.0f, amount * 0.8f, random);
+    p.wavefold = source.wavefold > 0.0001f
+               ? mutateLinear (p.wavefold, 0.0f, 0.65f, amount * 0.45f, random)
+               : 0.0f;
     p.pulseWidth = mutateLinear (p.pulseWidth, 0.08f, 0.92f, amount, random);
 
     p.osc2Semitones = std::round (mutateLinear (p.osc2Semitones, -24.0f, 24.0f, amount * 0.55f, random));
@@ -481,7 +504,9 @@ VoiceParameters SoundMatcher::mutate (const VoiceParameters& source, juce::Rando
     if (allowTopology && random.nextFloat() < 0.2f)
     {
         auto& module = p.fxModules[(size_t) random.nextInt (FxModuleParameters::slotCount)];
-        module.type = random.nextInt ((int) fxModuleCatalog.size()); module.stage = random.nextInt (2); module.bypass = false;
+        static constexpr std::array<int, 10> safeExplorationTypes {{ 1, 2, 6, 7, 8, 9, 10, 11, 12, 13 }};
+        module.type = safeExplorationTypes[(size_t) random.nextInt ((int) safeExplorationTypes.size())];
+        module.stage = random.nextInt (2); module.bypass = false;
     }
     for (auto& module : p.fxModules) if (module.type != 0)
     {
@@ -491,7 +516,9 @@ VoiceParameters SoundMatcher::mutate (const VoiceParameters& source, juce::Rando
         module.mix = mutateLinear (module.mix, 0, 1, amount, random);
     }
 
-    p.drive = mutateLinear (p.drive, 0.0f, 1.0f, amount, random);
+    p.drive = source.drive > 0.0001f
+            ? mutateLinear (p.drive, 0.0f, 0.55f, amount * 0.45f, random)
+            : 0.0f;
     p.chorusMix = mutateLinear (p.chorusMix, 0.0f, 1.0f, amount, random);
     p.chorusRate = mutateLog (p.chorusRate, 0.02f, 10.0f, amount * 0.5f, random);
     p.chorusDepth = mutateLinear (p.chorusDepth, 0.0f, 1.0f, amount, random);

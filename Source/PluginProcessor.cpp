@@ -259,7 +259,7 @@ VoiceParameters mutateGoldRack (const VoiceParameters& source, const SoundFeatur
         {
             auto voice = std::make_shared<VoiceParameters> (*rack.layers[(size_t) layer]);
             voice->layers.fill (nullptr); voice->mainLayerGain = 1.0f; voice->globalFxModules = {};
-            voice->outputGainDb = goldMutateLinear (voice->outputGainDb, -16.0f, 2.0f, amount * 0.45f, random);
+            voice->outputGainDb = goldMutateLinear (voice->outputGainDb, -16.0f, -2.0f, amount * 0.45f, random);
             voice->referenceWavetableMix = goldMutateLinear (voice->referenceWavetableMix, 0.0f, 1.0f, amount * 0.55f, random);
             voice->wavetableMix = goldMutateLinear (voice->wavetableMix, 0.0f, 1.0f, amount * 0.45f, random);
             voice->wavetablePosition = goldMutateLinear (voice->wavetablePosition, 0.0f, 1.0f, amount * 0.42f, random);
@@ -1406,7 +1406,8 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
         const auto prefix = "modGraph" + juce::String (i + 1); const auto& slot = q.modGraphSlots[(size_t) i];
         set (prefix + "Source", (float) slot.source); set (prefix + "Dest", (float) slot.destination); set (prefix + "Amount", slot.amount);
     }
-    set ("drive", q.drive); set ("chorusMix", q.chorusMix); set ("chorusRate", q.chorusRate); set ("chorusDepth", q.chorusDepth);
+    set ("drive", q.drive); set ("distortionMode", (float) q.distortionMode); set ("distortionMix", q.distortionMix);
+    set ("chorusMix", q.chorusMix); set ("chorusRate", q.chorusRate); set ("chorusDepth", q.chorusDepth);
     set ("delayMix", q.delayMix); set ("delayTime", q.delayTime); set ("delayFeedback", q.delayFeedback);
     set ("reverbMix", q.reverbMix); set ("reverbSize", q.reverbSize); set ("reverbDamping", q.reverbDamping);
     set ("stereoWidth", q.stereoWidth); set ("outputGain", q.outputGainDb);
@@ -1432,30 +1433,31 @@ void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainR
 
     bool hasEmbeddedRack = false;
     for (const auto& layer : mainResult.params.layers) hasEmbeddedRack |= layer != nullptr;
+
+    auto setGlobal = [this] (const juce::String& id, float value)
+    {
+        if (auto* parameter = apvts.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+    };
+    for (int i = 0; i < FxModuleParameters::slotCount; ++i)
+    {
+        const auto prefix = "globalFxModule" + juce::String (i + 1);
+        const FxModuleParameters empty;
+        const auto& module = hasEmbeddedRack && mainResult.fullRackScore
+                           ? mainResult.params.globalFxModules[(size_t) i] : empty;
+        setGlobal (prefix + "Type", (float) module.type);
+        setGlobal (prefix + "Stage", (float) module.stage);
+        setGlobal (prefix + "Bypass", module.bypass ? 1.0f : 0.0f);
+        setGlobal (prefix + "Amount", module.amount);
+        setGlobal (prefix + "Rate", module.rate);
+        setGlobal (prefix + "Feedback", module.feedback);
+        setGlobal (prefix + "Mix", module.mix);
+        setGlobal (prefix + "TempoSync", module.tempoSync ? 1.0f : 0.0f);
+        setGlobal (prefix + "Division", (float) module.tempoDivision);
+    }
+
     if (hasEmbeddedRack)
     {
-        if (mainResult.fullRackScore)
-        {
-            auto setGlobal = [this] (const juce::String& id, float value)
-            {
-                if (auto* parameter = apvts.getParameter (id))
-                    parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
-            };
-            for (int i = 0; i < FxModuleParameters::slotCount; ++i)
-            {
-                const auto prefix = "globalFxModule" + juce::String (i + 1);
-                const auto& module = mainResult.params.globalFxModules[(size_t) i];
-                setGlobal (prefix + "Type", (float) module.type);
-                setGlobal (prefix + "Stage", (float) module.stage);
-                setGlobal (prefix + "Bypass", module.bypass ? 1.0f : 0.0f);
-                setGlobal (prefix + "Amount", module.amount);
-                setGlobal (prefix + "Rate", module.rate);
-                setGlobal (prefix + "Feedback", module.feedback);
-                setGlobal (prefix + "Mix", module.mix);
-                setGlobal (prefix + "TempoSync", module.tempoSync ? 1.0f : 0.0f);
-                setGlobal (prefix + "Division", (float) module.tempoDivision);
-            }
-        }
         if (auto* mainGain = apvts.getParameter ("mainLayerGain"))
             mainGain->setValueNotifyingHost (mainGain->convertTo0to1 (mainResult.params.mainLayerGain));
 
@@ -1563,7 +1565,8 @@ MatchResult RetroMatchSynthAudioProcessor::fitReference()
     seed.params.referenceWavetableMix = strategyTable ? referenceTableWeight (*currentFeatures, strategy) : 0.0f;
     seed.params.userWavetable = userWavetable;
     seed.params.userWavetableMix = authored.userWavetableMix;
-    seed.params.distortionMode = authored.distortionMode; seed.params.distortionMix = authored.distortionMix;
+    seed.params.distortionMode = matchSettings.lockEffects ? authored.distortionMode : 0;
+    seed.params.distortionMix = matchSettings.lockEffects ? authored.distortionMix : 1.0f;
     auto fitSettings = matchSettings; fitSettings.algorithm = strategy;
     auto evaluated = SoundMatcher::evaluateFit (*currentFeatures, seed.params, fitSettings);
     evaluated.explanation = seed.explanation + " Initial rendered similarity: " + juce::String (evaluated.similarity.total * 100.0f, 1) + "%";
@@ -1589,7 +1592,8 @@ MatchResult RetroMatchSynthAudioProcessor::refineReference (SoundMatcher::Progre
     seed.userWavetable = userWavetable;
     seed.userWavetableMix = authored.userWavetableMix;
     seed.layers.fill (nullptr); seed.mainLayerGain = 1.0f;
-    seed.distortionMode = authored.distortionMode; seed.distortionMix = authored.distortionMix;
+    seed.distortionMode = matchSettings.lockEffects ? authored.distortionMode : 0;
+    seed.distortionMix = matchSettings.lockEffects ? authored.distortionMix : 1.0f;
     return SoundMatcher::refineFit (reference, seed, settings, std::move (progress), std::move (cancel));
 }
 
@@ -1997,7 +2001,8 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildCandidateBank()
     base.userWavetable = userWavetable;
     base.userWavetableMix = authored.userWavetableMix;
     base.layers.fill (nullptr); base.mainLayerGain = 1.0f;
-    base.distortionMode = authored.distortionMode; base.distortionMix = authored.distortionMix;
+    base.distortionMode = matchSettings.lockEffects ? authored.distortionMode : 0;
+    base.distortionMix = matchSettings.lockEffects ? authored.distortionMix : 1.0f;
     std::array<VoiceParameters, 3> seeds { base, base, base };
     seeds[1].fmMix = juce::jmax (0.18f, base.fmMix); seeds[1].fmAlgorithm = (base.fmAlgorithm + 2) % 6; seeds[1].referenceWavetableMix *= 0.45f;
     seeds[2].supersawMix = juce::jmax (0.16f, base.supersawMix); seeds[2].wavetableMix = juce::jmax (0.20f, base.wavetableMix); seeds[2].referenceWavetableMix *= 0.70f;
@@ -2041,8 +2046,8 @@ std::array<MatchResult, 3> RetroMatchSynthAudioProcessor::buildGoldCandidateBank
         seed.referenceWavetableMix = table ? referenceTableWeight (reference, method) : 0.0f;
         seed.userWavetable = userWavetable;
         seed.userWavetableMix = authored.userWavetableMix;
-        seed.distortionMode = authored.distortionMode;
-        seed.distortionMix = authored.distortionMix;
+        seed.distortionMode = matchSettings.lockEffects ? authored.distortionMode : 0;
+        seed.distortionMix = matchSettings.lockEffects ? authored.distortionMix : 1.0f;
         seed.layers.fill (nullptr);
         seed.mainLayerGain = 1.0f;
 

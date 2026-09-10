@@ -147,6 +147,36 @@ int main (int argc, char** argv)
             return fail ("FX / Guitar Chain diagnostic probe score invalid");
     }
     {
+        SoundFeatures clean;
+        clean.duration = 1.0f; clean.fundamentalHz = 220.0f; clean.pitchConfidence = 0.96f;
+        clean.harmonicity = 0.88f; clean.inharmonicity = 0.08f; clean.transientScore = 0.56f;
+        clean.spectralFlatness = 0.07f; clean.spectralCentroidHz = 2600.0f; clean.spectralRolloffHz = 7600.0f;
+        clean.lowEnergyRatio = 0.16f; clean.highEnergyRatio = 0.22f; clean.zeroCrossingRate = 0.08f;
+        clean.attackSeconds = 0.008f; clean.decaySeconds = 0.31f; clean.sustainLevel = 0.54f; clean.releaseSeconds = 0.18f;
+        clean.stereoWidth = 0.10f; clean.spectralMotion = 0.025f;
+        const auto cleanSeed = SoundMatcher::initialFit (clean).params;
+        if (cleanSeed.drive > 1.0e-6f || cleanSeed.wavefold > 1.0e-6f)
+            return fail ("clean bright reference seed manufactured nonlinear drive/fold");
+
+        MatchSettings cleanFxSettings;
+        cleanFxSettings.algorithm = 6; cleanFxSettings.iterations = 0; cleanFxSettings.topologyTrials = 0;
+        cleanFxSettings.populationSize = 2; cleanFxSettings.renderSampleRate = 12000.0; cleanFxSettings.maxRenderSeconds = 0.5f;
+        const auto cleanFx = SoundMatcher::refineFit (clean, cleanSeed, cleanFxSettings);
+        for (const auto& module : cleanFx.params.fxModules)
+            if ((module.type == 3 || module.type == 4 || module.type == 5) && ! module.bypass && module.mix > 0.001f)
+                return fail ("FX/Guitar profile forced nonlinear processing without sufficient evidence");
+
+        for (int i = 0; i < 48; ++i)
+        {
+            const auto variation = SoundMatcher::makeVariation (VoiceParameters {}, i);
+            if (variation.drive > 1.0e-6f || variation.wavefold > 1.0e-6f)
+                return fail ("generic variation invented built-in nonlinear colour from a neutral patch");
+            for (const auto& module : variation.fxModules)
+                if (module.type == 3 || module.type == 4 || module.type == 5)
+                    return fail ("generic topology mutation invented nonlinear FX from a neutral patch");
+        }
+    }
+    {
         VoiceParameters tone; tone.osc1Wave = 1; tone.osc2Mix = 0; tone.release = 0.02f;
         const auto dry = OfflineRenderer::renderPatch (tone, 22050, 0.6f, 220);
         for (int type = 1; type < (int) fxModuleCatalog.size(); ++type)
