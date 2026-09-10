@@ -16,20 +16,28 @@ public:
         autoLoad.setTooltip ("When enabled, a single click loads the highlighted preset immediately. Double-click and LOAD SELECTED always work.");
         visual.parameters = [this] { return proc.getMainVoiceParameters(); };
 
-        for (auto* b : { &load, &save, &open, &randomize, &audition, &favorite, &surprise, &clearSearch }) addAndMakeVisible (*b);
+        for (auto* b : { &load, &save, &open, &randomize, &audition, &favorite, &surprise, &clearSearch, &openFolder }) addAndMakeVisible (*b);
         load.setButtonText ("LOAD SELECTED"); save.setButtonText ("SAVE CURRENT"); open.setButtonText ("OPEN PRESET");
         randomize.setButtonText ("DESIGN NEW LAYERED PATCH"); audition.setButtonText ("AUDITION");
-        favorite.setButtonText ("FAVORITE"); surprise.setButtonText ("SURPRISE ME"); clearSearch.setButtonText ("CLEAR");
+        favorite.setButtonText ("FAVORITE"); surprise.setButtonText ("SURPRISE ME"); clearSearch.setButtonText ("CLEAR"); openFolder.setButtonText ("FOLDER");
         favorite.setTooltip ("Add or remove the selected preset from Favorites. Favorites are stored locally in the RetroMatch preset folder.");
         surprise.setTooltip ("Select a random preset from the current filters. With LOAD ON SELECT enabled it is loaded immediately.");
         clearSearch.setTooltip ("Clear the preset search text.");
+        openFolder.setTooltip ("Reveal the RetroMatch user preset folder in the operating system.");
+
+        addAndMakeVisible (auditionNote);
+        auditionNote.addItemList ({ "C2", "C3", "C4", "C5", "C6" }, 1);
+        auditionNote.setSelectedId (3, juce::dontSendNotification);
+        auditionNote.setTooltip ("Audition note used by the preset browser.");
 
         load.onClick = [this] { loadSelected(); };
         randomize.onClick = [this] { proc.randomizePreset(); refreshCurrent(); };
         audition.onClick = [this]
         {
+            if (auditionUntil > 0) proc.noteOffFromEditor (auditionMidiNote);
+            auditionMidiNote = 36 + (auditionNote.getSelectedId() - 1) * 12;
             proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::synthOnly);
-            proc.noteOnFromEditor (60, 0.75f); auditionUntil = juce::Time::getMillisecondCounterHiRes() + 1200;
+            proc.noteOnFromEditor (auditionMidiNote, 0.75f); auditionUntil = juce::Time::getMillisecondCounterHiRes() + 1200;
         };
         favorite.onClick = [this] { toggleFavorite(); };
         surprise.onClick = [this]
@@ -39,6 +47,11 @@ public:
             list.scrollToEnsureRowIsOnscreen (list.getSelectedRow());
         };
         clearSearch.onClick = [this] { search.clear(); search.grabKeyboardFocus(); };
+        openFolder.onClick = [this]
+        {
+            if (directory().createDirectory().wasOk()) directory().revealToUser();
+            else description.setText ("Cannot create or reveal the user preset folder.", juce::dontSendNotification);
+        };
         save.onClick = [this] { choose (true); }; open.onClick = [this] { choose (false); };
 
         addAndMakeVisible (search); search.setTextToShowWhenEmpty ("Search presets...", juce::Colours::grey);
@@ -59,7 +72,7 @@ public:
         loadFavorites(); rescan(); list.selectRow (0); refreshCurrent(); startTimerHz (10);
     }
 
-    ~PresetsPage() override { if (auditionUntil > 0) proc.noteOffFromEditor (60); }
+    ~PresetsPage() override { if (auditionUntil > 0) proc.noteOffFromEditor (auditionMidiNote); }
 
     void resized() override
     {
@@ -85,7 +98,10 @@ public:
         open.setBounds (actions.reduced (2));
 
         r.removeFromTop (8); auto bottom = r.removeFromBottom (36);
-        randomize.setBounds (bottom.removeFromLeft (bottom.getWidth() * 2 / 3).reduced (2)); audition.setBounds (bottom.reduced (2));
+        randomize.setBounds (bottom.removeFromLeft (bottom.getWidth() * 5 / 12).reduced (2));
+        auditionNote.setBounds (bottom.removeFromLeft (68).reduced (2));
+        audition.setBounds (bottom.removeFromLeft (bottom.getWidth() * 2 / 3).reduced (2));
+        openFolder.setBounds (bottom.reduced (2));
         list.setBounds (r.removeFromLeft (r.getWidth() / 2).reduced (2)); r.removeFromLeft (10);
         visual.setBounds (r.removeFromTop (210)); description.setBounds (r.reduced (4, 8));
     }
@@ -94,13 +110,14 @@ public:
 
 private:
     RetroMatchSynthAudioProcessor& proc; juce::ListBox list;
-    juce::TextEditor search; juce::ComboBox category; std::vector<int> visibleRows;
+    juce::TextEditor search; juce::ComboBox category, auditionNote; std::vector<int> visibleRows;
     juce::TextEditor description; juce::Label current, stats; SynthInstanceVisual visual;
     juce::ToggleButton autoLoad, favoritesOnly;
-    juce::TextButton load, save, open, randomize, audition, favorite, surprise, clearSearch;
+    juce::TextButton load, save, open, randomize, audition, favorite, surprise, clearSearch, openFolder;
     juce::Array<juce::File> userFiles; std::unique_ptr<juce::FileChooser> chooser;
     juce::StringArray favoriteKeys;
     double auditionUntil = 0;
+    int auditionMidiNote = 60;
 
     juce::File directory() const { return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("RetroMatch/Presets"); }
     juce::File favoritesFile() const { return directory().getChildFile ("favorites.txt"); }
@@ -289,7 +306,7 @@ private:
 
     void timerCallback() override
     {
-        if (auditionUntil > 0 && juce::Time::getMillisecondCounterHiRes() >= auditionUntil) { proc.noteOffFromEditor (60); auditionUntil = 0; }
+        if (auditionUntil > 0 && juce::Time::getMillisecondCounterHiRes() >= auditionUntil) { proc.noteOffFromEditor (auditionMidiNote); auditionUntil = 0; }
         refreshCurrent();
     }
 
