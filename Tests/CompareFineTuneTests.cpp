@@ -144,6 +144,31 @@ int main()
     for (const auto sustain : tailedOneShot.fmOpSustain)
         if (! near (sustain, 0.0f)) return fail ("TAIL reintroduced FM sustain");
 
+    // RESET is represented by returning to the immutable measured baseline. Verify
+    // that this remains parameter-equivalent after arbitrary edits, including the
+    // nested full-rack state that Compare clones for adjustment.
+    CompareFineTune::Values arbitrary;
+    arbitrary.brightness = -0.91f;
+    arbitrary.lowEnd = 0.83f;
+    arbitrary.punch = -0.77f;
+    arbitrary.tail = 0.68f;
+    arbitrary.width = -0.59f;
+    arbitrary.motion = 0.47f;
+    arbitrary.finePitch = -0.36f;
+    const auto edited = CompareFineTune::apply (baseline, arbitrary);
+    const auto reset = CompareFineTune::apply (baseline, {});
+    if (! near (reset.cutoff, baseline.cutoff) || ! near (reset.subMix, baseline.subMix)
+        || ! near (reset.attack, baseline.attack) || ! near (reset.decay, baseline.decay)
+        || ! near (reset.release, baseline.release) || ! near (reset.stereoWidth, baseline.stereoWidth)
+        || ! near (reset.masterTuneCents, baseline.masterTuneCents)
+        || ! reset.layers[0] || ! baseline.layers[0]
+        || ! near (reset.layers[0]->cutoff, baseline.layers[0]->cutoff)
+        || ! near (reset.layers[0]->masterTuneCents, baseline.layers[0]->masterTuneCents))
+        return fail ("RESET did not restore the immutable baseline parameter values");
+    if (near (edited.cutoff, baseline.cutoff) && near (edited.subMix, baseline.subMix)
+        && near (edited.attack, baseline.attack) && near (edited.stereoWidth, baseline.stereoWidth))
+        return fail ("arbitrary Compare edits did not change the candidate");
+
     CompareFineTune::Values staticMotion;
     staticMotion.motion = 1.0f;
     VoiceParameters staticPatch;
@@ -192,8 +217,74 @@ int main()
     const auto darkFeatures = SampleAnalyzer::analyzeBuffer (darkAudio, sampleRate, fundamental);
     if (brightFeatures.spectralCentroidHz <= darkFeatures.spectralCentroidHz)
         return fail ("brightness macro did not move measured spectral centroid upward");
+    const float brightnessLevelRatio = brightFeatures.rms / juce::jmax (1.0e-5f, darkFeatures.rms);
+    if (brightnessLevelRatio < 0.30f || brightnessLevelRatio > 3.30f)
+        return fail ("brightness macro acted primarily as an uncontrolled loudness change");
+
+    // Rendered directional coverage for the remaining semantic controls. Keep the
+    // rack to one voice here so each measurement belongs to the control under test.
+    auto renderSingle = [&] (CompareFineTune::Values values)
+    {
+        auto patch = CompareFineTune::apply (baseline, values);
+        patch.layers.fill (nullptr);
+        return OfflineRenderer::renderPatch (patch, sampleRate, 1.40f, fundamental, 128);
+    };
+
+    CompareFineTune::Values low, noLow;
+    low.lowEnd = 1.0f;
+    noLow.lowEnd = -1.0f;
+    const auto lowFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (low), sampleRate, fundamental);
+    const auto noLowFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (noLow), sampleRate, fundamental);
+    if (lowFeatures.lowEnergyRatio <= noLowFeatures.lowEnergyRatio + 0.002f)
+        return fail ("low-end macro did not move measured low-frequency energy upward");
+
+    CompareFineTune::Values hardPunch, softPunch;
+    hardPunch.punch = 1.0f;
+    softPunch.punch = -1.0f;
+    const auto hardPunchFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (hardPunch), sampleRate, fundamental);
+    const auto softPunchFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (softPunch), sampleRate, fundamental);
+    if (hardPunchFeatures.attackSeconds >= softPunchFeatures.attackSeconds)
+        return fail ("punch macro did not shorten measured attack");
+
+    CompareFineTune::Values longTail, shortTail;
+    longTail.tail = 1.0f;
+    shortTail.tail = -1.0f;
+    const auto longTailFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (longTail), sampleRate, fundamental);
+    const auto shortTailFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (shortTail), sampleRate, fundamental);
+    if (longTailFeatures.decaySeconds <= shortTailFeatures.decaySeconds
+        && longTailFeatures.releaseSeconds <= shortTailFeatures.releaseSeconds)
+        return fail ("tail macro did not lengthen measured decay/release");
+
+    CompareFineTune::Values wide, narrow;
+    wide.width = 1.0f;
+    narrow.width = -1.0f;
+    const auto wideFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (wide), sampleRate, fundamental);
+    const auto narrowFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (narrow), sampleRate, fundamental);
+    if (wideFeatures.stereoWidth <= narrowFeatures.stereoWidth + 0.002f)
+        return fail ("width macro did not move measured stereo width upward");
+    const float widthLevelRatio = wideFeatures.rms / juce::jmax (1.0e-5f, narrowFeatures.rms);
+    if (widthLevelRatio < 0.75f || widthLevelRatio > 1.35f)
+        return fail ("width macro changed level outside its spatial role");
+
+    CompareFineTune::Values moreMotion, lessMotion;
+    moreMotion.motion = 1.0f;
+    lessMotion.motion = -1.0f;
+    const auto moreMotionFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (moreMotion), sampleRate, fundamental);
+    const auto lessMotionFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (lessMotion), sampleRate, fundamental);
+    if (moreMotionFeatures.spectralMotion <= lessMotionFeatures.spectralMotion + 0.002f)
+        return fail ("motion macro did not move measured spectral motion upward");
+
+    CompareFineTune::Values upPitch, downPitch;
+    upPitch.finePitch = 1.0f;
+    downPitch.finePitch = -1.0f;
+    const auto upPitchFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (upPitch), sampleRate, 0.0f);
+    const auto downPitchFeatures = SampleAnalyzer::analyzeBuffer (renderSingle (downPitch), sampleRate, 0.0f);
+    if (upPitchFeatures.fundamentalHz <= downPitchFeatures.fundamentalHz + 2.0f)
+        return fail ("fine-pitch macro did not move measured fundamental upward");
 
     std::cout << "Compare fine-tune tests passed. centroid dark=" << darkFeatures.spectralCentroidHz
-              << " bright=" << brightFeatures.spectralCentroidHz << '\n';
+              << " bright=" << brightFeatures.spectralCentroidHz
+              << " low-end=" << noLowFeatures.lowEnergyRatio << "->" << lowFeatures.lowEnergyRatio
+              << " pitch=" << downPitchFeatures.fundamentalHz << "->" << upPitchFeatures.fundamentalHz << '\n';
     return 0;
 }

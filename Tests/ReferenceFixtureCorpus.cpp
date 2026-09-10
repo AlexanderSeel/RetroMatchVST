@@ -32,7 +32,7 @@ float tonal (double t, float fundamental, float h2 = 0.0f, float h3 = 0.0f, floa
 }
 
 constexpr std::array<Definition, 11> corpus {{
-    { Kind::kick, "kick", 1.00f, { 42.0f, 90.0f, 0.20f, Lifecycle::oneShot, TransientCharacter::hard, SpectralBalance::dark, StereoCharacter::mono, false } },
+    { Kind::kick, "kick", 1.00f, { 42.0f, 90.0f, 0.05f, Lifecycle::oneShot, TransientCharacter::hard, SpectralBalance::dark, StereoCharacter::mono, false } },
     { Kind::snare, "snare-percussion", 0.90f, { 0.0f, 0.0f, 0.0f, Lifecycle::oneShot, TransientCharacter::hard, SpectralBalance::noisy, StereoCharacter::narrow, false } },
     { Kind::pluck, "short-pluck", 1.20f, { 216.0f, 224.0f, 0.35f, Lifecycle::plucked, TransientCharacter::hard, SpectralBalance::bright, StereoCharacter::mono, false } },
     { Kind::bass, "bass", 1.50f, { 108.0f, 112.0f, 0.55f, Lifecycle::sustained, TransientCharacter::medium, SpectralBalance::dark, StereoCharacter::mono, false } },

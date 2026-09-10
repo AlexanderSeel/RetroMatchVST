@@ -34,11 +34,11 @@ This is the current priority. The reference sample is the sonic contract; a nume
 
 ## A1. Deterministic reference corpus and observability
 
-- [ ] Build a small checked-in deterministic corpus covering kick, snare/percussion, short pluck, bass, piano/keys, mallet/bell, sustained lead, pad, staccato/string-like material, noisy texture and evolving atmosphere.
-- [ ] Store expected coarse identity facts per fixture: pitch confidence/range, lifecycle class, transient character, envelope duration, spectral balance, stereo character and whether nonlinear colour is expected.
-- [ ] Add candidate telemetry suitable for tests/debugging: peak, RMS, crest factor, DC, clipped/non-finite sample counts and, where useful, oversampled/true peak.
-- [ ] Add optional offline/debug stage snapshots for layer output, combine, pre-FX, post-FX, global bus and final output. No callback allocations.
-- [ ] Keep similarity level-normalized where the metric requires it; playback gain remains a separate musical/safety concern.
+- [x] Build a small checked-in deterministic corpus covering kick, snare/percussion, short pluck, bass, piano/keys, mallet/bell, sustained lead, pad, staccato/string-like material, noisy texture and evolving atmosphere.
+- [x] Store expected coarse identity facts per fixture: pitch confidence/range, lifecycle class, transient character, envelope duration, spectral balance, stereo character and whether nonlinear colour is expected.
+- [x] Add candidate telemetry suitable for tests/debugging: peak, RMS, crest factor, DC, clipped/non-finite sample counts and a deterministic four-times oversampled peak estimate.
+- [x] Add optional offline/debug stage snapshots for layer output, combine, pre-FX, post-FX, global bus and final output. No callback allocations.
+- [x] Keep similarity level-normalized where the metric requires it; playback gain remains a separate musical/safety concern.
 
 ## A2. Lifecycle and evidence constraints
 
@@ -51,31 +51,31 @@ This is the current priority. The reference sample is the sonic contract; a nume
 
 ## A3. Gain staging, distortion and technical safety
 
-- [ ] Audit/document unity-gain expectations from oscillator -> layer -> layer combine -> per-instance FX -> global bus -> output.
-- [ ] Prove that adding companion layers or parallel branches cannot accidentally multiply level.
-- [ ] Add a clean-path invariant: a clean sine/reference stays finite, unclipped and free of unintended nonlinear processing through a complete generated rack.
-- [ ] Add bounded headroom/normalization where legitimate generated multilayer sums need it; do not use a limiter to conceal upstream gain bugs.
-- [ ] Penalize hard clipping, non-finite output, suspicious crest collapse and excessive alias-like high-frequency energy in candidate selection.
-- [ ] Add focused regressions for serial/parallel FX level, multilayer sums, GOLD racks, AI variants and Compare-adjusted racks.
-- [ ] Prove materially equivalent offline/live topology, gain and FX behavior for the same patch state.
+- [x] Audit/document unity-gain expectations from oscillator -> layer -> layer combine -> per-instance FX -> global bus -> output.
+- [x] Prove that adding companion layers or parallel branches cannot accidentally multiply level.
+- [x] Add a clean-path invariant: a clean sine/reference stays finite, unclipped and free of unintended nonlinear processing through a complete generated rack.
+- [x] Add bounded headroom/normalization where legitimate generated multilayer sums need it; do not use a limiter to conceal upstream gain bugs.
+- [x] Penalize hard clipping, non-finite output, suspicious crest collapse and excessive alias-like high-frequency energy in candidate selection; crest collapse, clipping and non-finite output are covered, while the existing spectral-safety guard covers upper-band excess.
+- [x] Add focused regressions for serial/parallel FX level, multilayer sums, GOLD racks, AI variants and Compare-adjusted racks.
+- [x] Prove materially equivalent offline/live topology, gain and FX behavior for the same patch state.
 
 ## A4. Perceptual identity analysis
 
-- [ ] Formalize identity dimensions: pitch/harmonicity, transient, amplitude lifecycle, spectral envelope/resonances, noise/tonal ratio, temporal spectral motion, stereo/width and tail/reverb character.
-- [ ] Use explicit lifecycle classes: one-shot, plucked/decaying, gated, sustained and evolving.
-- [ ] Improve harmonic-series/pitch validation so inharmonic percussion and mallets are not forced into an inappropriate pitched model.
-- [ ] Analyze attack, early body, middle body and tail rather than relying on one representative frame.
-- [ ] Preserve high-confidence reference dimensions as bounded constraints during refinement.
-- [ ] Rank synthesis explanations from evidence: subtractive/spectral, reference wavetable, FM/harmonic, layered hybrid, noise/percussion, texture/chop and FX/guitar-chain where supported.
-- [ ] Score identity and technical safety separately enough that unsafe distortion cannot win on aggregate similarity.
+- [x] Formalize identity dimensions: pitch/harmonicity, transient, amplitude lifecycle, spectral envelope/resonances, noise/tonal ratio, temporal spectral motion, stereo/width and tail/reverb character.
+- [x] Use explicit lifecycle classes: one-shot, plucked/decaying, gated, sustained and evolving.
+- [x] Improve harmonic-series/pitch validation so inharmonic percussion and mallets are not forced into an inappropriate pitched model.
+- [x] Analyze attack, early body, middle body and tail rather than relying on one representative frame.
+- [x] Preserve high-confidence reference dimensions as bounded constraints during refinement.
+- [x] Rank synthesis explanations from evidence: subtractive/spectral, reference wavetable, FM/harmonic, layered hybrid, noise/percussion, texture/chop and FX/guitar-chain where supported.
+- [x] Score identity and technical safety separately enough that unsafe distortion cannot win on aggregate similarity.
 
 ## A5. Phase-A acceptance
 
-- [ ] Deterministic clean fixtures render finite with no hard clipping or unintended distortion.
+- [x] Deterministic clean fixtures render finite with no hard clipping or unintended distortion.
 - [x] Self-terminating references remain self-terminating under a held MIDI note.
-- [ ] Sustained references remain sustained on the deterministic corpus.
+- [x] Sustained references remain sustained on the deterministic corpus.
 - [ ] Quick/Refine/Gold do not systematically increase harshness or level to raise score.
-- [ ] Offline and live renders are materially equivalent for the same state.
+- [x] Offline and live renders are materially equivalent for the same state.
 - [ ] Windows VST3/Standalone + DSP regressions pass.
 - [ ] macOS AU/VST3/Standalone + validation pass.
 - [ ] Listening pass on the fixture corpus confirms the automated gate.
@@ -110,10 +110,10 @@ Compare is a semantic residual-correction surface, not a second synthesizer. Eve
 
 ## B3. Remaining verification
 
-- [~] Directional tests exist for parameter semantics and rendered Brightness; extend deterministic rendered-feature coverage to Low End, Punch, Tail, Width, Motion and Fine Pitch where the analyzer exposes a robust metric.
-- [ ] Add an explicit reset-after-arbitrary-edits regression proving the immutable baseline is restored parameter-equivalently.
-- [ ] Add approximate level-invariance assertions for controls that should not act as loudness controls, especially Width/Brightness.
-- [ ] Add concise UI help/tooltips documenting each control's actual dimension/unit.
+- [x] Directional tests cover parameter semantics and rendered Brightness, Low End, Punch, Tail, Width, Motion and Fine Pitch where the analyzer exposes a robust metric.
+- [x] Add an explicit reset-after-arbitrary-edits regression proving the immutable baseline is restored parameter-equivalently.
+- [x] Add approximate level-invariance assertions for controls that should not act as loudness controls, especially Width/Brightness.
+- [x] Add concise UI help/tooltips documenting each control's actual dimension/unit.
 
 ### Compare acceptance
 

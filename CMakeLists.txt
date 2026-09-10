@@ -94,6 +94,7 @@ if(RETROMATCH_BUILD_TESTS)
     Source/Engine/ReferenceWavetable.cpp
     Source/Analysis/SampleAnalyzer.cpp
     Source/Analysis/MelodyAnalyzer.cpp
+    Source/Sequencer/StepSequencer.cpp
     Source/Matching/OfflineRenderer.cpp
     Source/Matching/SimilarityScorer.cpp
     Source/Matching/SoundMatcher.cpp)

@@ -93,8 +93,8 @@ VoiceParameters makeCleanSinePatch()
     p.mseg.enabled = false;
     p.outputGainDb = -6.0f;
     p.mainLayerGain = 1.0f;
-    for (auto& module : p.fxModules) module.enabled = false;
-    for (auto& module : p.globalFxModules) module.enabled = false;
+    p.fxModules = {};
+    p.globalFxModules = {};
     return p;
 }
 }
@@ -157,6 +157,39 @@ int main()
     const auto cleanTelemetry = RenderTelemetry::analyze (clean);
     if (! cleanTelemetry.isTechnicallySafe() || cleanTelemetry.peak > 0.80f || cleanTelemetry.rms <= 0.01f)
         return fail ("clean sine path is not finite, unclipped and headroom-safe");
+
+    juce::AudioBuffer<float> layerOutput (2, clean.getNumSamples());
+    juce::AudioBuffer<float> combine (2, clean.getNumSamples());
+    juce::AudioBuffer<float> preFx (2, clean.getNumSamples());
+    juce::AudioBuffer<float> postFx (2, clean.getNumSamples());
+    juce::AudioBuffer<float> globalBus (2, clean.getNumSamples());
+    juce::AudioBuffer<float> finalOutput (2, clean.getNumSamples());
+    RenderStageSnapshots snapshots { &layerOutput, &combine, &preFx, &postFx, &globalBus, &finalOutput };
+    const auto capturedRender = OfflineRenderer::renderPatch (cleanPatch, sampleRate, 1.40f, 220.0f, 256, {}, true, &snapshots);
+    if (finalOutput.getMagnitude (0, finalOutput.getNumSamples()) <= 0.01f
+        || preFx.getMagnitude (0, preFx.getNumSamples()) <= 0.01f
+        || postFx.getMagnitude (0, postFx.getNumSamples()) <= 0.01f
+        || ! std::isfinite (finalOutput.getMagnitude (0, finalOutput.getNumSamples()))
+        || std::abs (finalOutput.getMagnitude (0, finalOutput.getNumSamples())
+                   - capturedRender.getMagnitude (0, capturedRender.getNumSamples())) > 1.0e-6f)
+        return fail ("offline stage snapshots were not populated consistently");
+
+    SynthEngine liveEngine;
+    liveEngine.setRandomSeed ((int64) 0x524d534f);
+    liveEngine.prepare (sampleRate, 256, 2, false);
+    liveEngine.setParameters (cleanPatch);
+    juce::AudioBuffer<float> liveRender (2, capturedRender.getNumSamples());
+    liveRender.clear();
+    juce::MidiBuffer liveMidi;
+    liveMidi.addEvent (juce::MidiMessage::noteOn (1, 57, (juce::uint8) 108), 0);
+    liveEngine.render (liveRender, liveMidi);
+    float liveOfflineDifference = 0.0f;
+    for (int ch = 0; ch < liveRender.getNumChannels(); ++ch)
+        for (int i = 0; i < liveRender.getNumSamples(); ++i)
+            liveOfflineDifference = juce::jmax (liveOfflineDifference,
+                                                std::abs (liveRender.getSample (ch, i) - capturedRender.getSample (ch, i)));
+    if (liveOfflineDifference > 1.0e-6f)
+        return fail ("offline and live renders diverged for the same patch state");
 
     const float fundamental = harmonicMagnitude (clean, sampleRate, 220.0f, 0.55f, 0.50f);
     float upperHarmonics = 0.0f;

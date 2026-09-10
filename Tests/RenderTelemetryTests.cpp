@@ -30,7 +30,8 @@ int main()
             || telemetry.clippedSamples != 0 || telemetry.hasHardClipping()
             || ! near (telemetry.technicalSafetyScore(), 1.0f)
             || ! near (telemetry.peak, 0.0f) || ! near (telemetry.rms, 0.0f)
-            || ! near (telemetry.dc, 0.0f) || ! near (telemetry.crestFactor, 0.0f))
+            || ! near (telemetry.dc, 0.0f) || ! near (telemetry.crestFactor, 0.0f)
+            || ! near (telemetry.truePeakEstimate, 0.0f))
             return fail ("silence telemetry is not neutral, finite and technically safe");
     }
 
@@ -49,6 +50,7 @@ int main()
             || ! near (telemetry.peak, 1.25f) || ! near (telemetry.rms, expectedRms)
             || ! near (telemetry.dc, 0.3125f)
             || ! near (telemetry.crestFactor, 1.25f / expectedRms)
+            || ! near (telemetry.truePeakEstimate, 1.25f)
             || ! near (telemetry.technicalSafetyScore(), 0.6f))
             return fail ("known finite fixture produced incorrect peak/RMS/DC/crest/clipping safety telemetry");
 
@@ -73,8 +75,21 @@ int main()
             || telemetry.clippedSamples != 0
             || ! near (telemetry.technicalSafetyScore(), 0.0f)
             || ! near (telemetry.peak, 0.25f) || ! near (telemetry.rms, 0.25f)
-            || ! near (telemetry.dc, 0.0f) || ! near (telemetry.crestFactor, 1.0f))
+            || ! near (telemetry.dc, 0.0f) || ! near (telemetry.crestFactor, 1.0f)
+            || ! near (telemetry.truePeakEstimate, 0.25f))
             return fail ("non-finite samples were not isolated and invalidated");
+    }
+
+    {
+        juce::AudioBuffer<float> collapsed (1, 32);
+        collapsed.clear();
+        for (int i = 0; i < collapsed.getNumSamples(); ++i)
+            collapsed.setSample (0, i, 0.25f);
+        const auto telemetry = RenderTelemetry::analyze (collapsed);
+        if (! telemetry.isTechnicallySafe() || telemetry.crestFactor >= 1.01f
+            || telemetry.crestSafetyScore() >= 0.99f
+            || telemetry.technicalSafetyScore() >= 0.99f)
+            return fail ("crest-factor collapse was not penalized by technical safety telemetry");
     }
 
     {

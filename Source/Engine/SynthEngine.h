@@ -163,6 +163,20 @@ struct VoiceParameters
 
 static_assert (VoiceParameters::extraLayerCount == DspRouting::maxLayerCount);
 
+// Optional offline/debug destinations. The audio engine only copies into these
+// buffers when explicitly installed; normal live rendering leaves the pointer
+// null and pays only the branch cost.
+struct RenderStageSnapshots
+{
+    juce::AudioBuffer<float>* layerOutput = nullptr;
+    juce::AudioBuffer<float>* combine = nullptr;
+    juce::AudioBuffer<float>* preFx = nullptr;
+    juce::AudioBuffer<float>* postFx = nullptr;
+    juce::AudioBuffer<float>* globalBus = nullptr;
+    juce::AudioBuffer<float>* finalOutput = nullptr;
+    int writeOffset = 0;
+};
+
 class HybridVoice : public juce::SynthesiserVoice
 {
 public:
@@ -238,6 +252,7 @@ public:
     {
         routingPlan = plan.validPermutation() ? plan : DspRouting::Plan {};
     }
+    void setStageCapture (RenderStageSnapshots* capture) noexcept { stageCapture = capture; }
     void reset();
     int getLatencySamples() const noexcept { return fixedLatencySamples; }
 
@@ -272,8 +287,11 @@ private:
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> latencyCompensation { 512 };
     std::array<int, 3> intrinsicLatencySamples {{ 0, 0, 0 }};
     int fixedLatencySamples = 0;
+    RenderStageSnapshots* stageCapture = nullptr;
 
     void processEffects (juce::AudioBuffer<float>& audio);
     void processBuiltInEffects (juce::AudioBuffer<float>& audio);
     void compensateLatency (juce::AudioBuffer<float>& audio);
+    void captureStage (juce::AudioBuffer<float>& source, juce::AudioBuffer<float>* destination) noexcept;
+    void clearCapturedBlock (juce::AudioBuffer<float>* destination, int sourceSamples) noexcept;
 };

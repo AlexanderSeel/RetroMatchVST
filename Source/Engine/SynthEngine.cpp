@@ -739,6 +739,24 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
     audio.applyGain (juce::Decibels::decibelsToGain (current.outputGainDb));
 }
 
+void SynthEngine::captureStage (juce::AudioBuffer<float>& source, juce::AudioBuffer<float>* destination) noexcept
+{
+    if (stageCapture == nullptr || destination == nullptr) return;
+    const int offset = juce::jlimit (0, destination->getNumSamples(), stageCapture->writeOffset);
+    const int count = juce::jmin (source.getNumSamples(), destination->getNumSamples() - offset);
+    const int channels = juce::jmin (source.getNumChannels(), destination->getNumChannels());
+    for (int ch = 0; ch < channels; ++ch)
+        destination->copyFrom (ch, offset, source, ch, 0, count);
+}
+
+void SynthEngine::clearCapturedBlock (juce::AudioBuffer<float>* destination, int sourceSamples) noexcept
+{
+    if (stageCapture == nullptr || destination == nullptr) return;
+    const int offset = juce::jlimit (0, destination->getNumSamples(), stageCapture->writeOffset);
+    const int count = juce::jmin (sourceSamples, destination->getNumSamples() - offset);
+    if (count > 0) destination->clear (offset, count);
+}
+
 void SynthEngine::compensateLatency (juce::AudioBuffer<float>& audio)
 {
     if (fixedLatencySamples <= 0) return;
@@ -760,9 +778,12 @@ void SynthEngine::compensateLatency (juce::AudioBuffer<float>& audio)
 void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
 {
     synth.renderNextBlock (audio, midi, 0, audio.getNumSamples());
+    captureStage (audio, stageCapture != nullptr ? stageCapture->preFx : nullptr);
     processEffects (audio);
+    captureStage (audio, stageCapture != nullptr ? stageCapture->postFx : nullptr);
     compensateLatency (audio);
     audio.applyGain (juce::jlimit (0.0f, 1.0f, current.mainLayerGain));
+    clearCapturedBlock (stageCapture != nullptr ? stageCapture->layerOutput : nullptr, audio.getNumSamples());
     for (int orderSlot = 0; orderSlot < DspRouting::maxLayerCount; ++orderSlot)
     {
         const int layerIndex = routingPlan.layerOrder[(size_t) orderSlot];
@@ -791,6 +812,14 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
         layerScratch.setSize (audio.getNumChannels(), audio.getNumSamples(), false, false, true);
         layerScratch.clear();
         layer->render (layerScratch, midi);
+        if (stageCapture != nullptr && stageCapture->layerOutput != nullptr)
+        {
+            const int offset = juce::jlimit (0, stageCapture->layerOutput->getNumSamples(), stageCapture->writeOffset);
+            const int count = juce::jmin (layerScratch.getNumSamples(), stageCapture->layerOutput->getNumSamples() - offset);
+            const int channels = juce::jmin (layerScratch.getNumChannels(), stageCapture->layerOutput->getNumChannels());
+            for (int ch = 0; ch < channels; ++ch)
+                stageCapture->layerOutput->addFrom (ch, offset, layerScratch, ch, 0, count, 1.0f);
+        }
         const float pan = juce::jlimit (-1.0f, 1.0f, current.layerPan[i]);
         for (int ch = 0; ch < audio.getNumChannels(); ++ch)
         {
@@ -816,9 +845,13 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
         }
     }
 
+    captureStage (audio, stageCapture != nullptr ? stageCapture->combine : nullptr);
+
     // Gold/offline whole-instrument chain: exactly once after the main voice and
     // every companion have been combined. Live APVTS global FX are processed by
     // PluginProcessor and therefore are not copied into this field by readParams().
     wholeInstrumentRack.process (audio, current.globalFxModules, 0, current.tempoBpm);
     wholeInstrumentRack.process (audio, current.globalFxModules, 1, current.tempoBpm);
+    captureStage (audio, stageCapture != nullptr ? stageCapture->globalBus : nullptr);
+    captureStage (audio, stageCapture != nullptr ? stageCapture->finalOutput : nullptr);
 }

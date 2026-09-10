@@ -259,7 +259,9 @@ int main (int argc, char** argv)
             envelopes |= variation.mseg.enabled;
         }
         if (! routes || ! modules || ! envelopes) return fail ("matcher failed to explore routes, FX and MSEG topology");
-        if (factoryPresetCatalog.size() != 110) return fail ("factory catalog must contain 110 presets");
+        constexpr int expectedFactoryCatalogSize = 10 + FactoryPresetDesign::familyCount * FactoryPresetDesign::variationsPerFamily;
+        if ((int) factoryPresetCatalog.size() != expectedFactoryCatalogSize || expectedFactoryCatalogSize < 300)
+            return fail ("factory catalog does not contain the expected 300-plus presets");
         bool foundDeepFactoryPreset = false;
         for (int i = 10; i < (int) factoryPresetCatalog.size(); ++i)
         {

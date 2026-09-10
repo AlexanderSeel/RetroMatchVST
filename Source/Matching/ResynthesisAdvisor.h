@@ -43,7 +43,10 @@ public:
         const bool processedPluckEvidence = f.inharmonicity > 0.12f
                                          || (tail > 0.24f && stereo > 0.10f)
                                          || (f.releaseSeconds > 0.22f && f.duration > 0.85f && stereo > 0.06f);
-        const bool guitarLike = pluckedPitchedBody && processedPluckEvidence;
+        // Inharmonic pitched material is primarily mallet/metallic evidence. Do
+        // not let the generic processed-pluck heuristic relabel it as guitar-like.
+        const bool guitarLike = pluckedPitchedBody && processedPluckEvidence
+                             && identity.pitchModel != ReferenceIdentity::PitchModel::inharmonicPitched;
 
         std::array<float, 7> score {};
         score[0] = 0.46f + identity.pitchReliability * 0.10f + harmonic * 0.08f + transient * 0.05f;
@@ -89,6 +92,12 @@ public:
 
         for (int i = 1; i < (int) score.size(); ++i)
             if (score[(size_t) i] > score[(size_t) a.method]) a.method = i;
+
+        // A metallic pitched reference must not fall back to the plain
+        // oscillator/filter explanation merely because its spectrum is stable.
+        // Preserve the explicit inharmonic evidence in the selected strategy.
+        if (identity.pitchModel == ReferenceIdentity::PitchModel::inharmonicPitched && a.method == 2)
+            a.method = 3;
 
         float complexity = motion * 0.95f + stereo * 0.65f + inharmonic * 0.42f + tail * 0.72f
                          + juce::jlimit (0.0f, 0.45f, f.duration / 8.0f);

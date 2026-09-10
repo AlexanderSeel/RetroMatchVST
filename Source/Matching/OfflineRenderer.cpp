@@ -7,7 +7,8 @@ juce::AudioBuffer<float> OfflineRenderer::renderPatch (const VoiceParameters& pa
                                                         float targetFundamentalHz,
                                                         int blockSize,
                                                         DspRouting::Plan routingPlan,
-                                                        bool holdNote)
+                                                        bool holdNote,
+                                                        RenderStageSnapshots* snapshots)
 {
     const float duration = juce::jlimit (0.45f, 12.0f, durationSeconds);
     const int totalSamples = juce::jmax (1, (int) std::ceil (duration * sampleRate));
@@ -22,6 +23,7 @@ juce::AudioBuffer<float> OfflineRenderer::renderPatch (const VoiceParameters& pa
     engine.setRandomSeed ((int64) 0x524d534f);
     engine.setRoutingPlan (routingPlan);
     engine.setParameters (params);
+    engine.setStageCapture (snapshots);
 
     float hz = targetFundamentalHz;
     if (hz < 25.0f || hz > 5000.0f) hz = 261.6256f;
@@ -37,6 +39,7 @@ juce::AudioBuffer<float> OfflineRenderer::renderPatch (const VoiceParameters& pa
 
     for (int start = 0; start < totalSamples; start += blockSize)
     {
+        if (snapshots != nullptr) snapshots->writeOffset = start;
         const int count = juce::jmin (blockSize, totalSamples - start);
         juce::AudioBuffer<float> block (out.getArrayOfWritePointers(), out.getNumChannels(), start, count);
         juce::MidiBuffer midi;

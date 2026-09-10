@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "../Source/Matching/ReferenceIdentity.h"
+#include "../Source/Matching/RenderTelemetry.h"
 #include "../Source/Matching/ResynthesisAdvisor.h"
 #include "../Source/Matching/SimilarityScorer.h"
 
@@ -55,6 +56,16 @@ int main()
     const auto identical = SimilarityScorer::compare (reference, reference);
     if (std::abs (identical.spectralSafety - 1.0f) > 1.0e-6f)
         return fail ("an identical candidate was penalized");
+
+    juce::AudioBuffer<float> collapsedRender (1, 64);
+    collapsedRender.clear();
+    collapsedRender.getWritePointer (0)[0] = 0.25f;
+    for (int sample = 1; sample < collapsedRender.getNumSamples(); ++sample)
+        collapsedRender.getWritePointer (0)[sample] = 0.25f;
+    const auto collapsedTelemetry = RenderTelemetry::analyze (collapsedRender);
+    if (collapsedTelemetry.technicalSafetyScore() >= 0.99f
+        || std::abs (identical.total - 1.0f) > 1.0e-6f)
+        return fail ("technical collapse was not kept separate from perceptual similarity");
 
     auto moderate = reference;
     moderate.highEnergyRatio = 0.13f;

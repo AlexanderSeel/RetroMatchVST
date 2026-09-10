@@ -12,6 +12,10 @@ struct RenderTelemetry
     float rms = 0.0f;
     float dc = 0.0f;
     float crestFactor = 0.0f;
+    // Four-times linearly oversampled peak estimate. This is intentionally named
+    // as an estimate: it catches inter-sample movement without pretending to be
+    // a reconstruction-filter true-peak measurement.
+    float truePeakEstimate = 0.0f;
     float clipThreshold = 1.0f;
     std::int64_t finiteSamples = 0;
     std::int64_t nonFiniteSamples = 0;
@@ -29,12 +33,25 @@ struct RenderTelemetry
             && std::isfinite (rms)
             && std::isfinite (dc)
             && std::isfinite (crestFactor)
+            && std::isfinite (truePeakEstimate)
             && std::isfinite (clipThreshold);
     }
 
     [[nodiscard]] bool hasHardClipping() const noexcept
     {
         return clippedSamples > 0;
+    }
+
+    [[nodiscard]] float crestSafetyScore() const noexcept
+    {
+        if (finiteSamples <= 0 || ! isFinite()) return 0.0f;
+        if (rms <= 1.0e-5f || peak <= 1.0e-5f) return 1.0f;
+
+        // A non-silent signal whose peak is almost its RMS is suspicious in a
+        // generated instrument: it commonly indicates crushed dynamics or a
+        // DC-like path. This is a penalty, not a hard rejection, because some
+        // intentionally dense/noisy references can legitimately have low crest.
+        return juce::jlimit (0.35f, 1.0f, (crestFactor - 1.0f) / 0.35f);
     }
 
     [[nodiscard]] bool isTechnicallySafe() const noexcept
@@ -50,8 +67,9 @@ struct RenderTelemetry
         if (finiteSamples <= 0 || ! isFinite())
             return 0.0f;
 
+        const float crestSafety = crestSafetyScore();
         if (! hasHardClipping())
-            return 1.0f;
+            return crestSafety;
 
         if (clipThreshold <= 0.0f)
             return 0.0f;
@@ -59,7 +77,7 @@ struct RenderTelemetry
         const float peakSafety = juce::jlimit (0.0f, 1.0f, clipThreshold / juce::jmax (clipThreshold, peak));
         const float clippedRatio = juce::jlimit (0.0f, 1.0f,
             static_cast<float> (clippedSamples) / static_cast<float> (finiteSamples));
-        return juce::jlimit (0.0f, 1.0f, peakSafety * (1.0f - clippedRatio));
+        return juce::jlimit (0.0f, 1.0f, peakSafety * (1.0f - clippedRatio) * crestSafety);
     }
 
     [[nodiscard]] static RenderTelemetry analyze (const juce::AudioBuffer<float>& audio,
@@ -74,23 +92,35 @@ struct RenderTelemetry
         for (int channel = 0; channel < audio.getNumChannels(); ++channel)
         {
             const auto* samples = audio.getReadPointer (channel);
+            float previous = 0.0f;
+            bool hasPrevious = false;
             for (int sampleIndex = 0; sampleIndex < audio.getNumSamples(); ++sampleIndex)
             {
                 const float sample = samples[sampleIndex];
                 if (! std::isfinite (sample))
                 {
                     ++result.nonFiniteSamples;
+                    hasPrevious = false;
                     continue;
                 }
 
                 ++result.finiteSamples;
                 const float magnitude = std::abs (sample);
                 result.peak = juce::jmax (result.peak, magnitude);
+                result.truePeakEstimate = juce::jmax (result.truePeakEstimate, magnitude);
+                if (hasPrevious)
+                    for (int subSample = 1; subSample < 4; ++subSample)
+                    {
+                        const float interpolated = previous + (sample - previous) * (subSample * 0.25f);
+                        result.truePeakEstimate = juce::jmax (result.truePeakEstimate, std::abs (interpolated));
+                    }
                 if (magnitude > clipThreshold)
                     ++result.clippedSamples;
 
                 sum += static_cast<double> (sample);
                 sumSquares += static_cast<double> (sample) * static_cast<double> (sample);
+                previous = sample;
+                hasPrevious = true;
             }
         }
 

@@ -11,5 +11,6 @@ public:
                                                   float targetFundamentalHz,
                                                   int blockSize = 256,
                                                   DspRouting::Plan routingPlan = {},
-                                                  bool holdNote = false);
+                                                  bool holdNote = false,
+                                                  RenderStageSnapshots* snapshots = nullptr);
 };
