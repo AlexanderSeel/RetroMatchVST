@@ -218,7 +218,7 @@ MatchResult SoundMatcher::evaluateFit (const SoundFeatures& reference,
     {
         result.effectProbeSimilarity = EffectChainProbe::score (reference, params);
         result.similarity.total = juce::jlimit (0.0f, 1.0f,
-            result.similarity.total * 0.86f + result.effectProbeSimilarity * 0.14f);
+            result.similarity.total * 0.95f + result.effectProbeSimilarity * 0.05f);
     }
 
     const int graceSamples = (int) std::round (0.035 * settings.renderSampleRate);
@@ -296,7 +296,8 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
             if (random.nextBool()) candidate.ringMix = random.nextFloat() * 0.25f;
             if (random.nextBool()) candidate.wavetableMix = random.nextFloat() * 0.55f;
             if (random.nextBool()) candidate.supersawMix = random.nextFloat() * 0.48f;
-            if (random.nextFloat() < 0.35f) candidate.wavefold = random.nextFloat() * 0.42f;
+            if (profiledSeed.wavefold > 0.02f && random.nextFloat() < 0.20f)
+                candidate.wavefold = random.nextFloat() * juce::jmin (0.42f, juce::jmax (0.08f, profiledSeed.wavefold * 1.6f));
             if (random.nextFloat() < 0.25f)
                 candidate.fmOpFixedMode[(size_t) random.nextInt (VoiceParameters::fmOperatorCount)] = 1;
             candidate = mutate (candidate, random, 0.13f, false);

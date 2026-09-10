@@ -34,9 +34,13 @@ public:
         const float inharmonic = juce::jlimit (0.0f, 1.0f, f.inharmonicity * 2.0f);
         const float tail = juce::jlimit (0.0f, 1.0f, f.releaseSeconds / juce::jmax (0.18f, juce::jmin (2.5f, f.duration + 0.1f)) * 1.8f);
 
-        const bool guitarLike = pitch > 0.30f && transient > 0.34f && harmonic > 0.26f && flat < 0.50f
-                             && f.spectralCentroidHz > 350.0f && f.spectralCentroidHz < 6500.0f
-                             && f.spectralRolloffHz > 1200.0f && f.spectralRolloffHz < 16000.0f;
+        const bool pluckedPitchedBody = pitch > 0.30f && transient > 0.34f && harmonic > 0.26f && flat < 0.50f
+                                  && f.spectralCentroidHz > 350.0f && f.spectralCentroidHz < 6500.0f
+                                  && f.spectralRolloffHz > 1200.0f && f.spectralRolloffHz < 16000.0f;
+        const bool processedPluckEvidence = f.inharmonicity > 0.12f
+                                         || (tail > 0.24f && stereo > 0.10f)
+                                         || (f.releaseSeconds > 0.22f && f.duration > 0.85f && stereo > 0.06f);
+        const bool guitarLike = pluckedPitchedBody && processedPluckEvidence;
 
         std::array<float, 7> score {};
         score[0] = 0.46f + pitch * 0.10f + harmonic * 0.08f + transient * 0.05f;
@@ -81,7 +85,7 @@ public:
             case 3: a.reason = "Harmonic/inharmonic structure favours explicit six-operator reconstruction."; break;
             case 4: a.reason = "Stereo width and spectral motion benefit from complementary layered roles."; break;
             case 5: a.reason = "Texture and time-varying spectrum are stronger than one stable harmonic body."; break;
-            case 6: a.reason = "A pitched transient body plus band-limited colour/tail is guitar-like; rebuild the body and search compressor, drive, cabinet filtering, modulation, delay and reverb as an ordered chain."; break;
+            case 6: a.reason = "A pitched transient body plus independent processed/complex evidence is guitar-like; rebuild the body and search dynamics, cabinet filtering, modulation and space, adding drive only when nonlinear evidence supports it."; break;
             default: a.reason = "No single topology dominates; use the hybrid search as the safest first pass."; break;
         }
         return a;

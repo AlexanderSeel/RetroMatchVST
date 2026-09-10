@@ -280,13 +280,15 @@ VoiceParameters mutateGoldRack (const VoiceParameters& source, const SoundFeatur
                     curve = goldMutateLinear (curve, -1.0f, 1.0f, amount * 0.18f, random);
                 if (random.nextFloat() < 0.08f)
                 {
-                    static const int usefulMsegTargets[] {
+                    static const int safeMsegTargets[] {
                         (int) ModDestination::amplitude,
                         (int) ModDestination::cutoff,
-                        (int) ModDestination::wavetablePosition,
-                        (int) ModDestination::wavefold
+                        (int) ModDestination::wavetablePosition
                     };
-                    voice->msegTarget = usefulMsegTargets[random.nextInt ((int) std::size (usefulMsegTargets))];
+                    if (voice->wavefold > 0.02f && random.nextFloat() < 0.18f)
+                        voice->msegTarget = (int) ModDestination::wavefold;
+                    else
+                        voice->msegTarget = safeMsegTargets[random.nextInt ((int) std::size (safeMsegTargets))];
                 }
             }
             rack.layers[(size_t) layer] = std::move (voice);
@@ -309,7 +311,7 @@ VoiceParameters mutateGoldRack (const VoiceParameters& source, const SoundFeatur
     {
         const int slot = random.nextInt (FxModuleParameters::slotCount);
         auto& module = rack.globalFxModules[(size_t) slot];
-        static const int sensibleTypes[] { 0, 1, 2, 3, 6, 7, 8, 9, 13 };
+        static const int sensibleTypes[] { 0, 1, 2, 6, 7, 8, 9, 13 };
         module.type = sensibleTypes[random.nextInt ((int) std::size (sensibleTypes))];
         module.stage = random.nextBool() ? 1 : 0;
         module.bypass = false;
@@ -342,13 +344,15 @@ VoiceParameters mutateGoldRack (const VoiceParameters& source, const SoundFeatur
             curve = goldMutateLinear (curve, -1.0f, 1.0f, amount * 0.16f, random);
         if (random.nextFloat() < 0.06f)
         {
-            static const int usefulMsegTargets[] {
+            static const int safeMsegTargets[] {
                 (int) ModDestination::amplitude,
                 (int) ModDestination::cutoff,
-                (int) ModDestination::wavetablePosition,
-                (int) ModDestination::wavefold
+                (int) ModDestination::wavetablePosition
             };
-            rack.msegTarget = usefulMsegTargets[random.nextInt ((int) std::size (usefulMsegTargets))];
+            if (rack.wavefold > 0.02f && random.nextFloat() < 0.18f)
+                rack.msegTarget = (int) ModDestination::wavefold;
+            else
+                rack.msegTarget = safeMsegTargets[random.nextInt ((int) std::size (safeMsegTargets))];
         }
     }
 

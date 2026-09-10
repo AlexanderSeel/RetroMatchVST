@@ -682,7 +682,8 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
             if (random.nextBool()) candidate.ringMix = random.nextFloat() * 0.25f;
             if (random.nextBool()) candidate.wavetableMix = random.nextFloat() * 0.55f;
             if (random.nextBool()) candidate.supersawMix = random.nextFloat() * 0.48f;
-            if (random.nextFloat() < 0.35f) candidate.wavefold = random.nextFloat() * 0.42f;
+            if (profiledSeed.wavefold > 0.02f && random.nextFloat() < 0.20f)
+                candidate.wavefold = random.nextFloat() * juce::jmin (0.42f, juce::jmax (0.08f, profiledSeed.wavefold * 1.6f));
             if (random.nextFloat() < 0.25f) candidate.fmOpFixedMode[(size_t) random.nextInt (VoiceParameters::fmOperatorCount)] = 1;
             candidate = mutate (candidate, random, 0.13f, false);
         }

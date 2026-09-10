@@ -145,6 +145,17 @@ int main (int argc, char** argv)
         const auto fxMatch = SoundMatcher::refineFit (guitar, seed, fxSettings);
         if (! std::isfinite (fxMatch.effectProbeSimilarity) || fxMatch.effectProbeSimilarity < 0.0f || fxMatch.effectProbeSimilarity > 1.0f)
             return fail ("FX / Guitar Chain diagnostic probe score invalid");
+
+        SoundFeatures acid;
+        acid.duration = 0.65f; acid.fundamentalHz = 110.0f; acid.pitchConfidence = 0.97f;
+        acid.harmonicity = 0.94f; acid.inharmonicity = 0.04f; acid.transientScore = 0.64f;
+        acid.spectralFlatness = 0.04f; acid.spectralCentroidHz = 2400.0f; acid.spectralRolloffHz = 9000.0f;
+        acid.lowEnergyRatio = 0.18f; acid.highEnergyRatio = 0.24f; acid.zeroCrossingRate = 0.10f;
+        acid.attackSeconds = 0.002f; acid.decaySeconds = 0.18f; acid.sustainLevel = 0.36f; acid.releaseSeconds = 0.09f;
+        acid.stereoWidth = 0.02f; acid.spectralMotion = 0.05f;
+        const auto acidAdvice = ResynthesisAdvisor::advise (acid);
+        if (acidAdvice.method == 6)
+            return fail ("clean acid/303-like reference was misrouted to FX / Guitar Chain");
     }
     {
         SoundFeatures clean;
