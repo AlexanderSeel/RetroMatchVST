@@ -6,8 +6,8 @@ signal = ROOT / "Source/UI/SignalLabPage.h"
 static = ROOT / "scripts/static-check.py"
 
 text = signal.read_text(encoding="utf-8")
-anchor = '''    static constexpr float kReadableGraphZoom = 0.48f;\n'''
-insert = '''    class LargePatchMapWindow final : public juce::DialogWindow\n    {\n    public:\n        explicit LargePatchMapWindow (float desktopScale)\n            : juce::DialogWindow ("RM-01 / LARGE PATCH MAP",\n                                  juce::Colour (0xff101719), true, true, desktopScale)\n        {\n        }\n\n        void closeButtonPressed() override\n        {\n            exitModalState (0);\n        }\n    };\n\n    static constexpr float kReadableGraphZoom = 0.48f;\n'''
+anchor = '''    static constexpr float kReadableGraphZoom = 0.50f;\n'''
+insert = '''    class LargePatchMapWindow final : public juce::DialogWindow\n    {\n    public:\n        explicit LargePatchMapWindow (float desktopScale)\n            : juce::DialogWindow ("RM-01 / LARGE PATCH MAP",\n                                  juce::Colour (0xff101719), true, true, desktopScale)\n        {\n        }\n\n        void closeButtonPressed() override\n        {\n            exitModalState (0);\n        }\n    };\n\n    static constexpr float kReadableGraphZoom = 0.50f;\n'''
 if text.count(anchor) != 1:
     raise RuntimeError(f"LargePatchMapWindow insertion point: expected 1, found {text.count(anchor)}")
 text = text.replace(anchor, insert, 1)
