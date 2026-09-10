@@ -54,7 +54,7 @@ jobs:
       - name: Build and run DSP tests
         shell: pwsh
         run: |
-          cmake --build build --config Release --target RetroMatchTests RetroMatchFineTuneTests --parallel
+          cmake --build build --config Release --target RetroMatchTests RetroMatchFineTuneTests RetroMatchOneShotTests --parallel
           ctest --test-dir build -C Release --output-on-failure
       - name: Upload Windows binaries
         uses: actions/upload-artifact@v7
@@ -80,7 +80,7 @@ jobs:
         run: cmake --build build --config Release --target RetroMatchSynth_AU RetroMatchSynth_VST3 RetroMatchSynth_Standalone --parallel
       - name: Build and run DSP tests
         run: |
-          cmake --build build --config Release --target RetroMatchTests RetroMatchFineTuneTests --parallel
+          cmake --build build --config Release --target RetroMatchTests RetroMatchFineTuneTests RetroMatchOneShotTests --parallel
           ctest --test-dir build -C Release --output-on-failure
       - name: Upload macOS binaries
         uses: actions/upload-artifact@v7

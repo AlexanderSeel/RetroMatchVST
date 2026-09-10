@@ -82,8 +82,16 @@ void enforceSelfTerminatingEnvelope (VoiceParameters& p, const SoundFeatures& re
     p.release = juce::jlimit (0.005f, 0.18f,
                               juce::jmin (p.release, juce::jmax (0.025f, reference.releaseSeconds)));
 
+    // These are already normal matcher ranges, but keep one-shot normalization
+    // explicit after topology/profile mutation so policy never depends on stale state.
+    p.wavetableMix = juce::jlimit (0.0f, 1.0f, p.wavetableMix);
+    p.supersawMix = juce::jlimit (0.0f, 1.0f, p.supersawMix);
+    p.wavefold = juce::jlimit (0.0f, 1.0f, p.wavefold);
+
     for (int i = 0; i < VoiceParameters::fmOperatorCount; ++i)
     {
+        p.fmOpFixedMode[(size_t) i] = juce::jlimit (0, 1, p.fmOpFixedMode[(size_t) i]);
+        p.fmOpAttack[(size_t) i] = juce::jlimit (0.001f, 5.0f, p.fmOpAttack[(size_t) i]);
         p.fmOpSustain[(size_t) i] = 0.0f;
         const float operatorMax = juce::jlimit (0.015f, 5.0f, targetDecay * (0.72f + i * 0.08f));
         p.fmOpDecay[(size_t) i] = juce::jlimit (0.005f, operatorMax, p.fmOpDecay[(size_t) i]);
