@@ -8,7 +8,9 @@
 #include "UI/ModulatorsPage.h"
 #include "Engine/PresetLibrary.h"
 #include "UI/PresetsPage.h"
+#include "Matching/GeneratedRackGainPolicy.h"
 #include "Matching/ResynthesisAdvisor.h"
+#include "Matching/MatchSafetyPolicy.h"
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -125,13 +127,12 @@ VoiceParameters makeEmbeddedResynthRack (const MatchResult& mainResult, const So
 {
     auto rack = mainResult.params;
     rack.layers.fill (nullptr);
-    complexity = juce::jlimit (0, 3, complexity);
     strategy = juce::jlimit (0, 6, strategy);
 
     // Gold evaluates the actual completed instrument. Classic intentionally uses
     // a strong three-instance rack (the upper end of the legacy 1-3 range), while
     // the other choices map directly to 4 / 6 / 8 total instances.
-    const int totalInstances = complexity == 0 ? 3 : (complexity == 1 ? 4 : (complexity == 2 ? 6 : 8));
+    const int totalInstances = GeneratedRackGainPolicy::totalInstancesForComplexity (complexity);
     rack.mainLayerGain = totalInstances >= 8 ? 0.64f : (totalInstances >= 6 ? 0.70f : 0.78f);
 
     static const float roleGain[] { 0.30f, 0.18f, 0.24f, 0.20f, 0.17f, 0.16f, 0.13f };
@@ -1335,6 +1336,9 @@ void RetroMatchSynthAudioProcessor::allEditorNotesOff()
 
 void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
 {
+    if (! MatchSafetyPolicy::compatible (result.params))
+        return;
+
     auto set = [this] (const juce::String& id, float x)
     {
         if (auto* param = apvts.getParameter (id))
@@ -1425,6 +1429,11 @@ void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
 
 void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainResult, int selectedBankIndex)
 {
+    // Validate the complete rack before touching APVTS or the stored layer bank.
+    // Gold must never leave a half-applied main/layer combination behind.
+    if (! MatchSafetyPolicy::compatible (mainResult.params))
+        return;
+
     selectEditingLayer (-1);
     allEditorNotesOff();
     for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) clearLayer (i);
@@ -1504,7 +1513,7 @@ void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainR
         mainGain->setValueNotifyingHost (mainGain->convertTo0to1 (1.0f));
     applyMatchResult (mainResult);
     const int legacyInstances = juce::jlimit (1, 3, 1 + (int) apvts.getRawParameterValue ("resynthInstances")->load());
-    const int totalInstances = complexity == 0 ? legacyInstances : (complexity == 1 ? 4 : complexity == 2 ? 6 : 8);
+    const int totalInstances = GeneratedRackGainPolicy::totalInstancesForComplexity (complexity, legacyInstances);
 
     std::array<int, 2> complement {{ -1, -1 }};
     int complementCount = 0;

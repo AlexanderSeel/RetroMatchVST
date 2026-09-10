@@ -20,7 +20,7 @@ This plan is ordered by implementation dependency and release risk. Duplicate re
 - [x] Version and validate serialized graph/patch state; malformed optional state must degrade safely.
 - [x] Preserve immutable match baselines for A/B, Compare and candidate history.
 - [ ] Any future feedback-capable routing must own delay/state explicitly, validate cycles and bound gain.
-- [ ] Generated content must pass finite-audio, clipping/headroom and compatibility checks before it is treated as release-ready.
+- [~] Generated Match/Gold/AI state now passes recursive finite-parameter, bounded-topology compatibility checks before application, alongside render safety telemetry; release-pack validation remains open.
 
 ### Global release gate
 
@@ -74,7 +74,7 @@ This is the current priority. The reference sample is the sonic contract; a nume
 - [x] Deterministic clean fixtures render finite with no hard clipping or unintended distortion.
 - [x] Self-terminating references remain self-terminating under a held MIDI note.
 - [x] Sustained references remain sustained on the deterministic corpus.
-- [ ] Quick/Refine/Gold do not systematically increase harshness or level to raise score.
+- [~] Quick/Refine/Gold strategy sweep rejects non-finite, clipped or unmeasured candidates, and ranking applies a bounded relative-loudness safety factor; corpus-wide harshness/level-bias confirmation still needs listening review.
 - [x] Offline and live renders are materially equivalent for the same state.
 - [ ] Windows VST3/Standalone + DSP regressions pass.
 - [ ] macOS AU/VST3/Standalone + validation pass.
@@ -138,21 +138,21 @@ The existing Patch Map foundation is usable; finish a small set of deterministic
 
 ## C2. Finish routing v2
 
-- [ ] Reorder explicitly supported pre/post processing nodes where engine ownership is unambiguous.
-- [ ] Generalize safe Split/Merge/Gain/Pan/Width utilities using preallocated processing buffers.
-- [ ] Add configurable branch dry/wet/gain with deterministic compensation.
+- [~] Editable audio fan-in reorder is now validated and serialized through the patch model; explicit pre/post processing-node ownership and UI actions remain open.
+- [~] Centralize bounded Gain/Pan/Width operations in allocation-free routing utilities; generalized graph Split/Merge node execution remains open.
+- [~] Added allocation-free normalized parallel branch mixing with deterministic compensation; user-facing branch dry/wet/gain controls remain open.
 - [ ] Preserve/compute latency across routed oversampled/nonlinear nodes.
-- [ ] Add branch solo/audition and lightweight meters without callback analysis/allocation.
-- [ ] Add generic Insert/Merge/Disconnect/Restore actions and node context actions.
-- [ ] Add multi-select/group move/node lock; minimap only if eight-instance graphs prove it useful.
+- [~] Add allocation-free atomic peak meters for the main bus and every rendered companion branch, plus Patch Map instance solo/audition; persistent branch solo state and richer audition presentation remain open.
+- [~] Add validated model-level insert, merge, disconnect/restore edge and node-removal actions; full node-context wiring remains open.
+- [x] Add persistent node-lock state and locked-position UI across Patch Map node types, plus modifier-click multi-select/group movement; minimap remains deferred unless eight-instance graphs prove it useful.
 - [ ] Stress-test graph edits while audio is running.
 
 ## C3. Resynthesis integration
 
 - [ ] Treat only validated, bounded topology choices as discrete match dimensions.
-- [ ] Preserve user graph locks during Refine/AI runs.
+- [x] Preserve user graph locks during Refine/AI runs and Patch Map auto-arrange/rebuilds; matching changes do not overwrite graph layout state.
 - [ ] Prefer reference-derived wavetable/topology choices only when measured identity improves.
-- [ ] Keep topology search bounded to avoid combinatorial candidate explosion.
+- [x] Centralize and clamp rack-depth choices to the supported 3/4/6/8-instance set and bound matcher population, iteration, topology-trial, sample-rate and render-duration requests.
 
 ### Patch Map acceptance
 

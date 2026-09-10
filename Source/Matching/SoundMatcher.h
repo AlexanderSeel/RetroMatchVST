@@ -25,6 +25,18 @@ struct MatchSettings
     bool lockFilter = false;
     bool lockModulation = false;
     bool lockEffects = false;
+
+    MatchSettings bounded() const noexcept
+    {
+        auto result = *this;
+        result.iterations = juce::jlimit (0, 2000, iterations);
+        result.topologyTrials = juce::jlimit (0, 256, topologyTrials);
+        result.populationSize = juce::jlimit (2, 32, populationSize);
+        result.renderSampleRate = juce::jlimit (8000.0, 192000.0, renderSampleRate);
+        result.maxRenderSeconds = juce::jlimit (0.5f, 60.0f, maxRenderSeconds);
+        result.algorithm = juce::jlimit (0, 6, algorithm);
+        return result;
+    }
 };
 
 struct MatchResult

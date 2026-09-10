@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <atomic>
 #include <array>
 #include <memory>
 #include <vector>
@@ -177,6 +178,12 @@ struct RenderStageSnapshots
     int writeOffset = 0;
 };
 
+struct RoutingMeterSnapshot
+{
+    float mainPeak = 0.0f;
+    std::array<float, VoiceParameters::extraLayerCount> layerPeak {};
+};
+
 class HybridVoice : public juce::SynthesiserVoice
 {
 public:
@@ -253,6 +260,20 @@ public:
         routingPlan = plan.validPermutation() ? plan : DspRouting::Plan {};
     }
     void setStageCapture (RenderStageSnapshots* capture) noexcept { stageCapture = capture; }
+    void setSoloLayer (int layer) noexcept
+    {
+        soloLayer.store (juce::isPositiveAndBelow (layer, VoiceParameters::extraLayerCount) ? layer : -1,
+                         std::memory_order_release);
+    }
+    int getSoloLayer() const noexcept { return soloLayer.load (std::memory_order_acquire); }
+    RoutingMeterSnapshot getRoutingMeters() const noexcept
+    {
+        RoutingMeterSnapshot result;
+        result.mainPeak = mainPeakMeter.load (std::memory_order_acquire);
+        for (size_t i = 0; i < result.layerPeak.size(); ++i)
+            result.layerPeak[i] = layerPeakMeters[i].load (std::memory_order_acquire);
+        return result;
+    }
     void reset();
     int getLatencySamples() const noexcept { return fixedLatencySamples; }
 
@@ -288,10 +309,14 @@ private:
     std::array<int, 3> intrinsicLatencySamples {{ 0, 0, 0 }};
     int fixedLatencySamples = 0;
     RenderStageSnapshots* stageCapture = nullptr;
+    std::atomic<float> mainPeakMeter { 0.0f };
+    std::array<std::atomic<float>, VoiceParameters::extraLayerCount> layerPeakMeters {};
+    std::atomic<int> soloLayer { -1 };
 
     void processEffects (juce::AudioBuffer<float>& audio);
     void processBuiltInEffects (juce::AudioBuffer<float>& audio);
     void compensateLatency (juce::AudioBuffer<float>& audio);
     void captureStage (juce::AudioBuffer<float>& source, juce::AudioBuffer<float>* destination) noexcept;
     void clearCapturedBlock (juce::AudioBuffer<float>* destination, int sourceSamples) noexcept;
+    static void publishPeak (std::atomic<float>& destination, const juce::AudioBuffer<float>& source) noexcept;
 };

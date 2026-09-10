@@ -6,6 +6,19 @@ namespace GeneratedRackGainPolicy
 {
 constexpr float defaultCoherentBudget = 0.92f;
 
+inline int totalInstancesForComplexity (int complexity, int classicInstances = 3) noexcept
+{
+    complexity = juce::jlimit (0, 3, complexity);
+    if (complexity == 0) return juce::jlimit (1, 3, classicInstances);
+    static constexpr int expandedDepths[] { 4, 6, 8 };
+    return expandedDepths[complexity - 1];
+}
+
+inline bool isSupportedTotalInstances (int totalInstances) noexcept
+{
+    return totalInstances == 3 || totalInstances == 4 || totalInstances == 6 || totalInstances == 8;
+}
+
 inline bool hasActiveAdditiveLayer (const VoiceParameters& rack) noexcept
 {
     for (size_t i = 0; i < rack.layers.size(); ++i)

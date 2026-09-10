@@ -1,4 +1,5 @@
 #include "SynthEngine.h"
+#include "RoutingUtilities.h"
 #include <cmath>
 
 namespace
@@ -589,6 +590,21 @@ void SynthEngine::reset()
     if (driveOversampling2x != nullptr) driveOversampling2x->reset();
     if (driveOversampling4x != nullptr) driveOversampling4x->reset();
     latencyCompensation.reset();
+    soloLayer.store (-1, std::memory_order_release);
+    mainPeakMeter.store (0.0f, std::memory_order_release);
+    for (auto& meter : layerPeakMeters) meter.store (0.0f, std::memory_order_release);
+}
+
+void SynthEngine::publishPeak (std::atomic<float>& destination, const juce::AudioBuffer<float>& source) noexcept
+{
+    float peak = 0.0f;
+    for (int channel = 0; channel < source.getNumChannels(); ++channel)
+        for (int sample = 0; sample < source.getNumSamples(); ++sample)
+        {
+            const float value = source.getSample (channel, sample);
+            if (std::isfinite (value)) peak = juce::jmax (peak, std::abs (value));
+        }
+    destination.store (peak, std::memory_order_release);
 }
 
 void SynthEngine::setParameters (const VoiceParameters& p)
@@ -688,18 +704,7 @@ void SynthEngine::processBuiltInEffects (juce::AudioBuffer<float>& audio)
     }
 
     if (channels > 1 && std::abs (current.stereoWidth - 1.0f) > 0.001f)
-    {
-        auto* l = audio.getWritePointer (0);
-        auto* r = audio.getWritePointer (1);
-        const float width = juce::jlimit (0.0f, 2.0f, current.stereoWidth);
-        for (int i = 0; i < n; ++i)
-        {
-            const float mid = 0.5f * (l[i] + r[i]);
-            const float side = 0.5f * (l[i] - r[i]) * width;
-            l[i] = mid + side;
-            r[i] = mid - side;
-        }
-    }
+        RoutingUtilities::applyStereoWidth (audio, current.stereoWidth);
 
 }
 
@@ -728,12 +733,7 @@ void SynthEngine::processEffects (juce::AudioBuffer<float>& audio)
 
     // Correlated-unity compensation: 0.5 + 0.5 prevents a dry/dry split from
     // producing the +6 dB jump that a raw sum would introduce.
-    for (int ch = 0; ch < audio.getNumChannels(); ++ch)
-    {
-        auto* a = audio.getWritePointer (ch);
-        const auto* b = parallelFxScratch.getReadPointer (ch);
-        for (int i = 0; i < audio.getNumSamples(); ++i) a[i] = 0.5f * (a[i] + b[i]);
-    }
+    RoutingUtilities::mixParallel (audio, parallelFxScratch, 0.5f, 0.5f);
 
     moduleRack.process (audio, current.fxModules, 1, current.tempoBpm);
     audio.applyGain (juce::Decibels::decibelsToGain (current.outputGainDb));
@@ -777,7 +777,11 @@ void SynthEngine::compensateLatency (juce::AudioBuffer<float>& audio)
 
 void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
 {
+    mainPeakMeter.store (0.0f, std::memory_order_relaxed);
+    for (auto& meter : layerPeakMeters) meter.store (0.0f, std::memory_order_relaxed);
     synth.renderNextBlock (audio, midi, 0, audio.getNumSamples());
+    if (soloLayer.load (std::memory_order_acquire) >= 0)
+        audio.clear();
     captureStage (audio, stageCapture != nullptr ? stageCapture->preFx : nullptr);
     processEffects (audio);
     captureStage (audio, stageCapture != nullptr ? stageCapture->postFx : nullptr);
@@ -789,6 +793,8 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
         const int layerIndex = routingPlan.layerOrder[(size_t) orderSlot];
         if (! juce::isPositiveAndBelow (layerIndex, (int) layerEngines.size())) continue;
         const size_t i = (size_t) layerIndex;
+        if (const int solo = soloLayer.load (std::memory_order_acquire); solo >= 0 && solo != layerIndex)
+            continue;
         auto* layer = layerEngines[i].get();
         if (! layer) continue;
         if (! current.layers[i])
@@ -812,6 +818,7 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
         layerScratch.setSize (audio.getNumChannels(), audio.getNumSamples(), false, false, true);
         layerScratch.clear();
         layer->render (layerScratch, midi);
+        publishPeak (layerPeakMeters[i], layerScratch);
         if (stageCapture != nullptr && stageCapture->layerOutput != nullptr)
         {
             const int offset = juce::jlimit (0, stageCapture->layerOutput->getNumSamples(), stageCapture->writeOffset);
@@ -820,11 +827,12 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
             for (int ch = 0; ch < channels; ++ch)
                 stageCapture->layerOutput->addFrom (ch, offset, layerScratch, ch, 0, count, 1.0f);
         }
-        const float pan = juce::jlimit (-1.0f, 1.0f, current.layerPan[i]);
+        const float pan = RoutingUtilities::boundedPan (current.layerPan[i]);
         for (int ch = 0; ch < audio.getNumChannels(); ++ch)
         {
-            const float balance = ch == 0 ? juce::jmin (1.0f, 1.0f - pan) : juce::jmin (1.0f, 1.0f + pan);
-            const float gain = juce::jlimit (0.0f, 1.0f, current.layerGain[i]) * balance;
+            const float balance = ch == 0 ? RoutingUtilities::leftBalance (pan)
+                                          : RoutingUtilities::rightBalance (pan);
+            const float gain = RoutingUtilities::boundedGain (current.layerGain[i]) * balance;
             const float amount = juce::jlimit (0.0f, 1.0f, current.layerAmount[i]);
             auto* output = audio.getWritePointer (ch);
             const auto* input = layerScratch.getReadPointer (ch);
@@ -852,6 +860,7 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
     // PluginProcessor and therefore are not copied into this field by readParams().
     wholeInstrumentRack.process (audio, current.globalFxModules, 0, current.tempoBpm);
     wholeInstrumentRack.process (audio, current.globalFxModules, 1, current.tempoBpm);
+    publishPeak (mainPeakMeter, audio);
     captureStage (audio, stageCapture != nullptr ? stageCapture->globalBus : nullptr);
     captureStage (audio, stageCapture != nullptr ? stageCapture->finalOutput : nullptr);
 }

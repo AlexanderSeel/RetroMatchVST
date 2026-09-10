@@ -54,7 +54,7 @@ struct TelemetrySimilarityScorer
         auto result = SimilarityScorer::compare (reference, candidate);
         if (lastCoreRenderTelemetryValid)
             result.total = juce::jlimit (0.0f, 1.0f,
-                result.total * lastCoreRenderTelemetry.technicalSafetyScore());
+                result.total * lastCoreRenderTelemetry.technicalSafetyScore (reference.rms));
         return result;
     }
 };
@@ -66,14 +66,14 @@ struct TelemetryEffectChainProbe
         const float raw = EffectChainProbe::score (reference, candidate);
         if (! lastCoreRenderTelemetryValid)
             return raw;
-        return juce::jlimit (0.0f, 1.0f, raw * lastCoreRenderTelemetry.technicalSafetyScore());
+        return juce::jlimit (0.0f, 1.0f, raw * lastCoreRenderTelemetry.technicalSafetyScore (reference.rms));
     }
 };
 
-void attachTechnicalTelemetry (MatchResult& result, const RenderTelemetry& telemetry)
+void attachTechnicalTelemetry (MatchResult& result, const RenderTelemetry& telemetry, float referenceRms)
 {
     result.renderTelemetry = telemetry;
-    result.technicalSafetyScore = telemetry.technicalSafetyScore();
+    result.technicalSafetyScore = telemetry.technicalSafetyScore (referenceRms);
     result.technicallySafe = telemetry.isTechnicallySafe();
 }
 }
@@ -270,29 +270,30 @@ MatchResult SoundMatcher::evaluateFit (const SoundFeatures& reference,
                                         const VoiceParameters& params,
                                         const MatchSettings& settings)
 {
+    const auto safeSettings = settings.bounded();
     if (! isSelfTerminatingReference (reference))
     {
         lastCoreRenderTelemetryValid = false;
-        auto result = evaluateFitCore (reference, params, settings);
+        auto result = evaluateFitCore (reference, params, safeSettings);
         if (lastCoreRenderTelemetryValid)
-            attachTechnicalTelemetry (result, lastCoreRenderTelemetry);
+            attachTechnicalTelemetry (result, lastCoreRenderTelemetry, reference.rms);
         return result;
     }
 
     MatchResult result;
     result.params = params;
 
-    const float maxRender = juce::jmax (0.45f, settings.maxRenderSeconds);
+    const float maxRender = juce::jmax (0.45f, safeSettings.maxRenderSeconds);
     const float comparisonDuration = juce::jlimit (0.12f, maxRender,
                                                    juce::jmax (0.12f, reference.duration));
     const float tailProbeSeconds = juce::jlimit (0.30f, 0.90f,
                                                  juce::jmax (0.30f, reference.duration * 0.55f));
     const float renderDuration = juce::jmin (maxRender, comparisonDuration + tailProbeSeconds);
 
-    auto audio = OfflineRenderer::renderPatch (params, settings.renderSampleRate, renderDuration,
+    auto audio = OfflineRenderer::renderPatch (params, safeSettings.renderSampleRate, renderDuration,
                                                reference.fundamentalHz, 256, {}, true);
     const auto telemetry = RenderTelemetry::analyze (audio);
-    attachTechnicalTelemetry (result, telemetry);
+    attachTechnicalTelemetry (result, telemetry, reference.rms);
 
     if (! telemetry.isFinite() || telemetry.finiteSamples <= 0)
     {
@@ -304,23 +305,23 @@ MatchResult SoundMatcher::evaluateFit (const SoundFeatures& reference,
     }
 
     const int comparisonSamples = juce::jlimit (1, audio.getNumSamples(),
-        (int) std::round (comparisonDuration * settings.renderSampleRate));
+        (int) std::round (comparisonDuration * safeSettings.renderSampleRate));
     juce::AudioBuffer<float> comparisonAudio (audio.getNumChannels(), comparisonSamples);
     for (int ch = 0; ch < audio.getNumChannels(); ++ch)
         comparisonAudio.copyFrom (ch, 0, audio, ch, 0, comparisonSamples);
 
-    result.candidateFeatures = SampleAnalyzer::analyzeBuffer (comparisonAudio, settings.renderSampleRate,
+    result.candidateFeatures = SampleAnalyzer::analyzeBuffer (comparisonAudio, safeSettings.renderSampleRate,
                                                                reference.fundamentalHz);
     result.similarity = SimilarityScorer::compare (reference, result.candidateFeatures);
 
-    if (settings.algorithm == 6)
+    if (safeSettings.algorithm == 6)
     {
         result.effectProbeSimilarity = EffectChainProbe::score (reference, params);
         result.similarity.total = juce::jlimit (0.0f, 1.0f,
             result.similarity.total * 0.95f + result.effectProbeSimilarity * 0.05f);
     }
 
-    const int graceSamples = (int) std::round (0.035 * settings.renderSampleRate);
+    const int graceSamples = (int) std::round (0.035 * safeSettings.renderSampleRate);
     const int tailStart = juce::jmin (audio.getNumSamples(), comparisonSamples + graceSamples);
     if (tailStart < audio.getNumSamples())
     {
@@ -333,7 +334,7 @@ MatchResult SoundMatcher::evaluateFit (const SoundFeatures& reference,
     }
 
     result.similarity.total = juce::jlimit (0.0f, 1.0f,
-        result.similarity.total * telemetry.technicalSafetyScore());
+        result.similarity.total * telemetry.technicalSafetyScore (reference.rms));
     result.confidence = result.similarity.total;
     result.evaluatedCandidates = 1;
     return result;
@@ -345,10 +346,11 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
                                      ProgressCallback progress,
                                      CancelCallback cancel)
 {
+    const auto safeSettings = settings.bounded();
     if (! isSelfTerminatingReference (reference))
     {
         lastCoreRenderTelemetryValid = false;
-        auto best = refineFitCore (reference, seed, settings, std::move (progress), std::move (cancel));
+        auto best = refineFitCore (reference, seed, safeSettings, std::move (progress), std::move (cancel));
 
         // The last population render is not necessarily the winning candidate.
         // Re-evaluate only the winner so the exposed telemetry belongs to exactly
@@ -359,7 +361,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
         const int algorithm = best.algorithm;
         const int complexity = best.complexity;
         const bool fullRackScore = best.fullRackScore;
-        auto verified = evaluateFit (reference, best.params, settings);
+        auto verified = evaluateFit (reference, best.params, safeSettings);
         verified.evaluatedCandidates = evaluatedCandidates;
         verified.explanation = explanation;
         verified.algorithm = algorithm;
@@ -370,7 +372,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
 
     juce::Random random ((int64) 0x524d5333);
     std::vector<MatchResult> elite;
-    elite.reserve ((size_t) juce::jmax (2, settings.populationSize));
+    elite.reserve ((size_t) juce::jmax (2, safeSettings.populationSize));
 
     auto insertElite = [&] (MatchResult candidate)
     {
@@ -379,20 +381,20 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
         {
             return a.similarity.total > b.similarity.total;
         });
-        if ((int) elite.size() > juce::jmax (2, settings.populationSize))
-            elite.resize ((size_t) settings.populationSize);
+        if ((int) elite.size() > juce::jmax (2, safeSettings.populationSize))
+            elite.resize ((size_t) safeSettings.populationSize);
     };
 
     auto profiledSeed = seed;
-    applyAlgorithmProfile (profiledSeed, settings.algorithm, reference);
+    applyAlgorithmProfile (profiledSeed, safeSettings.algorithm, reference);
     enforceReferenceLifecycle (reference, profiledSeed);
     insertElite (evaluateFit (reference, profiledSeed, settings));
     int evaluated = 1;
-    const int total = juce::jmax (1, 1 + settings.topologyTrials + settings.iterations);
+    const int total = juce::jmax (1, 1 + safeSettings.topologyTrials + safeSettings.iterations);
     auto report = [&] { if (progress) progress (juce::jlimit (0.0f, 1.0f, evaluated / (float) total)); };
     report();
 
-    for (int i = 0; i < settings.topologyTrials; ++i)
+    for (int i = 0; i < safeSettings.topologyTrials; ++i)
     {
         if (cancel && cancel()) break;
         auto candidate = profiledSeed;
@@ -423,7 +425,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
                 candidate.fmOpFixedMode[(size_t) random.nextInt (VoiceParameters::fmOperatorCount)] = 1;
             candidate = mutate (candidate, random, 0.13f, false);
         }
-        applyAlgorithmProfile (candidate, settings.algorithm, reference);
+        applyAlgorithmProfile (candidate, safeSettings.algorithm, reference);
         applyLocks (candidate, seed, settings);
         enforceReferenceLifecycle (reference, candidate);
         insertElite (evaluateFit (reference, candidate, settings));
@@ -433,13 +435,13 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
 
     int stagnant = 0;
     float lastBest = elite.front().similarity.total;
-    for (int i = 0; i < settings.iterations; ++i)
+    for (int i = 0; i < safeSettings.iterations; ++i)
     {
         if (cancel && cancel()) break;
-        const float phase = i / (float) juce::jmax (1, settings.iterations - 1);
+        const float phase = i / (float) juce::jmax (1, safeSettings.iterations - 1);
         float amount = juce::jmap (phase, 0.0f, 1.0f, 0.16f, 0.014f);
         if (stagnant > 18) amount = juce::jmax (amount, 0.075f);
-        const bool topology = i < settings.iterations / 3 || stagnant > 24;
+        const bool topology = i < safeSettings.iterations / 3 || stagnant > 24;
 
         const int parentIndex = juce::jmin ((int) elite.size() - 1,
                                             (int) std::floor (std::pow (random.nextFloat(), 2.2f) * elite.size()));
@@ -471,7 +473,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
             candidate.mseg = mutated.mseg;
             candidate.fxModules = mutated.fxModules;
         }
-        applyAlgorithmProfile (candidate, settings.algorithm, reference);
+        applyAlgorithmProfile (candidate, safeSettings.algorithm, reference);
         applyLocks (candidate, seed, settings);
 
         if (elite.size() > 1 && random.nextFloat() < 0.22f)
@@ -485,7 +487,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
             if (random.nextBool()) { candidate.chorusMix = donor.chorusMix; candidate.reverbMix = donor.reverbMix; candidate.stereoWidth = donor.stereoWidth; }
         }
 
-        applyAlgorithmProfile (candidate, settings.algorithm, reference);
+        applyAlgorithmProfile (candidate, safeSettings.algorithm, reference);
         applyLocks (candidate, seed, settings);
         enforceReferenceLifecycle (reference, candidate);
         insertElite (evaluateFit (reference, candidate, settings));
@@ -500,7 +502,7 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
     best.evaluatedCandidates = evaluated;
     best.confidence = best.similarity.total;
     best.explanation = "Population closed-loop one-shot match: candidate patches are constrained to self-terminate, rendered with the note held beyond the reference end, compared over the source-length window, and penalized for residual post-source energy.";
-    if (settings.algorithm == 6)
+    if (safeSettings.algorithm == 6)
         best.explanation += " FX / Guitar Chain keeps its diagnostic transfer score, while delay/reverb tails are removed for self-terminating references.";
     if (progress) progress (1.0f);
     return best;

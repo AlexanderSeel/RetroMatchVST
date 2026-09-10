@@ -89,6 +89,9 @@ public:
         apvts.state.appendChild (graph.toValueTree(), nullptr);
         routingPlanPublisher.publish (compiled.plan);
     }
+    RoutingMeterSnapshot getRoutingMeters() const noexcept { return engine.getRoutingMeters(); }
+    void setSoloLayer (int layer) noexcept { engine.setSoloLayer (layer); }
+    int getSoloLayer() const noexcept { return engine.getSoloLayer(); }
     void playMelody()
     {
         setReferenceAuditionMode (ReferenceAuditionMode::synthOnly);

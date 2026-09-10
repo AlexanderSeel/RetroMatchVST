@@ -28,6 +28,9 @@ finite and headroom-safe before its similarity can be trusted.
 - Compare controls do not alter drive, wavefold, distortion or FX state.
 - Offline safety telemetry rejects non-finite/empty renders and hard clipping;
   true-peak estimation is exposed separately for diagnostics.
+- Match descriptors ignore candidate RMS/peak as identity dimensions. Candidate
+  ranking applies a separate bounded relative-loudness safety factor only when
+  a render exceeds the reference RMS by more than 6 dB.
 
 The corresponding deterministic checks live in `PhaseASafetyTests` and
 `RenderTelemetryTests`. Any new summing point or branch must add a focused

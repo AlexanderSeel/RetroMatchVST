@@ -57,6 +57,13 @@ int main()
     if (std::abs (identical.spectralSafety - 1.0f) > 1.0e-6f)
         return fail ("an identical candidate was penalized");
 
+    auto louder = reference;
+    louder.rms *= 4.0f;
+    louder.peak *= 4.0f;
+    const auto louderScore = SimilarityScorer::compare (reference, louder);
+    if (std::abs (louderScore.total - identical.total) > 1.0e-6f)
+        return fail ("candidate gain changed level-normalized perceptual similarity");
+
     juce::AudioBuffer<float> collapsedRender (1, 64);
     collapsedRender.clear();
     collapsedRender.getWritePointer (0)[0] = 0.25f;

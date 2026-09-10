@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <set>
 #include <string>
@@ -174,6 +175,257 @@ public:
         return true;
     }
 
+    bool setNodeLocked (const juce::String& nodeId, bool locked, juce::String* reason = nullptr)
+    {
+        Document candidate = *this;
+        auto* node = candidate.findNode (nodeId);
+        if (node == nullptr)
+        {
+            if (reason != nullptr) *reason = "Node not found: " + nodeId;
+            return false;
+        }
+        node->locked = locked;
+        const auto validation = candidate.validate();
+        if (! validation.ok)
+        {
+            if (reason != nullptr) *reason = validation.message;
+            return false;
+        }
+        *this = std::move (candidate);
+        return true;
+    }
+
+    bool setNodePosition (const juce::String& nodeId, Position position, juce::String* reason = nullptr)
+    {
+        if (! std::isfinite (position.x) || ! std::isfinite (position.y))
+        {
+            if (reason != nullptr) *reason = "Node position must be finite: " + nodeId;
+            return false;
+        }
+        auto* node = findNode (nodeId);
+        if (node == nullptr)
+        {
+            if (reason != nullptr) *reason = "Node not found: " + nodeId;
+            return false;
+        }
+        if (node->locked && (node->position.x != position.x || node->position.y != position.y))
+        {
+            if (reason != nullptr) *reason = "Node position is locked: " + nodeId;
+            return false;
+        }
+        node->position = position;
+        node->positionValid = true;
+        return true;
+    }
+
+    bool disconnectEdge (const juce::String& edgeId, Edge* removed = nullptr,
+                         juce::String* reason = nullptr, bool requireValidGraph = true)
+    {
+        Document candidate = *this;
+        const auto it = std::find_if (candidate.edges.begin(), candidate.edges.end(),
+                                      [&] (const Edge& edge) { return edge.id == edgeId; });
+        if (it == candidate.edges.end())
+        {
+            if (reason != nullptr) *reason = "Connection not found: " + edgeId;
+            return false;
+        }
+        if (! it->editable)
+        {
+            if (reason != nullptr) *reason = "Connection is owned by the fixed engine: " + edgeId;
+            return false;
+        }
+        if (removed != nullptr) *removed = *it;
+        candidate.edges.erase (it);
+        if (requireValidGraph)
+        {
+            const auto validation = candidate.validate();
+            if (! validation.ok)
+            {
+                if (reason != nullptr) *reason = validation.message;
+                return false;
+            }
+        }
+        *this = std::move (candidate);
+        return true;
+    }
+
+    bool restoreEdge (Edge edge, juce::String* reason = nullptr)
+    {
+        Document candidate = *this;
+        if (! candidate.addEdge (std::move (edge), reason)) return false;
+        const auto validation = candidate.validate();
+        if (! validation.ok)
+        {
+            if (reason != nullptr) *reason = validation.message;
+            return false;
+        }
+        *this = std::move (candidate);
+        return true;
+    }
+
+    bool removeNode (const juce::String& nodeId, juce::String* reason = nullptr)
+    {
+        Document candidate = *this;
+        const auto it = std::find_if (candidate.nodes.begin(), candidate.nodes.end(),
+                                      [&] (const Node& node) { return node.id == nodeId; });
+        if (it == candidate.nodes.end())
+        {
+            if (reason != nullptr) *reason = "Node not found: " + nodeId;
+            return false;
+        }
+        if (it->locked || it->type == NodeType::master || it->type == NodeType::clock)
+        {
+            if (reason != nullptr) *reason = "System or locked nodes cannot be removed: " + nodeId;
+            return false;
+        }
+        candidate.edges.erase (std::remove_if (candidate.edges.begin(), candidate.edges.end(),
+            [&] (const Edge& edge) { return edge.fromNode == nodeId || edge.toNode == nodeId; }), candidate.edges.end());
+        candidate.nodes.erase (it);
+        const auto validation = candidate.validate();
+        if (! validation.ok)
+        {
+            if (reason != nullptr) *reason = validation.message;
+            return false;
+        }
+        *this = std::move (candidate);
+        return true;
+    }
+
+    bool insertNodeOnEdge (const juce::String& edgeId, Node node, juce::String* reason = nullptr)
+    {
+        Document candidate = *this;
+        const auto old = std::find_if (candidate.edges.begin(), candidate.edges.end(),
+                                       [&] (const Edge& edge) { return edge.id == edgeId; });
+        if (old == candidate.edges.end())
+        {
+            if (reason != nullptr) *reason = "Connection not found: " + edgeId;
+            return false;
+        }
+        if (! old->editable || old->type != PortType::audio)
+        {
+            if (reason != nullptr) *reason = "Only editable audio connections can accept an inserted node";
+            return false;
+        }
+        if (node.id.isEmpty() || candidate.findNode (node.id) != nullptr)
+        {
+            if (reason != nullptr) *reason = "Inserted node ID is empty or already exists";
+            return false;
+        }
+        if (node.findPort ("audio.in") == nullptr || node.findPort ("audio.out") == nullptr)
+        {
+            if (reason != nullptr) *reason = "Inserted node must expose audio.in and audio.out";
+            return false;
+        }
+
+        const Edge original = *old;
+        candidate.edges.erase (old);
+        juce::String addReason;
+        if (! candidate.addNode (std::move (node), &addReason))
+        {
+            if (reason != nullptr) *reason = addReason;
+            return false;
+        }
+
+        Edge incoming = original;
+        incoming.id = edgeId + ":in";
+        incoming.toNode = candidate.nodes.back().id;
+        incoming.toPort = "audio.in";
+        incoming.editable = true;
+        Edge outgoing = original;
+        outgoing.id = edgeId + ":out";
+        outgoing.fromNode = candidate.nodes.back().id;
+        outgoing.fromPort = "audio.out";
+        outgoing.editable = true;
+        if (! candidate.addEdge (std::move (incoming), &addReason)
+            || ! candidate.addEdge (std::move (outgoing), &addReason))
+        {
+            if (reason != nullptr) *reason = addReason;
+            return false;
+        }
+        const auto validation = candidate.validate();
+        if (! validation.ok)
+        {
+            if (reason != nullptr) *reason = validation.message;
+            return false;
+        }
+        *this = std::move (candidate);
+        return true;
+    }
+
+    bool mergeEdges (const juce::String& firstEdgeId, const juce::String& secondEdgeId,
+                     Node mergeNode, juce::String* reason = nullptr)
+    {
+        if (firstEdgeId == secondEdgeId)
+        {
+            if (reason != nullptr) *reason = "Merge requires two different connections";
+            return false;
+        }
+        Document candidate = *this;
+        const auto first = std::find_if (candidate.edges.begin(), candidate.edges.end(),
+                                         [&] (const Edge& edge) { return edge.id == firstEdgeId; });
+        const auto second = std::find_if (candidate.edges.begin(), candidate.edges.end(),
+                                          [&] (const Edge& edge) { return edge.id == secondEdgeId; });
+        if (first == candidate.edges.end() || second == candidate.edges.end())
+        {
+            if (reason != nullptr) *reason = "Merge connection not found";
+            return false;
+        }
+        if (! first->editable || ! second->editable || first->type != PortType::audio || second->type != PortType::audio
+            || first->toNode != second->toNode || first->toPort != second->toPort)
+        {
+            if (reason != nullptr) *reason = "Merge requires two editable audio connections sharing a fan-in";
+            return false;
+        }
+        const auto* destination = candidate.findNode (first->toNode);
+        const auto* destinationPort = destination != nullptr ? destination->findPort (first->toPort) : nullptr;
+        if (destinationPort == nullptr || ! destinationPort->acceptsMultiple)
+        {
+            if (reason != nullptr) *reason = "Merge destination does not accept multiple audio sources";
+            return false;
+        }
+        if (mergeNode.id.isEmpty() || candidate.findNode (mergeNode.id) != nullptr
+            || mergeNode.findPort ("audio.in.a") == nullptr
+            || mergeNode.findPort ("audio.in.b") == nullptr
+            || mergeNode.findPort ("audio.out") == nullptr)
+        {
+            if (reason != nullptr) *reason = "Merge node must be unique and expose audio.in.a, audio.in.b and audio.out";
+            return false;
+        }
+
+        const Edge firstOriginal = *first;
+        const Edge secondOriginal = *second;
+        candidate.edges.erase (std::remove_if (candidate.edges.begin(), candidate.edges.end(),
+            [&] (const Edge& edge) { return edge.id == firstEdgeId || edge.id == secondEdgeId; }), candidate.edges.end());
+        juce::String addReason;
+        if (! candidate.addNode (std::move (mergeNode), &addReason))
+        {
+            if (reason != nullptr) *reason = addReason;
+            return false;
+        }
+        const auto mergeId = candidate.nodes.back().id;
+        Edge incomingA = firstOriginal;
+        incomingA.id = firstEdgeId + ":merge"; incomingA.toNode = mergeId; incomingA.toPort = "audio.in.a";
+        Edge incomingB = secondOriginal;
+        incomingB.id = secondEdgeId + ":merge"; incomingB.toNode = mergeId; incomingB.toPort = "audio.in.b";
+        Edge outgoing = firstOriginal;
+        outgoing.id = firstEdgeId + ":merged"; outgoing.fromNode = mergeId; outgoing.fromPort = "audio.out";
+        if (! candidate.addEdge (std::move (incomingA), &addReason)
+            || ! candidate.addEdge (std::move (incomingB), &addReason)
+            || ! candidate.addEdge (std::move (outgoing), &addReason))
+        {
+            if (reason != nullptr) *reason = addReason;
+            return false;
+        }
+        const auto validation = candidate.validate();
+        if (! validation.ok)
+        {
+            if (reason != nullptr) *reason = validation.message;
+            return false;
+        }
+        *this = std::move (candidate);
+        return true;
+    }
+
     ValidationResult validateConnection (const Edge& candidate) const
     {
         const auto* fromNode = findNode (candidate.fromNode);
@@ -270,6 +522,78 @@ public:
             if (reason != nullptr) *reason = localReason;
             return false;
         }
+        const auto validation = candidate.validate();
+        if (! validation.ok)
+        {
+            if (reason != nullptr) *reason = validation.message;
+            return false;
+        }
+        *this = std::move (candidate);
+        return true;
+    }
+
+    // Reorder only an explicitly editable fan-in. The operation is model-level
+    // and therefore gives UI undo/redo and the DSP compiler the same ordering
+    // contract; arbitrary serial processing cannot be reordered accidentally.
+    bool reorderEdge (const juce::String& edgeId, int newPosition, juce::String* reason = nullptr)
+    {
+        Document candidate = *this;
+        const auto target = std::find_if (candidate.edges.begin(), candidate.edges.end(),
+                                          [&] (const Edge& edge) { return edge.id == edgeId; });
+        if (target == candidate.edges.end())
+        {
+            if (reason != nullptr) *reason = "Connection not found: " + edgeId;
+            return false;
+        }
+        if (! target->editable)
+        {
+            if (reason != nullptr) *reason = "Connection is owned by the fixed engine: " + edgeId;
+            return false;
+        }
+        if (target->type != PortType::audio)
+        {
+            if (reason != nullptr) *reason = "Only editable audio fan-ins have a processing order";
+            return false;
+        }
+        const auto* destination = candidate.findNode (target->toNode);
+        const auto* port = destination != nullptr ? destination->findPort (target->toPort) : nullptr;
+        if (port == nullptr || ! port->acceptsMultiple)
+        {
+            if (reason != nullptr) *reason = "The destination does not expose an editable fan-in";
+            return false;
+        }
+
+        std::vector<size_t> peers;
+        for (size_t index = 0; index < candidate.edges.size(); ++index)
+        {
+            const auto& edge = candidate.edges[index];
+            if (edge.editable && edge.type == PortType::audio
+                && edge.toNode == target->toNode && edge.toPort == target->toPort)
+                peers.push_back (index);
+        }
+        if (peers.size() < 2)
+        {
+            if (reason != nullptr) *reason = "At least two editable fan-in connections are required";
+            return false;
+        }
+
+        std::stable_sort (peers.begin(), peers.end(), [&] (size_t a, size_t b)
+        {
+            const auto sequence = [&] (size_t index) {
+                const auto value = candidate.edges[index].sequence;
+                return value >= 0 ? value : static_cast<int> (index);
+            };
+            return sequence (a) < sequence (b);
+        });
+        const auto targetIt = std::find (peers.begin(), peers.end(), (size_t) std::distance (candidate.edges.begin(), target));
+        if (targetIt == peers.end()) return false;
+        const auto moved = *targetIt;
+        peers.erase (targetIt);
+        const int clampedPosition = juce::jlimit (0, static_cast<int> (peers.size()), newPosition);
+        peers.insert (peers.begin() + clampedPosition, moved);
+        for (int sequence = 0; sequence < static_cast<int> (peers.size()); ++sequence)
+            candidate.edges[peers[(size_t) sequence]].sequence = sequence;
+
         const auto validation = candidate.validate();
         if (! validation.ok)
         {

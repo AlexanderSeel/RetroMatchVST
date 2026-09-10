@@ -718,6 +718,23 @@ int main (int argc, char** argv)
     if (refined.evaluatedCandidates < 2)
         return fail ("optimizer did not evaluate a candidate population");
 
+    MatchSettings strategySettings = settings;
+    strategySettings.iterations = 2;
+    strategySettings.topologyTrials = 1;
+    strategySettings.populationSize = 2;
+    strategySettings.maxRenderSeconds = 0.65f;
+    for (int strategy = 0; strategy <= 6; ++strategy)
+    {
+        strategySettings.algorithm = strategy;
+        const auto strategyResult = SoundMatcher::refineFit (reference, seed.params, strategySettings);
+        if (! std::isfinite (strategyResult.similarity.total)
+            || ! std::isfinite (strategyResult.technicalSafetyScore)
+            || ! strategyResult.technicallySafe
+            || strategyResult.renderTelemetry.peak > 1.0f
+            || strategyResult.evaluatedCandidates < 2)
+            return fail ("a synthesis strategy produced unsafe or unmeasured population output");
+    }
+
     std::cout << "RetroMatch smoke tests passed. quick=" << quick.similarity.total
               << " refined=" << refined.similarity.total
               << " candidates=" << refined.evaluatedCandidates

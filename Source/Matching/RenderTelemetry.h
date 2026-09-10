@@ -80,6 +80,24 @@ struct RenderTelemetry
         return juce::jlimit (0.0f, 1.0f, peakSafety * (1.0f - clippedRatio) * crestSafety);
     }
 
+    [[nodiscard]] float levelSafetyScore (float referenceRms) const noexcept
+    {
+        if (! std::isfinite (referenceRms) || referenceRms <= 1.0e-5f
+            || ! std::isfinite (rms) || rms <= 1.0e-5f)
+            return 1.0f;
+
+        // Loudness is not a perceptual identity dimension, but a candidate
+        // that is substantially louder than its reference should not win by
+        // pushing downstream nonlinear stages harder.
+        const float excessDb = 20.0f * std::log10 (rms / referenceRms) - 6.0f;
+        return 1.0f - 0.35f * juce::jlimit (0.0f, 1.0f, excessDb / 18.0f);
+    }
+
+    [[nodiscard]] float technicalSafetyScore (float referenceRms) const noexcept
+    {
+        return technicalSafetyScore() * levelSafetyScore (referenceRms);
+    }
+
     [[nodiscard]] static RenderTelemetry analyze (const juce::AudioBuffer<float>& audio,
                                                    float clipThreshold = 1.0f) noexcept
     {

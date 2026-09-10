@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iterator>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -45,6 +46,7 @@ public:
             if (! mapOnlyMode && node.positionValid)
                 restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };
             if (node.routingMode != 0) restoredNodeRoutingModes[node.id.toStdString()] = node.routingMode;
+            if (node.locked) restoredNodeLocks[node.id.toStdString()] = true;
         }
         for (const auto& edge : restored.edges)
             if (edge.sequence >= 0) restoredEdgeSequences[edge.id.toStdString()] = edge.sequence;
@@ -113,7 +115,9 @@ public:
             {
                 selectedNodeId = nodes[(size_t) node].id.toStdString();
                 if (nodes[(size_t) node].role == NodeRole::modHub) showModHubMenu (nodes[(size_t) node].layer);
+                else if (nodes[(size_t) node].role == NodeRole::stage && nodes[(size_t) node].stage == 0) showInstanceMenu (nodes[(size_t) node].layer);
                 else if (nodes[(size_t) node].role == NodeRole::stage && nodes[(size_t) node].stage == 4) showFxTopologyMenu (nodes[(size_t) node]);
+                else showNodeLockMenu (nodes[(size_t) node]);
                 repaint();
             }
             return;
@@ -163,17 +167,42 @@ public:
         const int hit = hitTestNode (e.position);
         if (hit >= 0 && ! e.mods.isMiddleButtonDown())
         {
-            selectedNodeId = nodes[(size_t) hit].id.toStdString();
+            const auto hitId = nodes[(size_t) hit].id.toStdString();
+            const bool additiveSelection = e.mods.isCommandDown() || e.mods.isCtrlDown();
+            if (additiveSelection)
+            {
+                if (selectedNodeIds.count (hitId) != 0) selectedNodeIds.erase (hitId);
+                else selectedNodeIds.insert (hitId);
+                selectedNodeId = hitId;
+            }
+            else
+            {
+                selectedNodeIds.clear();
+                selectedNodeIds.insert (hitId);
+                selectedNodeId = hitId;
+            }
             selectedEdgeKey.clear();
+            if (nodes[(size_t) hit].locked || selectedNodeIds.empty())
+            {
+                repaint();
+                return;
+            }
             draggingNode = true;
             draggingNodeId = selectedNodeId;
             nodeDragStartWorld = toWorld (e.position);
-            const auto it = nodeOffsets.find (draggingNodeId);
-            nodeOffsetAtDragStart = it != nodeOffsets.end() ? it->second : juce::Point<float>();
+            groupNodeOffsetsAtDragStart.clear();
+            for (const auto& id : selectedNodeIds)
+            {
+                const auto it = nodeOffsets.find (id);
+                if (it != nodeOffsets.end()) groupNodeOffsetsAtDragStart[id] = it->second;
+            }
+            if (groupNodeOffsetsAtDragStart.empty())
+                groupNodeOffsetsAtDragStart[draggingNodeId] = {};
         }
         else
         {
             selectedNodeId.clear();
+            selectedNodeIds.clear();
             selectedEdgeKey.clear();
             panning = true;
             panDragStart = e.position;
@@ -213,13 +242,19 @@ public:
                 pushUndoState();
                 dragHistoryCaptured = true;
             }
-            auto offset = nodeOffsetAtDragStart + (toWorld (e.position) - nodeDragStartWorld);
-            if (snapToGrid && ! e.mods.isShiftDown())
+            const auto delta = toWorld (e.position) - nodeDragStartWorld;
+            for (const auto& [id, startOffset] : groupNodeOffsetsAtDragStart)
             {
-                offset.x = std::round (offset.x / gridSize) * gridSize;
-                offset.y = std::round (offset.y / gridSize) * gridSize;
+                const auto nodeIndex = findNodeIndex (id);
+                if (nodeIndex < 0 || nodes[(size_t) nodeIndex].locked) continue;
+                auto offset = startOffset + delta;
+                if (snapToGrid && ! e.mods.isShiftDown())
+                {
+                    offset.x = std::round (offset.x / gridSize) * gridSize;
+                    offset.y = std::round (offset.y / gridSize) * gridSize;
+                }
+                nodeOffsets[id] = offset;
             }
-            nodeOffsets[draggingNodeId] = offset;
             repaint();
             return;
         }
@@ -279,6 +314,7 @@ public:
         panning = false;
         draggingNode = false;
         draggingNodeId.clear();
+        groupNodeOffsetsAtDragStart.clear();
         dragHistoryCaptured = false;
         stageGraphStateForPersistence();
     }
@@ -298,7 +334,9 @@ public:
         const int hit = hitTestNode (e.position);
         if (hit >= 0 && juce::isPositiveAndBelow (hit, (int) nodes.size()))
         {
-            selectedNodeId = nodes[(size_t) hit].id.toStdString();
+        selectedNodeId = nodes[(size_t) hit].id.toStdString();
+        selectedNodeIds.clear();
+        selectedNodeIds.insert (selectedNodeId);
             navigateTo (nodes[(size_t) hit]);
         }
         else
@@ -350,6 +388,7 @@ private:
         juce::Colour colour;
         bool inputPort = true, outputPort = true;
         bool modInputPort = false, modOutputPort = false;
+        bool locked = false;
         NodeRole role = NodeRole::stage;
         int stage = -1;
         int routingMode = 0;
@@ -394,6 +433,7 @@ private:
     std::vector<ToolbarButton> toolbarButtons;
     std::map<std::string, juce::Point<float>> nodeOffsets;
     std::map<std::string, juce::Point<float>> restoredNodePositions;
+    std::map<std::string, bool> restoredNodeLocks;
     std::map<std::string, int> restoredNodeRoutingModes;
     std::map<std::string, int> restoredEdgeSequences;
     PatchGraph::Document graphModel;
@@ -406,6 +446,9 @@ private:
     bool restoringHistory = false, dragHistoryCaptured = false, bigViewNeedsFit = false;
     juce::Point<float> panDragStart, panAtDragStart, nodeDragStartWorld, nodeOffsetAtDragStart, connectionDragPoint;
     std::string selectedNodeId, draggingNodeId, selectedEdgeKey, connectionFromId, hoverTargetId;
+    std::set<std::string> selectedNodeIds;
+    std::map<std::string, juce::Point<float>> groupNodeOffsetsAtDragStart;
+    RoutingMeterSnapshot routingMeters;
     int reconnectLayer = -2, reconnectSlot = -1, reconnectSource = (int) ModSource::none;
     float reconnectAmount = 0.5f;
     std::vector<CableHistoryState> undoHistory, redoHistory;
@@ -769,19 +812,79 @@ private:
 
         pushUndoState();
         std::swap (order[(size_t) index], order[(size_t) target]);
-        for (int sequence = 0; sequence < (int) order.size(); ++sequence)
+        const auto movedKey = "combine:" + juce::String (layer);
+        juce::String reorderReason;
+        if (! graphModel.reorderEdge (movedKey, target, &reorderReason))
+            return false;
+
+        for (const auto& modelEdge : graphModel.edges)
         {
-            const auto key = "combine:" + juce::String (order[(size_t) sequence]);
-            restoredEdgeSequences[key.toStdString()] = sequence;
-            if (auto* model = graphModel.findEdge (key)) model->sequence = sequence;
+            if (! modelEdge.id.startsWith ("combine:")) continue;
+            restoredEdgeSequences[modelEdge.id.toStdString()] = modelEdge.sequence;
             for (auto& edge : edges)
-                if (edge.key == key) edge.sequence = sequence;
+                if (edge.key == modelEdge.id) edge.sequence = modelEdge.sequence;
         }
         stageGraphStateForPersistence();
         flushGraphStatePersistence();
         selectedEdgeKey = ("combine:" + juce::String (layer)).toStdString();
         repaint();
         return true;
+    }
+
+    void toggleNodeLock (const juce::String& nodeId)
+    {
+        const auto key = nodeId.toStdString();
+        const bool locked = restoredNodeLocks.find (key) != restoredNodeLocks.end()
+                         && restoredNodeLocks[key];
+        juce::String lockReason;
+        if (! graphModel.setNodeLocked (nodeId, ! locked, &lockReason))
+        {
+            graphValidationMessage = lockReason;
+            repaint();
+            return;
+        }
+        if (locked) restoredNodeLocks.erase (key);
+        else restoredNodeLocks[key] = true;
+        stageGraphStateForPersistence();
+        repaint();
+    }
+
+    void showNodeLockMenu (const GraphNode& node)
+    {
+        const bool locked = restoredNodeLocks.find (node.id.toStdString()) != restoredNodeLocks.end();
+        juce::PopupMenu menu;
+        menu.addSectionHeader (node.title);
+        menu.addItem (1, locked ? "UNLOCK POSITION" : "LOCK POSITION", true, locked);
+        juce::Component::SafePointer<SignalLabPage> safeThis (this);
+        const auto id = node.id;
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safeThis, id] (int result)
+        {
+            if (safeThis != nullptr && result == 1) safeThis->toggleNodeLock (id);
+        });
+    }
+
+    void showInstanceMenu (int layer)
+    {
+        if (layer >= 0 && ! proc.hasLayer (layer)) return;
+        juce::PopupMenu menu;
+        const bool selected = layer >= 0 && proc.getSoloLayer() == layer;
+        const bool soloActive = proc.getSoloLayer() >= 0;
+        menu.addSectionHeader (layer < 0 ? "MAIN INSTANCE" : "INSTANCE " + juce::String (layer + 2));
+        menu.addItem (1, selected || (layer < 0 && soloActive) ? "CLEAR SOLO" : "SOLO THIS INSTANCE",
+                      layer >= 0 || soloActive, selected);
+        menu.addItem (2, "CLEAR ALL SOLO", true, soloActive);
+        const auto nodeId = "L" + juce::String (layer) + ":S0";
+        const bool locked = restoredNodeLocks.find (nodeId.toStdString()) != restoredNodeLocks.end();
+        menu.addItem (3, locked ? "UNLOCK POSITION" : "LOCK POSITION");
+        auto safeThis = juce::Component::SafePointer<SignalLabPage> (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safeThis, layer, nodeId] (int result)
+        {
+            if (safeThis == nullptr) return;
+            if (result == 1) safeThis->proc.setSoloLayer (layer < 0 || safeThis->proc.getSoloLayer() == layer ? -1 : layer);
+            else if (result == 2) safeThis->proc.setSoloLayer (-1);
+            else if (result == 3) safeThis->toggleNodeLock (nodeId);
+            safeThis->repaint();
+        });
     }
 
     void showCombineMenu (int layer)
@@ -864,11 +967,19 @@ private:
         menu.addItem (101, "PARALLEL  PRE || BUILT-IN CORE > POST  (50/50)", true, node.routingMode == 1);
         menu.addSeparator();
         menu.addItem (200, "Parallel split uses preallocated scratch + unity-correlated gain compensation", false, false);
+        const bool locked = restoredNodeLocks.find (node.id.toStdString()) != restoredNodeLocks.end();
+        menu.addItem (300, locked ? "UNLOCK POSITION" : "LOCK POSITION");
         juce::Component::SafePointer<SignalLabPage> safeThis (this);
         const auto id = node.id;
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safeThis, id] (int result)
         {
-            if (safeThis == nullptr || (result != 100 && result != 101)) return;
+            if (safeThis == nullptr) return;
+            if (result == 300)
+            {
+                safeThis->toggleNodeLock (id);
+                return;
+            }
+            if (result != 100 && result != 101) return;
             const int index = safeThis->findNodeIndex (id.toStdString());
             if (index >= 0) safeThis->setFxTopologyMode (safeThis->nodes[(size_t) index], result - 100);
         });
@@ -897,10 +1008,15 @@ private:
         menu.addItem (101, "TO OSC / WAVETABLE");
         menu.addItem (102, "TO 6-OP FM");
         menu.addItem (103, "TO FILTER / AMP");
+        const auto nodeId = "L" + juce::String (layer) + ":MOD";
+        const bool locked = restoredNodeLocks.find (nodeId.toStdString()) != restoredNodeLocks.end();
+        menu.addItem (300, locked ? "UNLOCK POSITION" : "LOCK POSITION");
         juce::Component::SafePointer<SignalLabPage> safeThis (this);
-        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safeThis, layer] (int result)
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safeThis, layer, nodeId] (int result)
         {
-            if (safeThis != nullptr && result >= 101 && result <= 103) safeThis->showNewRouteMenu (layer, result - 100);
+            if (safeThis == nullptr) return;
+            if (result == 300) safeThis->toggleNodeLock (nodeId);
+            else if (result >= 101 && result <= 103) safeThis->showNewRouteMenu (layer, result - 100);
         });
     }
 
@@ -999,10 +1115,11 @@ private:
         graphModel.view.zoom = graphZoom;
         graphModel.view.snapToGrid = snapToGrid;
         for (const auto& node : nodes)
-            if (auto* stored = graphModel.findNode (node.id))
+            if (graphModel.findNode (node.id) != nullptr)
             {
-                stored->position = { node.worldBounds.getX(), node.worldBounds.getY() };
-                stored->positionValid = true;
+                juce::String reason;
+                if (! graphModel.setNodePosition (node.id, { node.worldBounds.getX(), node.worldBounds.getY() }, &reason))
+                    graphValidationMessage = reason;
             }
 
         const auto validation = graphModel.validate();
@@ -1035,9 +1152,26 @@ private:
             case ToolbarAction::redo: redoCableEdit(); return;
             case ToolbarAction::autoArrange:
                 pushUndoState();
+                {
+                    std::map<std::string, juce::Point<float>> lockedOffsets;
+                    for (const auto& node : nodes)
+                        if (node.locked)
+                            lockedOffsets[node.id.toStdString()] = node.worldBounds.getPosition() - node.baseBounds.getPosition();
                 nodeOffsets.clear();
                 restoredNodePositions.clear();
-                for (auto& node : nodes) node.worldBounds = node.baseBounds;
+                    for (auto& node : nodes)
+                    {
+                        const auto it = lockedOffsets.find (node.id.toStdString());
+                        if (it != lockedOffsets.end())
+                        {
+                            nodeOffsets[node.id.toStdString()] = it->second;
+                            node.worldBounds = node.baseBounds.translated (it->second.x, it->second.y);
+                            restoredNodePositions[node.id.toStdString()] = node.worldBounds.getPosition();
+                        }
+                        else
+                            node.worldBounds = node.baseBounds;
+                    }
+                }
                 fitToView();
                 break;
             case ToolbarAction::fit: fitToView(); break;
@@ -1210,6 +1344,8 @@ private:
         node.title = title; node.detail = detail; node.tab = tab; node.layer = layer; node.colour = colour;
         node.inputPort = inputPort; node.outputPort = outputPort; node.role = role; node.stage = stage;
         node.modInputPort = modInputPort; node.modOutputPort = modOutputPort;
+        if (const auto locked = restoredNodeLocks.find (stableId); locked != restoredNodeLocks.end())
+            node.locked = locked->second;
         if (const auto routing = restoredNodeRoutingModes.find (stableId); routing != restoredNodeRoutingModes.end())
             node.routingMode = juce::jlimit (0, 1, routing->second);
 
@@ -1218,6 +1354,7 @@ private:
         modelNode.title = title;
         modelNode.position = { node.worldBounds.getX(), node.worldBounds.getY() };
         modelNode.positionValid = true;
+        modelNode.locked = node.locked;
         modelNode.routingMode = node.routingMode;
         if (role == NodeRole::master) modelNode.type = PatchGraph::NodeType::master;
         else if (role == NodeRole::clock) modelNode.type = PatchGraph::NodeType::clock;
@@ -1423,7 +1560,8 @@ private:
     void drawNode (juce::Graphics& g, const GraphNode& node, juce::Colour led, juce::Colour accent)
     {
         auto r = toScreen (node.worldBounds);
-        const bool selected = node.id.toStdString() == selectedNodeId;
+        const auto nodeId = node.id.toStdString();
+        const bool selected = nodeId == selectedNodeId || selectedNodeIds.count (nodeId) != 0;
         g.setColour (juce::Colours::black.withAlpha (0.45f)); g.fillRoundedRectangle (r.translated (0, 2.5f * graphZoom), 5.0f * graphZoom);
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xff17272b), r.getTopLeft(), juce::Colour (0xff0d171a), r.getBottomRight(), false));
         g.fillRoundedRectangle (r, 5.0f * graphZoom);
@@ -1443,6 +1581,20 @@ private:
         else
         {
             g.drawFittedText (node.title, textBounds.toNearestInt(), juce::Justification::centredLeft, 1);
+        }
+
+        if (node.role == NodeRole::stage && node.stage == 0)
+        {
+            const float peak = node.layer < 0 ? routingMeters.mainPeak
+                                              : routingMeters.layerPeak[(size_t) juce::jlimit (0, VoiceParameters::extraLayerCount - 1, node.layer)];
+            const float meterWidth = juce::jmax (0.0f, r.getWidth() - 8.0f * graphZoom);
+            const float level = juce::jlimit (0.0f, 1.0f, peak);
+            g.setColour (juce::Colour (0xff071013));
+            g.fillRoundedRectangle (r.getX() + 4.0f * graphZoom, r.getBottom() - 3.0f * graphZoom,
+                                    meterWidth, juce::jmax (1.0f, 2.0f * graphZoom), 1.0f * graphZoom);
+            g.setColour ((level > 0.9f ? juce::Colour (0xffff9673) : node.colour).withAlpha (0.9f));
+            g.fillRoundedRectangle (r.getX() + 4.0f * graphZoom, r.getBottom() - 3.0f * graphZoom,
+                                    meterWidth * level, juce::jmax (1.0f, 2.0f * graphZoom), 1.0f * graphZoom);
         }
 
         const float portRadius = juce::jmax (3.0f, 3.1f * graphZoom);
@@ -1476,6 +1628,13 @@ private:
             g.fillEllipse (p.x - portRadius * 2.3f, p.y - portRadius * 2.3f, portRadius * 4.6f, portRadius * 4.6f);
             g.setColour (led);
             g.fillEllipse (p.x - portRadius, p.y - portRadius, portRadius * 2.0f, portRadius * 2.0f);
+        }
+
+        if (node.locked)
+        {
+            g.setColour (juce::Colour (0xffffbd65).withAlpha (0.9f));
+            g.drawRect (r.getRight() - 11.0f * graphZoom, r.getY() + 5.0f * graphZoom,
+                        6.0f * graphZoom, 5.0f * graphZoom, juce::jmax (1.0f, graphZoom));
         }
 
         if (node.role == NodeRole::clock)
@@ -1589,6 +1748,7 @@ private:
         const juce::String tabs[] { "SYNTH", "SYNTH", "FM", "FILTER", "FX", "LAYERS" };
         const juce::uint32 colours[] { 0xff54f5d1, 0xffffbd65, 0xffc9a0ff, 0xff78f1c4, 0xffff91b8, 0xffa6cf75, 0xff94aaff, 0xffff9673 };
         std::vector<int> combineNodes, combineLayers, modNodes;
+        routingMeters = proc.getRoutingMeters();
 
         for (size_t row = 0; row < instances.size(); ++row)
         {
