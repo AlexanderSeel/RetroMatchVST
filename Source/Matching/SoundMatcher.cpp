@@ -1,8 +1,90 @@
 #include "SoundMatcher.h"
+#include "OfflineRenderer.h"
+#include "EffectChainProbe.h"
+
+namespace
+{
+thread_local RenderTelemetry lastCoreRenderTelemetry {};
+thread_local bool lastCoreRenderTelemetryValid = false;
+
+struct TelemetryOfflineRenderer
+{
+    static juce::AudioBuffer<float> renderPatch (const VoiceParameters& params,
+                                                  double sampleRate,
+                                                  float durationSeconds,
+                                                  float targetFundamentalHz,
+                                                  int blockSize = 256,
+                                                  DspRouting::Plan routingPlan = {},
+                                                  bool holdNote = false)
+    {
+        auto audio = OfflineRenderer::renderPatch (params, sampleRate, durationSeconds,
+                                                   targetFundamentalHz, blockSize,
+                                                   std::move (routingPlan), holdNote);
+        lastCoreRenderTelemetry = RenderTelemetry::analyze (audio);
+        lastCoreRenderTelemetryValid = true;
+        return audio;
+    }
+};
+
+struct TelemetrySampleAnalyzer
+{
+    static SoundFeatures analyzeBuffer (const juce::AudioBuffer<float>& audio,
+                                        double sampleRate,
+                                        float expectedFundamentalHz = 0.0f)
+    {
+        // Do not feed NaN/Inf into spectral analysis. The paired safety scorer
+        // will hard-reject this candidate by assigning a zero technical score.
+        if (lastCoreRenderTelemetryValid && ! lastCoreRenderTelemetry.isFinite())
+        {
+            SoundFeatures invalid;
+            invalid.sampleRate = sampleRate;
+            invalid.duration = static_cast<float> (audio.getNumSamples() / juce::jmax (1.0, sampleRate));
+            invalid.fundamentalHz = expectedFundamentalHz;
+            return invalid;
+        }
+        return SampleAnalyzer::analyzeBuffer (audio, sampleRate, expectedFundamentalHz);
+    }
+};
+
+struct TelemetrySimilarityScorer
+{
+    static SimilarityBreakdown compare (const SoundFeatures& reference, const SoundFeatures& candidate)
+    {
+        auto result = SimilarityScorer::compare (reference, candidate);
+        if (lastCoreRenderTelemetryValid)
+            result.total = juce::jlimit (0.0f, 1.0f,
+                result.total * lastCoreRenderTelemetry.technicalSafetyScore());
+        return result;
+    }
+};
+
+struct TelemetryEffectChainProbe
+{
+    static float score (const SoundFeatures& reference, const VoiceParameters& candidate)
+    {
+        const float raw = EffectChainProbe::score (reference, candidate);
+        if (! lastCoreRenderTelemetryValid)
+            return raw;
+        return juce::jlimit (0.0f, 1.0f, raw * lastCoreRenderTelemetry.technicalSafetyScore());
+    }
+};
+
+void attachTechnicalTelemetry (MatchResult& result, const RenderTelemetry& telemetry)
+{
+    result.renderTelemetry = telemetry;
+    result.technicalSafetyScore = telemetry.technicalSafetyScore();
+    result.technicallySafe = telemetry.isTechnicallySafe();
+}
+}
 
 // Keep the established optimizer implementation intact as a core and wrap its
-// public entry points with reference-lifecycle policy. This makes one-shot
-// constraints explicit without duplicating the mature oscillator/FX search code.
+// public entry points with reference-lifecycle and technical-safety policy.
+// Instrumenting the existing render/analyze/score calls avoids a second render
+// for every population candidate while still making safety part of ranking.
+#define OfflineRenderer TelemetryOfflineRenderer
+#define SampleAnalyzer TelemetrySampleAnalyzer
+#define SimilarityScorer TelemetrySimilarityScorer
+#define EffectChainProbe TelemetryEffectChainProbe
 #define initialFit initialFitCore
 #define evaluateFit evaluateFitCore
 #define refineFit refineFitCore
@@ -10,6 +92,10 @@
 #undef refineFit
 #undef evaluateFit
 #undef initialFit
+#undef EffectChainProbe
+#undef SimilarityScorer
+#undef SampleAnalyzer
+#undef OfflineRenderer
 
 namespace
 {
@@ -82,8 +168,6 @@ void enforceSelfTerminatingEnvelope (VoiceParameters& p, const SoundFeatures& re
     p.release = juce::jlimit (0.005f, 0.18f,
                               juce::jmin (p.release, juce::jmax (0.025f, reference.releaseSeconds)));
 
-    // These are already normal matcher ranges, but keep one-shot normalization
-    // explicit after topology/profile mutation so policy never depends on stale state.
     p.wavetableMix = juce::jlimit (0.0f, 1.0f, p.wavetableMix);
     p.supersawMix = juce::jlimit (0.0f, 1.0f, p.supersawMix);
     p.wavefold = juce::jlimit (0.0f, 1.0f, p.wavefold);
@@ -126,15 +210,9 @@ void enforceSelfTerminatingTree (VoiceParameters& p, const SoundFeatures& refere
     enforceSelfTerminatingEnvelope (p, reference);
     if (depth >= VoiceParameters::extraLayerCount) return;
 
-    // VoiceParameters copies share layer pointers. Clone before normalising so evaluating
-    // or constraining one generated rack never mutates another candidate through aliasing.
     for (auto& layer : p.layers)
     {
         if (! layer) continue;
-
-        // Stored rack layers are shared_ptr<const VoiceParameters>. Normalise a mutable
-        // clone first, then publish it back as const so candidate trees remain immutable
-        // to their consumers and no shared layer is modified through another candidate.
         auto mutableLayer = std::make_shared<VoiceParameters> (*layer);
         enforceSelfTerminatingTree (*mutableLayer, reference, depth + 1);
         layer = std::move (mutableLayer);
@@ -189,7 +267,13 @@ MatchResult SoundMatcher::evaluateFit (const SoundFeatures& reference,
                                         const MatchSettings& settings)
 {
     if (! isSelfTerminatingReference (reference))
-        return evaluateFitCore (reference, params, settings);
+    {
+        lastCoreRenderTelemetryValid = false;
+        auto result = evaluateFitCore (reference, params, settings);
+        if (lastCoreRenderTelemetryValid)
+            attachTechnicalTelemetry (result, lastCoreRenderTelemetry);
+        return result;
+    }
 
     MatchResult result;
     result.params = params;
@@ -203,6 +287,17 @@ MatchResult SoundMatcher::evaluateFit (const SoundFeatures& reference,
 
     auto audio = OfflineRenderer::renderPatch (params, settings.renderSampleRate, renderDuration,
                                                reference.fundamentalHz, 256, {}, true);
+    const auto telemetry = RenderTelemetry::analyze (audio);
+    attachTechnicalTelemetry (result, telemetry);
+
+    if (! telemetry.isFinite() || telemetry.finiteSamples <= 0)
+    {
+        result.similarity.total = 0.0f;
+        result.confidence = 0.0f;
+        result.evaluatedCandidates = 1;
+        result.explanation = "Candidate rejected: offline render contained non-finite samples or no finite audio.";
+        return result;
+    }
 
     const int comparisonSamples = juce::jlimit (1, audio.getNumSamples(),
         (int) std::round (comparisonDuration * settings.renderSampleRate));
@@ -233,6 +328,8 @@ MatchResult SoundMatcher::evaluateFit (const SoundFeatures& reference,
             result.similarity.total * (0.70f + 0.30f * result.tailSilenceSimilarity));
     }
 
+    result.similarity.total = juce::jlimit (0.0f, 1.0f,
+        result.similarity.total * telemetry.technicalSafetyScore());
     result.confidence = result.similarity.total;
     result.evaluatedCandidates = 1;
     return result;
@@ -245,7 +342,27 @@ MatchResult SoundMatcher::refineFit (const SoundFeatures& reference,
                                      CancelCallback cancel)
 {
     if (! isSelfTerminatingReference (reference))
-        return refineFitCore (reference, seed, settings, std::move (progress), std::move (cancel));
+    {
+        lastCoreRenderTelemetryValid = false;
+        auto best = refineFitCore (reference, seed, settings, std::move (progress), std::move (cancel));
+
+        // The last population render is not necessarily the winning candidate.
+        // Re-evaluate only the winner so the exposed telemetry belongs to exactly
+        // the patch/score returned to callers while selection itself remained
+        // safety-aware during the core optimization loop.
+        const int evaluatedCandidates = best.evaluatedCandidates;
+        const auto explanation = best.explanation;
+        const int algorithm = best.algorithm;
+        const int complexity = best.complexity;
+        const bool fullRackScore = best.fullRackScore;
+        auto verified = evaluateFit (reference, best.params, settings);
+        verified.evaluatedCandidates = evaluatedCandidates;
+        verified.explanation = explanation;
+        verified.algorithm = algorithm;
+        verified.complexity = complexity;
+        verified.fullRackScore = fullRackScore;
+        return verified;
+    }
 
     juce::Random random ((int64) 0x524d5333);
     std::vector<MatchResult> elite;

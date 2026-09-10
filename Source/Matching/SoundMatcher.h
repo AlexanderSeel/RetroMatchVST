@@ -3,6 +3,7 @@
 #include "../Analysis/SampleAnalyzer.h"
 #include "../Engine/SynthEngine.h"
 #include "SimilarityScorer.h"
+#include "RenderTelemetry.h"
 #include <functional>
 
 struct MatchSettings
@@ -35,6 +36,9 @@ struct MatchResult
     int evaluatedCandidates = 0;
     float effectProbeSimilarity = -1.0f;
     float tailSilenceSimilarity = -1.0f; // one-shot held-note tail score; -1 when not applicable
+    RenderTelemetry renderTelemetry;
+    float technicalSafetyScore = -1.0f; // -1 until a candidate has actually been rendered
+    bool technicallySafe = false;
     int algorithm = -1;      // selected resynthesis strategy when the result owns one
     int complexity = -1;     // selected 1-3 / 4 / 6 / 8 rack depth when the result owns one
     bool fullRackScore = false; // similarity was measured after all embedded layers rendered
