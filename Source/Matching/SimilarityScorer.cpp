@@ -19,6 +19,41 @@ float timeSimilarity (float a, float b)
 {
     return logSimilarity (a + 0.008f, b + 0.008f, 3.0f);
 }
+
+float referenceRelativeSpectralSafety (const SoundFeatures& reference, const SoundFeatures& candidate)
+{
+    // Ordinary brightness differences are already scored perceptually below. This
+    // guard only reacts when a candidate creates substantially more upper-band
+    // content than the reference contains, which is a common symptom of excessive
+    // nonlinear processing or alias-like energy. Legitimately bright references
+    // receive a wider allowance and matching/nearby candidates remain unpenalized.
+    const float referenceHigh = juce::jlimit (0.0f, 1.0f, reference.highEnergyRatio);
+    const float candidateHigh = juce::jlimit (0.0f, 1.0f, candidate.highEnergyRatio);
+    const float highAllowance = juce::jlimit (0.10f, 0.34f, 0.10f + referenceHigh * 0.55f);
+    const float highExcess = juce::jmax (0.0f, candidateHigh - referenceHigh - highAllowance);
+    const float highRisk = juce::jlimit (0.0f, 1.0f, highExcess / 0.28f);
+
+    const double commonSampleRate = juce::jmax (1000.0, juce::jmin (reference.sampleRate, candidate.sampleRate));
+    const float nyquist = (float) (commonSampleRate * 0.5);
+    const float referenceRolloff = juce::jlimit (20.0f, nyquist, reference.spectralRolloffHz + 20.0f);
+    const float candidateRolloff = juce::jlimit (20.0f, nyquist, candidate.spectralRolloffHz + 20.0f);
+    const float allowedRolloff = juce::jmin (nyquist * 0.95f,
+        juce::jmax (referenceRolloff * 1.55f, referenceRolloff + 2200.0f));
+
+    float rolloffRisk = 0.0f;
+    if (candidateRolloff > allowedRolloff && allowedRolloff > 20.0f)
+        rolloffRisk = juce::jlimit (0.0f, 1.0f,
+            std::log2 (candidateRolloff / allowedRolloff) / 1.25f);
+
+    // A reference that already owns strong high-frequency energy is evidence that
+    // an extended rolloff can be intentional rather than generated harshness.
+    const float brightReferenceRelief = juce::jlimit (0.0f, 0.65f,
+        (referenceHigh - 0.22f) / 0.48f * 0.65f);
+    rolloffRisk *= (1.0f - brightReferenceRelief);
+
+    const float risk = juce::jmax (highRisk, rolloffRisk);
+    return 1.0f - 0.38f * risk;
+}
 }
 
 SimilarityBreakdown SimilarityScorer::compare (const SoundFeatures& r, const SoundFeatures& c)
@@ -81,8 +116,9 @@ SimilarityBreakdown SimilarityScorer::compare (const SoundFeatures& r, const Sou
                   ? 0.75f
                   : logSimilarity (r.fundamentalHz, c.fundamentalHz, 0.5f);
     b.stereo = linearSimilarity (r.stereoWidth, c.stereoWidth, 0.8f);
+    b.spectralSafety = referenceRelativeSpectralSafety (r, c);
 
-    b.total = juce::jlimit (0.0f, 1.0f,
+    const float perceptual = juce::jlimit (0.0f, 1.0f,
                             b.spectrum * 0.25f
                           + b.temporal * 0.18f
                           + b.timbre * 0.12f
@@ -91,5 +127,6 @@ SimilarityBreakdown SimilarityScorer::compare (const SoundFeatures& r, const Sou
                           + b.harmonic * 0.10f
                           + b.pitch * 0.04f
                           + b.stereo * 0.03f);
+    b.total = juce::jlimit (0.0f, 1.0f, perceptual * b.spectralSafety);
     return b;
 }
