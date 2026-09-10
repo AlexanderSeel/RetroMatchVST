@@ -69,7 +69,11 @@ public:
     void clearSequencerPattern()
     {
         const juce::SpinLock::ScopedLockType guard (sequencerCommandLock);
-        for (auto& step : pendingSequencerSteps) step = RetroMatchSequencer::Step {};
+        for (auto& step : pendingSequencerSteps)
+        {
+            step = RetroMatchSequencer::Step {};
+            step.rest = true;
+        }
         pendingSequencerPatternDirty = true;
         sequencerCommandReady.store (true, std::memory_order_release);
     }
@@ -91,7 +95,7 @@ public:
     {
         if (samples <= 0 || sr <= 0.0) return;
         applySequencerCommands (midi, sr);
-        processSequencer (midi, samples, sr);
+        processSequencer (midi, samples);
 
         if (commandReady.load (std::memory_order_acquire))
         {
@@ -139,6 +143,7 @@ private:
     static constexpr int sequencerNoteOffCapacity = 512;
     RetroMatchSequencer::Core sequencer;
     RetroMatchSequencer::Settings pendingSequencerSettings {};
+    RetroMatchSequencer::Settings appliedSequencerSettings {};
     std::array<RetroMatchSequencer::Step, RetroMatchSequencer::maxSteps> pendingSequencerSteps {};
     std::array<RetroMatchSequencer::Trigger, sequencerTriggerCapacity> sequencerTriggers {};
     std::array<PendingSequencerNoteOff, sequencerNoteOffCapacity> sequencerNoteOffs {};
@@ -181,14 +186,15 @@ private:
         if (! guard.isLocked()) return;
 
         const bool wasEnabled = appliedSequencerEnabled;
-        sequencer.setSettings (pendingSequencerSettings);
+        appliedSequencerSettings = pendingSequencerSettings;
+        sequencer.setSettings (appliedSequencerSettings);
         if (pendingSequencerPatternDirty)
         {
             for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i)
                 sequencer.setStep (i, pendingSequencerSteps[(size_t) i]);
             pendingSequencerPatternDirty = false;
         }
-        appliedSequencerEnabled = pendingSequencerSettings.enabled;
+        appliedSequencerEnabled = appliedSequencerSettings.enabled;
         if (wasEnabled && ! appliedSequencerEnabled)
             releaseSequencerNotes (midi, 0);
         sequencerCommandReady.store (false, std::memory_order_release);
@@ -220,7 +226,7 @@ private:
                 return;
             }
     }
-    void processSequencer (juce::MidiBuffer& midi, int samples, double)
+    void processSequencer (juce::MidiBuffer& midi, int samples)
     {
         if (! appliedSequencerEnabled)
         {
@@ -244,7 +250,7 @@ private:
                 sequencer.noteOff (message.getNoteNumber());
                 continue;
             }
-            if (message.isAllNotesOff() || message.isAllSoundOff())
+            if (message.isAllNotesOff())
             {
                 sequencer.allNotesOff (true);
                 releaseSequencerNotes (midi, metadata.samplePosition);
@@ -255,7 +261,7 @@ private:
         drainSequencerNoteOffs (midi, samples);
         RetroMatchSequencer::Transport transport;
         transport.playing = true;
-        transport.bpm = pendingSequencerSettings.internalBpm;
+        transport.bpm = appliedSequencerSettings.internalBpm;
         const int triggerCount = sequencer.processBlock (samples, transport, sequencerTriggers.data(), sequencerTriggerCapacity);
         for (int i = 0; i < triggerCount; ++i)
         {
