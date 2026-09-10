@@ -1,0 +1,7 @@
+Trigger native Windows/macOS validation after premium UI layout corrections.
+
+Scope:
+- large Patch Map presentation geometry and toolbar sizing
+- Reference Editor minimum action heights
+- Compare correction/similarity spacing
+- persistent Reference + Resynth workspace width and hit-target sizing
