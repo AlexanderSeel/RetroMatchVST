@@ -118,13 +118,21 @@ To automatically install Docker Desktop without prompting:
 .\scripts\build-windows.ps1 -UseDocker -InstallMissing -NonInteractive
 ```
 
-Keep the large build image between runs to make subsequent builds faster:
+The Windows toolchain/source image and one build container per configuration are
+kept automatically. Source is mounted from the checkout, so normal source edits
+only rerun CMake/compiler work:
 
 ```powershell
 .\scripts\build-docker.ps1 -Target Windows -KeepImage
 ```
 
-Force a completely fresh image build:
+Start with a clean build container, while keeping the installed toolchain:
+
+```powershell
+.\scripts\build-docker.ps1 -Target Windows -FreshContainer
+```
+
+Force a completely fresh toolchain image build:
 
 ```powershell
 .\scripts\build-docker.ps1 -Target Windows -NoCache
@@ -158,7 +166,7 @@ Windows Home/Education systems cannot use the native Windows-container path. On 
 
 for isolated validation/Linux binaries, or GitHub Actions for native Windows binaries.
 
-The Windows image is intentionally large because Visual Studio Build Tools and the Windows SDK are installed inside it. This trades disk/download size for a clean host. The helper removes the image after exporting artifacts unless `-KeepImage` is specified.
+The Windows image is intentionally large because Visual Studio Build Tools and the Windows SDK are installed inside it. This trades disk/download size for a clean host. Keep the image and build container for fast subsequent runs; remove them manually with `docker image rm retromatch-source-windows:1.0.0` and `docker rm -f retromatch-build-release` when no longer needed.
 
 ### Linux clean-room build
 

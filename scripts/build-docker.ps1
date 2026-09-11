@@ -5,7 +5,10 @@ param(
     [switch]$InstallDocker,
     [switch]$NonInteractive,
     [switch]$NoCache,
-    [switch]$KeepImage
+    [switch]$KeepImage,
+    [switch]$FreshContainer,
+    [switch]$RebuildToolchain,
+    [string]$ToolchainImage = "retromatch-toolchain-windows:1.0.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -222,7 +225,7 @@ if ($Target -eq "Windows") {
     # Desktop for Windows, committing/importing that very large writable layer
     # can fail with hcsshim::ImportLayer (0x3) even after compilation and CTest
     # have completed successfully. Build only the small source/toolchain image,
-    # compile in a disposable container, and copy artifacts directly from it.
+    # compile in a reusable container, and copy artifacts directly from it.
     $sourceImage = "retromatch-source-windows:1.0.0"
     $sourceBuildArgs = @(
         "build", "--file", $dockerfilePath,
@@ -233,11 +236,11 @@ if ($Target -eq "Windows") {
     if ($NoCache) { $sourceBuildArgs += "--no-cache" }
     $sourceBuildArgs += $Root
 
-    Write-Host "Building reusable Windows toolchain/source image '$sourceImage' ..." -ForegroundColor Cyan
-    try {
-        Invoke-DockerMonitored -Arguments $sourceBuildArgs -Activity "Windows Docker source/toolchain image build"
-    }
-    catch {
+    $sourceImageExists = $null -ne (& docker image inspect $sourceImage 2>$null)
+    if (-not $sourceImageExists -or $NoCache -or $RebuildToolchain) {
+        Write-Host "Building reusable Windows toolchain/source image '$sourceImage' ..." -ForegroundColor Cyan
+        try { Invoke-DockerMonitored -Arguments $sourceBuildArgs -Activity "Windows Docker source/toolchain image build" }
+        catch {
         $sourceBuildError = $_.Exception.Message
         Write-Warning @"
 The reusable Windows source/toolchain image could not be committed. Docker Desktop can hit
@@ -269,6 +272,9 @@ Direct fallback failure: $($_.Exception.Message)
 
         Write-Host "Windows direct-container fallback completed successfully." -ForegroundColor Green
         exit 0
+        }
+    } else {
+        Write-Host "Reusing Windows toolchain/source image '$sourceImage'." -ForegroundColor Green
     }
 
     # A successful Docker build does not guarantee that its committed Windows
@@ -300,31 +306,34 @@ Direct fallback failure: $($_.Exception.Message)
         exit 0
     }
 
-    $container = "retromatch-buildrun-$([guid]::NewGuid().ToString('N').Substring(0, 10))"
+    $container = "retromatch-build-$($Config.ToLowerInvariant())"
     try {
-        Write-Host "Creating disposable Windows build container '$container' ..." -ForegroundColor Cyan
-        & docker create --name $container --memory 4g $sourceImage C:\Windows\System32\cmd.exe /D /C C:\src\scripts\build-container-windows.cmd $Config | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Could not create disposable Windows build container." }
+        $existing = docker container inspect $container 2>$null | Out-String
+        if ($FreshContainer -and $existing) { & docker rm -f $container *> $null; $existing = "" }
+        if (-not $existing) {
+            Write-Host "Creating reusable Windows build container '$container' ..." -ForegroundColor Cyan
+            & docker create --name $container --memory 4g -v "$($Root):C:/src" $sourceImage C:\Windows\System32\cmd.exe /D /C C:\src\scripts\build-container-windows.cmd $Config | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Could not create reusable Windows build container." }
+        } else {
+            Write-Host "Reusing Windows build container '$container' (live source mount)." -ForegroundColor Green
+        }
 
-        Write-Host "Compiling and testing RetroMatch inside the disposable container..." -ForegroundColor Cyan
+        Write-Host "Compiling and testing RetroMatch inside the reusable container..." -ForegroundColor Cyan
         Invoke-DockerMonitored -Arguments @("start", "--attach", $container) -Activity "Windows container compile/test"
 
         Write-Host "Exporting build artifacts directly from the stopped container..." -ForegroundColor Cyan
         Export-WindowsContainerArtifacts -Container $container -Destination $OutputDir -Configuration $Config
     }
     finally {
-        & docker rm -f $container *> $null
-    }
-
-    if (-not $KeepImage) {
-        & docker image rm $sourceImage *> $null
+        if ($FreshContainer) { & docker rm -f $container *> $null }
     }
 
     Write-Host ""
     Write-Host "Container build complete." -ForegroundColor Green
     Write-Host "Target:    Windows"
     Write-Host "Artifacts: $OutputDir"
-    Write-Host "Mode:      disposable compile container (no final compiler-output image layer)" -ForegroundColor DarkGray
+    Write-Host "Mode:      persistent toolchain image + reusable compile container" -ForegroundColor DarkGray
+    Write-Host "Tip:       use -FreshContainer for a clean build container or -RebuildToolchain for a clean image" -ForegroundColor DarkGray
     exit 0
 }
 

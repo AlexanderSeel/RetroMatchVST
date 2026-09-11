@@ -56,7 +56,7 @@ echo VST3 auto-manifest generation is disabled in the Server Core container.
 if errorlevel 1 goto :configure_failed
 
 echo Building plug-in, standalone app and all registered test executables...
-"%CMAKE%" --build C:\build --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone RetroMatchTests RetroMatchFineTuneTests RetroMatchOneShotTests RetroMatchTelemetryTests RetroMatchSimilaritySafetyTests RetroMatchPhaseATests RetroMatchPresetLibraryTests RetroMatchSequencerTests
+"%CMAKE%" --build C:\build --target RetroMatchSynth_VST3 RetroMatchSynth_Standalone RetroMatchTests RetroMatchFineTuneTests RetroMatchOneShotTests RetroMatchTelemetryTests RetroMatchSimilaritySafetyTests RetroMatchPhaseATests RetroMatchPresetLibraryTests RetroMatchPresetPackSafetyTests RetroMatchSequencerTests
 if errorlevel 1 goto :build_failed
 
 echo Running tests...

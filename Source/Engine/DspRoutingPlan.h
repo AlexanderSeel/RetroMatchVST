@@ -148,7 +148,7 @@ private:
         for (int i = 0; i < maxLayerCount; ++i)
             value |= (std::uint64_t) (plan.layerOrder[(size_t) i] & 0x7) << (i * 3);
         for (int i = 0; i < maxInstanceCount; ++i)
-            if (plan.parallelFx[(size_t) i]) value |= 1u << (21 + i);
+            if (plan.parallelFx[(size_t) i]) value |= 1ull << (21 + i);
         value |= (std::uint64_t) juce::jlimit (0, 1 << 20, plan.maxLatencySamples) << 29;
         value |= (std::uint64_t) (juce::jlimit (-1, maxLayerCount - 1, plan.soloLayer) + 1) << 49;
         if (plan.graphAuthored) value |= 1ull << 52;

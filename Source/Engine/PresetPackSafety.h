@@ -279,16 +279,18 @@ inline bool resolveInside (const juce::File& libraryRoot, const juce::String& re
                            juce::File& resolved) noexcept
 {
     if (! libraryRoot.isDirectory() || ! safeRelativePath (relativePath)) return false;
-    const auto root = libraryRoot.getCanonicalFile();
-    resolved = root.getChildFile (relativePath).getCanonicalFile();
-    return resolved == root || resolved.isAChildOf (root);
+    const auto root = libraryRoot.getFullPathName().replaceCharacter ('\\', '/').trimCharactersAtEnd ("/");
+    resolved = libraryRoot.getChildFile (relativePath);
+    const auto candidate = resolved.getFullPathName().replaceCharacter ('\\', '/').trimCharactersAtEnd ("/");
+    return candidate == root || candidate.startsWith (root + "/");
 }
 
 inline bool verifyAsset (const juce::File& libraryRoot, const juce::File& file,
                          const Asset& asset, juce::String* reason = nullptr)
 {
     juce::File resolved;
-    if (! resolveInside (libraryRoot, asset.path, resolved) || resolved != file.getCanonicalFile())
+    if (! resolveInside (libraryRoot, asset.path, resolved)
+        || resolved.getFullPathName().compare (file.getFullPathName()) != 0)
     {
         if (reason != nullptr) *reason = "Pack asset is outside the declared library root";
         return false;
@@ -395,7 +397,7 @@ inline bool writePackArchive (const juce::File& archive, const juce::File& libra
     write32 (0x06054b50u); write16 (0); write16 (0); write16 ((std::uint16_t) entries.size()); write16 ((std::uint16_t) entries.size());
     write32 (centralSize); write32 (centralOffset); write16 (0);
     output.flush();
-    return ! output.failed();
+    return output.getStatus().wasOk();
 }
 
 inline bool validatePackArchive (const juce::File& archive, juce::String* reason = nullptr)

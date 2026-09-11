@@ -75,7 +75,7 @@ int main()
 
     juce::File resolved;
     if (! resolveInside (root, "patches/patch-001.rmsynth", resolved)
-        || resolved != patchFile.getCanonicalFile()
+        || resolved.getFullPathName() != patchFile.getFullPathName()
         || resolveInside (root, "../escape.rmsynth", resolved))
         return fail ("library-root containment check failed");
 

@@ -6,7 +6,9 @@ param(
     [switch]$UseDocker,
     [switch]$InstallMissing,
     [switch]$NonInteractive,
-    [switch]$SkipPrerequisiteCheck
+    [switch]$SkipPrerequisiteCheck,
+    [switch]$FreshContainer,
+    [switch]$RebuildToolchain
 )
 
 $ErrorActionPreference = "Stop"
@@ -184,6 +186,8 @@ if ($UseDocker) {
     }
     if ($InstallMissing) { $dockerParams.InstallDocker = $true }
     if ($NonInteractive) { $dockerParams.NonInteractive = $true }
+    if ($FreshContainer) { $dockerParams.FreshContainer = $true }
+    if ($RebuildToolchain) { $dockerParams.RebuildToolchain = $true }
 
     & $dockerScript @dockerParams
     if ($LASTEXITCODE -ne 0) { throw "Docker build failed (exit code $LASTEXITCODE)." }

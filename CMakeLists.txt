@@ -77,6 +77,7 @@ target_link_libraries(RetroMatchSynth PRIVATE
   juce::juce_dsp
   juce::juce_gui_extra
   juce::juce_data_structures
+  juce::juce_cryptography
   PUBLIC
   juce::juce_recommended_config_flags
   juce::juce_recommended_lto_flags
@@ -241,6 +242,7 @@ if(RETROMATCH_BUILD_TESTS)
     juce::juce_audio_basics
     juce::juce_dsp
     juce::juce_core
+    juce::juce_cryptography
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)

@@ -180,9 +180,15 @@ int main()
     liveEngine.setParameters (cleanPatch);
     juce::AudioBuffer<float> liveRender (2, capturedRender.getNumSamples());
     liveRender.clear();
-    juce::MidiBuffer liveMidi;
-    liveMidi.addEvent (juce::MidiMessage::noteOn (1, 57, (juce::uint8) 108), 0);
-    liveEngine.render (liveRender, liveMidi);
+    for (int start = 0; start < liveRender.getNumSamples(); start += 256)
+    {
+        const int count = juce::jmin (256, liveRender.getNumSamples() - start);
+        juce::AudioBuffer<float> block (liveRender.getArrayOfWritePointers(), liveRender.getNumChannels(), start, count);
+        juce::MidiBuffer liveMidi;
+        if (start == 0)
+            liveMidi.addEvent (juce::MidiMessage::noteOn (1, 57, (juce::uint8) 108), 0);
+        liveEngine.render (block, liveMidi);
+    }
     float liveOfflineDifference = 0.0f;
     for (int ch = 0; ch < liveRender.getNumChannels(); ++ch)
         for (int i = 0; i < liveRender.getNumSamples(); ++i)
@@ -241,9 +247,15 @@ int main()
     layeredLiveEngine.setParameters (generatedRack);
     juce::AudioBuffer<float> layeredLive (2, layered.getNumSamples());
     layeredLive.clear();
-    juce::MidiBuffer layeredMidi;
-    layeredMidi.addEvent (juce::MidiMessage::noteOn (1, 57, (juce::uint8) 108), 0);
-    layeredLiveEngine.render (layeredLive, layeredMidi);
+    for (int start = 0; start < layeredLive.getNumSamples(); start += 256)
+    {
+        const int count = juce::jmin (256, layeredLive.getNumSamples() - start);
+        juce::AudioBuffer<float> block (layeredLive.getArrayOfWritePointers(), layeredLive.getNumChannels(), start, count);
+        juce::MidiBuffer layeredMidi;
+        if (start == 0)
+            layeredMidi.addEvent (juce::MidiMessage::noteOn (1, 57, (juce::uint8) 108), 0);
+        layeredLiveEngine.render (block, layeredMidi);
+    }
     const auto layeredLiveTelemetry = RenderTelemetry::analyze (layeredLive);
     float layeredLiveOfflineDifference = 0.0f;
     for (int ch = 0; ch < layeredLive.getNumChannels(); ++ch)

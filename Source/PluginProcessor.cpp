@@ -839,7 +839,7 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
             if (auto position = playHead->getPosition())
             {
                 if (auto hostBpm = position->getBpm()) bpm = (float) *hostBpm;
-                if (auto playing = position->getIsPlaying()) hostPlaying = *playing;
+                hostPlaying = position->getIsPlaying();
                 if (auto ppq = position->getPpqPosition())
                     hostJustStarted = *ppq <= 0.0001;
             }
