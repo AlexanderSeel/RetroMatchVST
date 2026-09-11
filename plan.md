@@ -139,7 +139,7 @@ The existing Patch Map foundation is usable; finish a small set of deterministic
 ## C2. Finish routing v2
 
 - [~] Editable audio fan-in reorder is now validated and serialized through the patch model; explicit pre/post processing-node ownership and UI actions remain open.
-- [~] Centralize bounded Gain/Pan/Width operations in allocation-free routing utilities; layer combine and parallel branch mixing now use shared allocation-free primitives with non-finite input containment, while generalized graph Split/Merge node execution remains open.
+- [~] Centralize bounded Gain/Pan/Width operations in allocation-free routing utilities; layer combine, parallel branch mixing and stereo width now use shared allocation-free primitives with non-finite input containment, while generalized graph Split/Merge node execution remains open.
 - [~] Added allocation-free normalized parallel branch mixing with deterministic compensation; bounded Parallel Core Gain and Parallel FX Gain controls now drive the supported split, while per-node branch controls remain open.
 - [~] Preserve/compute latency across routed oversampled/nonlinear nodes; patch nodes now expose validated editing, persist bounded declared latency and DspRouting compilation computes deterministic maximum audio-path latency, while runtime delay application for arbitrary future graph processors remains open.
 - [~] Add allocation-free atomic peak meters for the main bus and every rendered companion branch, plus Patch Map instance solo/audition; solo source state now persists through the validated graph and atomic routing plan, while richer audition presentation remains open.
@@ -179,9 +179,9 @@ Candidate A/B/C reproduces the exact rack that was scored, including layers/glob
 
 ## E1. Versioned pack format
 
-- [~] Add ZIP-compatible `.rmpack` with manifest: typed stable pack/patch IDs, version, author, description, tags/categories, minimum schema/plugin version and asset list; ZIP archive integration remains open.
+- [~] Add ZIP-compatible `.rmpack` with manifest: typed stable pack/patch IDs, version, author, description, tags/categories, minimum schema/plugin version and asset list; a deterministic store-only ZIP writer and non-destructive central-directory/CRC validator now cover archive emission, while archive extraction/import remains open.
 - [ ] Reuse versioned `.rmsynth` patch data and include only required owned assets.
-- [~] Validate paths/sizes; reusable pack-safety helpers now provide a typed manifest model, validated `manifest.json` read/write, bounded metadata/tag lists with unique patch IDs, SHA-256 format and asset-integrity verification, path traversal protection, asset limits and library-root containment, with dedicated round-trip/tamper/traversal regressions; ZIP archive integration remains open.
+- [~] Validate paths/sizes; reusable pack-safety helpers now provide a typed manifest model, validated `manifest.json` read/write, bounded metadata/tag lists with unique patch IDs, SHA-256 format and root-aware asset-integrity verification, path traversal protection, asset limits and library-root containment, with dedicated round-trip/tamper/traversal regressions; ZIP archive integration remains open.
 - [~] Pack safety now exposes deterministic Ask / Keep / Replace / Import as Copy conflict resolution and unique copy-ID generation; archive/library UI integration remains open.
 
 ## E2. Library operations

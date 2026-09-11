@@ -114,10 +114,14 @@ inline void applyStereoWidth (juce::AudioBuffer<float>& audio, float width) noex
     auto* right = audio.getWritePointer (1);
     for (int sample = 0; sample < audio.getNumSamples(); ++sample)
     {
-        const float mid = 0.5f * (left[sample] + right[sample]);
-        const float side = 0.5f * (left[sample] - right[sample]) * safeWidth;
-        left[sample] = mid + side;
-        right[sample] = mid - side;
+        const float l = std::isfinite (left[sample]) ? left[sample] : 0.0f;
+        const float r = std::isfinite (right[sample]) ? right[sample] : 0.0f;
+        const float mid = 0.5f * (l + r);
+        const float side = 0.5f * (l - r) * safeWidth;
+        const float newLeft = mid + side;
+        const float newRight = mid - side;
+        left[sample] = std::isfinite (newLeft) ? newLeft : 0.0f;
+        right[sample] = std::isfinite (newRight) ? newRight : 0.0f;
     }
 }
 }

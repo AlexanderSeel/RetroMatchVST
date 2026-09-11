@@ -136,6 +136,11 @@ int main (int argc, char** argv)
         RoutingUtilities::mixParallel (destination, branch, std::numeric_limits<float>::quiet_NaN(), 2.0f);
         if (! finiteAudio (destination))
             return fail ("parallel routing utility propagated non-finite input or controls");
+        destination.setSample (0, 1, std::numeric_limits<float>::quiet_NaN());
+        destination.setSample (1, 2, -std::numeric_limits<float>::infinity());
+        RoutingUtilities::applyStereoWidth (destination, std::numeric_limits<float>::quiet_NaN());
+        if (! finiteAudio (destination))
+            return fail ("stereo width utility propagated non-finite input or controls");
     }
     {
         VoiceParameters fullRack;

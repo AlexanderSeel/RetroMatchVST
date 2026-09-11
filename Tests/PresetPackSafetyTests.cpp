@@ -60,12 +60,18 @@ int main()
         || loaded.assets.size() != 1 || loaded.assets[0].sha256 != manifest.assets[0].sha256)
         return fail ("manifest round-trip changed typed metadata or asset integrity data");
 
-    if (! verifyAsset (patchFile, loaded.assets[0], &reason))
+    if (! verifyAsset (root, patchFile, loaded.assets[0], &reason))
         return fail ("matching asset failed size/hash verification");
+    const auto outsideFile = root.getSiblingFile ("retromatch-pack-safety-outside.rmsynth");
+    outsideFile.replaceWithText ("deterministic patch fixture\n");
+    if (verifyAsset (root, outsideFile, loaded.assets[0], &reason))
+        return fail ("asset outside the library root passed root-aware verification");
     if (! patchFile.appendText ("tamper"))
         return fail ("asset tamper fixture could not be written");
-    if (verifyAsset (patchFile, loaded.assets[0], &reason))
+    if (verifyAsset (root, patchFile, loaded.assets[0], &reason))
         return fail ("tampered asset passed manifest verification");
+    if (! patchFile.replaceWithText ("deterministic patch fixture\n"))
+        return fail ("asset fixture could not be restored after tamper coverage");
 
     juce::File resolved;
     if (! resolveInside (root, "patches/patch-001.rmsynth", resolved)
@@ -93,7 +99,20 @@ int main()
     if (copied.action != ImportConflictAction::importAsCopy || copied.patchId != "patch-001-copy-2")
         return fail ("import-as-copy did not choose a unique deterministic patch ID");
 
+    const auto archiveFile = root.getChildFile ("fixture.rmpack");
+    if (! writePackArchive (archiveFile, root, loaded, &reason) || ! archiveFile.existsAsFile())
+        return fail ("validated pack archive could not be written");
+    juce::MemoryBlock archiveBytes;
+    if (! archiveFile.loadFileAsData (archiveBytes))
+        return fail ("pack archive could not be read back");
+    if (archiveBytes.getSize() < 22 || static_cast<const char*> (archiveBytes.getData())[0] != 'P'
+        || static_cast<const char*> (archiveBytes.getData())[1] != 'K')
+        return fail ("pack archive does not have a ZIP signature");
+    if (! validatePackArchive (archiveFile, &reason))
+        return fail ("valid pack archive failed structural ZIP validation");
+
     root.deleteRecursively();
+    outsideFile.deleteFile();
     std::cout << "Preset pack safety tests passed.\n";
     return 0;
 }

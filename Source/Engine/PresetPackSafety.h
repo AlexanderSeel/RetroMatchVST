@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <cstdint>
 #include <vector>
 
 namespace PresetPackSafety
@@ -281,5 +282,188 @@ inline bool resolveInside (const juce::File& libraryRoot, const juce::String& re
     const auto root = libraryRoot.getCanonicalFile();
     resolved = root.getChildFile (relativePath).getCanonicalFile();
     return resolved == root || resolved.isAChildOf (root);
+}
+
+inline bool verifyAsset (const juce::File& libraryRoot, const juce::File& file,
+                         const Asset& asset, juce::String* reason = nullptr)
+{
+    juce::File resolved;
+    if (! resolveInside (libraryRoot, asset.path, resolved) || resolved != file.getCanonicalFile())
+    {
+        if (reason != nullptr) *reason = "Pack asset is outside the declared library root";
+        return false;
+    }
+    return verifyAsset (file, asset, reason);
+}
+
+// Deterministic store-only ZIP writer. Compression is deliberately omitted so
+// archive creation remains bounded and independent of optional JUCE zip APIs;
+// standard ZIP readers can open the resulting .rmpack file.
+inline std::uint32_t archiveCrc32 (const void* data, size_t size) noexcept
+{
+    auto* bytes = static_cast<const std::uint8_t*> (data);
+    std::uint32_t crc = 0xffffffffu;
+    for (size_t i = 0; i < size; ++i)
+    {
+        crc ^= bytes[i];
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+
+inline bool writePackArchive (const juce::File& archive, const juce::File& libraryRoot,
+                              const Manifest& manifest, juce::String* reason = nullptr)
+{
+    if (! archive.getFileExtension().equalsIgnoreCase (".rmpack") || ! libraryRoot.isDirectory())
+    {
+        if (reason != nullptr) *reason = "Pack archive must use .rmpack and a valid library root";
+        return false;
+    }
+    if (! validateManifest (manifest.toVar(), reason)) return false;
+
+    struct Entry { juce::String path; juce::MemoryBlock data; std::uint32_t crc = 0; std::uint32_t offset = 0; };
+    std::vector<Entry> entries;
+    entries.reserve (manifest.assets.size() + 1);
+    Entry manifestEntry;
+    manifestEntry.path = "manifest.json";
+    const auto manifestText = juce::JSON::toString (manifest.toVar(), true);
+    manifestEntry.data.append (manifestText.toRawUTF8(), manifestText.getNumBytesAsUTF8());
+    manifestEntry.crc = archiveCrc32 (manifestEntry.data.getData(), manifestEntry.data.getSize());
+    entries.push_back (std::move (manifestEntry));
+
+    std::int64_t totalBytes = (std::int64_t) entries.front().data.getSize();
+    for (const auto& asset : manifest.assets)
+    {
+        juce::File resolved;
+        if (! resolveInside (libraryRoot, asset.path, resolved) || ! verifyAsset (libraryRoot, resolved, asset, reason))
+            return false;
+        Entry entry;
+        entry.path = asset.path.replaceCharacter ('\\', '/');
+        if (! resolved.loadFileAsData (entry.data) || entry.data.getSize() != (size_t) asset.size)
+        {
+            if (reason != nullptr) *reason = "Unable to read pack asset";
+            return false;
+        }
+        entry.crc = archiveCrc32 (entry.data.getData(), entry.data.getSize());
+        totalBytes += (std::int64_t) entry.data.getSize();
+        if (totalBytes > 256ll * 1024ll * 1024ll)
+        {
+            if (reason != nullptr) *reason = "Pack archive exceeds the total size limit";
+            return false;
+        }
+        entries.push_back (std::move (entry));
+    }
+
+    if (! archive.getParentDirectory().createDirectory().wasOk() && ! archive.getParentDirectory().isDirectory())
+    {
+        if (reason != nullptr) *reason = "Unable to create pack archive directory";
+        return false;
+    }
+    juce::FileOutputStream output (archive);
+    if (! output.openedOk())
+    {
+        if (reason != nullptr) *reason = "Unable to create pack archive";
+        return false;
+    }
+    const auto write16 = [&output] (std::uint16_t value)
+    { output.writeByte ((char) (value & 0xffu)); output.writeByte ((char) ((value >> 8) & 0xffu)); };
+    const auto write32 = [&output, &write16] (std::uint32_t value)
+    { write16 (static_cast<std::uint16_t> (value)); write16 (static_cast<std::uint16_t> (value >> 16)); };
+    const auto writeName = [&output] (const juce::String& name)
+    { output.write (name.toRawUTF8(), (size_t) name.getNumBytesAsUTF8()); };
+
+    for (auto& entry : entries)
+    {
+        entry.offset = (std::uint32_t) output.getPosition();
+        const auto nameBytes = (std::uint16_t) entry.path.getNumBytesAsUTF8();
+        write32 (0x04034b50u); write16 (20); write16 (0); write16 (0); write16 (0); write16 (0);
+        write32 (entry.crc); write32 ((std::uint32_t) entry.data.getSize()); write32 ((std::uint32_t) entry.data.getSize());
+        write16 (nameBytes); write16 (0); writeName (entry.path);
+        output.write (entry.data.getData(), entry.data.getSize());
+    }
+    const auto centralOffset = (std::uint32_t) output.getPosition();
+    for (const auto& entry : entries)
+    {
+        const auto nameBytes = (std::uint16_t) entry.path.getNumBytesAsUTF8();
+        write32 (0x02014b50u); write16 (20); write16 (20); write16 (0); write16 (0); write16 (0); write16 (0);
+        write32 (entry.crc); write32 ((std::uint32_t) entry.data.getSize()); write32 ((std::uint32_t) entry.data.getSize());
+        write16 (nameBytes); write16 (0); write16 (0); write16 (0); write16 (0); write32 (0); write32 (entry.offset);
+        writeName (entry.path);
+    }
+    const auto centralSize = (std::uint32_t) output.getPosition() - centralOffset;
+    write32 (0x06054b50u); write16 (0); write16 (0); write16 ((std::uint16_t) entries.size()); write16 ((std::uint16_t) entries.size());
+    write32 (centralSize); write32 (centralOffset); write16 (0);
+    output.flush();
+    return ! output.failed();
+}
+
+inline bool validatePackArchive (const juce::File& archive, juce::String* reason = nullptr)
+{
+    auto fail = [reason] (const juce::String& message)
+    {
+        if (reason != nullptr) *reason = message;
+        return false;
+    };
+    if (! archive.existsAsFile() || archive.getSize() < 22 || archive.getSize() > 256ll * 1024ll * 1024ll)
+        return fail ("Pack archive size is outside the allowed range");
+
+    juce::MemoryBlock bytes;
+    if (! archive.loadFileAsData (bytes))
+        return fail ("Pack archive could not be read");
+    const auto* data = static_cast<const std::uint8_t*> (bytes.getData());
+    const size_t size = bytes.getSize();
+    const auto read16 = [data, size] (size_t offset) -> std::uint16_t
+    { return offset + 2 <= size ? (std::uint16_t) data[offset] | ((std::uint16_t) data[offset + 1] << 8) : 0xffffu; };
+    const auto read32 = [data, size] (size_t offset) -> std::uint32_t
+    { return offset + 4 <= size ? (std::uint32_t) data[offset] | ((std::uint32_t) data[offset + 1] << 8)
+                                      | ((std::uint32_t) data[offset + 2] << 16) | ((std::uint32_t) data[offset + 3] << 24) : 0xffffffffu; };
+
+    size_t endRecord = size;
+    bool foundEndRecord = false;
+    const size_t searchStart = size > 65557 ? size - 65557 : 0;
+    while (endRecord-- > searchStart)
+        if (read32 (endRecord) == 0x06054b50u) { foundEndRecord = true; break; }
+    if (! foundEndRecord || read32 (endRecord + 20) != 0)
+        return fail ("Pack archive has no valid ZIP end record");
+    const auto entryCount = read16 (endRecord + 10);
+    const auto centralSize = read32 (endRecord + 12);
+    const auto centralOffset = read32 (endRecord + 16);
+    if (entryCount == 0 || centralOffset > size || centralSize > size - centralOffset
+        || centralOffset + centralSize > endRecord)
+        return fail ("Pack archive central directory is malformed");
+
+    juce::StringArray paths;
+    size_t cursor = centralOffset;
+    for (std::uint16_t entryIndex = 0; entryIndex < entryCount; ++entryIndex)
+    {
+        if (cursor + 46 > size || read32 (cursor) != 0x02014b50u)
+            return fail ("Pack archive contains an invalid central directory entry");
+        const auto method = read16 (cursor + 10);
+        const auto compressed = read32 (cursor + 20);
+        const auto uncompressed = read32 (cursor + 24);
+        const auto nameLength = read16 (cursor + 28);
+        const auto extraLength = read16 (cursor + 30);
+        const auto commentLength = read16 (cursor + 32);
+        const auto localOffset = read32 (cursor + 42);
+        const size_t recordSize = 46ull + nameLength + extraLength + commentLength;
+        if (method != 0 || compressed != uncompressed || cursor + recordSize > size
+            || nameLength == 0 || nameLength > maxMetadataCharacters)
+            return fail ("Pack archive entry uses unsupported compression or invalid bounds");
+        const auto path = juce::String::fromUTF8 (reinterpret_cast<const char*> (data + cursor + 46), nameLength)
+                              .replaceCharacter ('\\', '/');
+        if (! safeRelativePath (path) || paths.contains (path))
+            return fail ("Pack archive contains an unsafe or duplicate path");
+        paths.add (path);
+        if ((size_t) localOffset + 30 > size || read32 (localOffset) != 0x04034b50u)
+            return fail ("Pack archive entry has an invalid local record");
+        const auto localNameLength = read16 (localOffset + 26);
+        const auto localExtraLength = read16 (localOffset + 28);
+        const size_t payload = (size_t) localOffset + 30ull + localNameLength + localExtraLength;
+        if (payload > size || compressed > size - payload || archiveCrc32 (data + payload, compressed) != read32 (cursor + 16))
+            return fail ("Pack archive entry payload or CRC is invalid");
+        cursor += recordSize;
+    }
+    return cursor == centralOffset + centralSize ? true : fail ("Pack archive central directory size is inconsistent");
 }
 }
