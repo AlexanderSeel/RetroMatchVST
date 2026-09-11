@@ -265,4 +265,7 @@ if(RETROMATCH_BUILD_UI_TESTS)
     JucePlugin_Name="RetroMatch Synth")
   target_link_libraries(RetroMatchEditorPreview PRIVATE RetroMatchSynth RetroMatchArtwork
     juce::juce_audio_utils juce::juce_dsp juce::juce_gui_extra)
+  add_test(NAME RetroMatchEditorPreview
+    COMMAND $<TARGET_FILE:RetroMatchEditorPreview>
+            "${CMAKE_CURRENT_BINARY_DIR}/editor-preview-output")
 endif()

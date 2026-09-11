@@ -426,7 +426,7 @@ inline bool validatePackArchive (const juce::File& archive, juce::String* reason
     const size_t searchStart = size > 65557 ? size - 65557 : 0;
     while (endRecord-- > searchStart)
         if (read32 (endRecord) == 0x06054b50u) { foundEndRecord = true; break; }
-    if (! foundEndRecord || read32 (endRecord + 20) != 0)
+    if (! foundEndRecord || read16 (endRecord + 20) != 0)
         return fail ("Pack archive has no valid ZIP end record");
     const auto entryCount = read16 (endRecord + 10);
     const auto centralSize = read32 (endRecord + 12);
@@ -467,5 +467,64 @@ inline bool validatePackArchive (const juce::File& archive, juce::String* reason
         cursor += recordSize;
     }
     return cursor == centralOffset + centralSize ? true : fail ("Pack archive central directory size is inconsistent");
+}
+
+inline bool extractPackArchive (const juce::File& archive, const juce::File& destination,
+                                Manifest* manifest = nullptr, juce::String* reason = nullptr)
+{
+    auto fail = [reason] (const juce::String& message)
+    {
+        if (reason != nullptr) *reason = message;
+        return false;
+    };
+    if (! validatePackArchive (archive, reason) || ! destination.createDirectory().wasOk())
+        return fail ("Pack archive or extraction directory is invalid");
+
+    juce::MemoryBlock bytes;
+    if (! archive.loadFileAsData (bytes)) return fail ("Pack archive could not be read");
+    const auto* data = static_cast<const std::uint8_t*> (bytes.getData());
+    const size_t size = bytes.getSize();
+    const auto read16 = [data, size] (size_t offset) -> std::uint16_t
+    { return offset + 2 <= size ? (std::uint16_t) data[offset] | ((std::uint16_t) data[offset + 1] << 8) : 0xffffu; };
+    const auto read32 = [data, size] (size_t offset) -> std::uint32_t
+    { return offset + 4 <= size ? (std::uint32_t) data[offset] | ((std::uint32_t) data[offset + 1] << 8)
+                                      | ((std::uint32_t) data[offset + 2] << 16) | ((std::uint32_t) data[offset + 3] << 24) : 0xffffffffu; };
+    size_t endRecord = size;
+    bool foundEndRecord = false;
+    while (endRecord-- > 0)
+        if (read32 (endRecord) == 0x06054b50u) { foundEndRecord = true; break; }
+    if (! foundEndRecord) return fail ("Pack archive end record is missing");
+    const auto entryCount = read16 (endRecord + 10);
+    size_t cursor = read32 (endRecord + 16);
+    for (std::uint16_t entryIndex = 0; entryIndex < entryCount; ++entryIndex)
+    {
+        if (cursor + 46 > size || read32 (cursor) != 0x02014b50u) return fail ("Pack archive directory is malformed");
+        const auto compressed = read32 (cursor + 20);
+        const auto nameLength = read16 (cursor + 28);
+        const auto extraLength = read16 (cursor + 30);
+        const auto commentLength = read16 (cursor + 32);
+        const auto localOffset = read32 (cursor + 42);
+        const auto path = juce::String::fromUTF8 (reinterpret_cast<const char*> (data + cursor + 46), nameLength).replaceCharacter ('\\', '/');
+        const size_t recordSize = 46ull + nameLength + extraLength + commentLength;
+        if (! safeRelativePath (path) || cursor + recordSize > size || (size_t) localOffset + 30 > size)
+            return fail ("Pack archive contains an unsafe entry");
+        const auto localNameLength = read16 (localOffset + 26);
+        const auto localExtraLength = read16 (localOffset + 28);
+        const size_t payload = (size_t) localOffset + 30ull + localNameLength + localExtraLength;
+        if (payload > size || compressed > size - payload) return fail ("Pack archive entry exceeds its bounds");
+        juce::File output;
+        if (! resolveInside (destination, path, output)) return fail ("Pack archive entry escapes extraction directory");
+        if (! output.getParentDirectory().createDirectory().wasOk()) return fail ("Could not create pack asset directory");
+        juce::FileOutputStream stream (output);
+        if (! stream.openedOk() || ! stream.write (data + payload, compressed) || ! stream.getStatus().wasOk())
+            return fail ("Could not extract pack asset");
+        cursor += recordSize;
+    }
+    if (manifest != nullptr)
+    {
+        const auto manifestFile = destination.getChildFile ("manifest.json");
+        if (! readManifest (manifestFile, *manifest, reason) || ! validateManifest (manifest->toVar(), reason)) return false;
+    }
+    return true;
 }
 }

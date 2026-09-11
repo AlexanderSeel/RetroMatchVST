@@ -234,13 +234,14 @@ private:
     int displayedPalette = -1;
     std::unique_ptr<juce::Drawable> logo;
     juce::Rectangle<int> logoBounds;
-    std::unique_ptr<juce::Component> melodyPage, signalPage;
+    std::unique_ptr<juce::Component> melodyPage, signalPage, sequencerPage;
     std::unique_ptr<SynthInstanceVisual> synthVisual;
     void updateLightPalette();
 
     // Persistent reference -> match -> audition workspace.
     juce::TextButton load { "LOAD REFERENCE" }, quick { "QUICK x3" }, refine { "REFINE x3" }, goldMatch { "GOLD" }, aiVariants { "AI x3" }, compareMatch { "COMPARE" };
-    juce::TextButton magicVary { "MAGIC" }, magicCapture { "ORIGIN" }, magicRestore { "RESTORE" }, magicBack { "BRANCH <" };
+    juce::TextButton magicVary { "MAGIC" }, magicCapture { "ORIGIN" }, magicRestore { "RESTORE" }, magicBack { "BRANCH <" },
+                               magicKeep { "KEEP" }, magicApply { "APPLY" }, magicDiff { "DIFF" };
     CandidateButton candidateA { "A", "NATURAL" }, candidateB { "B", "FM / HARMONIC" }, candidateC { "C", "WT / TEXTURE" };
     juce::Slider candidateMorph;
     juce::Label candidateMorphLabel;

@@ -1,7 +1,13 @@
 #pragma once
 #include "SynthEngine.h"
 
-struct FactoryPresetInfo { juce::String name, category, description; };
+struct FactoryPresetInfo
+{
+    juce::String name, category, description;
+    juce::String author { "RetroMatch Factory" }, subcategory;
+    juce::StringArray tags, macroLabels;
+    int recommendedOctaveMin = 3, recommendedOctaveMax = 5;
+};
 
 namespace FactoryPresetDesign
 {
@@ -34,7 +40,7 @@ inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
     { "Plucked Wire", "Pluck", "Short harmonic pluck, stereo chorus and a restrained tail." },
     { "Slow Orbit", "Pad", "A moving wavetable scanned by an independent triangle LFO." },
     { "Wide Horizon", "Layered pad", "Two complementary synth instances: supersaw body and a quiet high shimmer." },
-    { "Clockwork", "Sequence", "Square-wave gating from an independent LFO and pinging delay." },
+    { "Clockwork", "Sequence", "A complete 16-step melodic preset with internal clock, cutoff motion and wavetable macro movement." },
     { "Dust Circuit", "Texture", "Noise, ring modulation and a bit-crushed post chain." },
     { "Liquid Lead", "Lead", "Expressive filter modulation with flanging and soft saturation." },
     { "Room Piano", "Keys", "Soft FM keys with compression and a short room." }
@@ -56,8 +62,20 @@ inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
                 + "Deterministically voiced with tuned oscillator balance, envelope contour, filter colour and complementary spatial processing."
                 + (variation >= 6 && (family == 2 || family == 3 || family == 4 || family == 5 || family == 6 || family == 8 || family == 9)
                     ? " MSEG motion is part of the authored sound." : "")
+                + (family == 4 ? " Includes an enabled 16-step melodic sequencer with macro destinations." : "")
                 + (variation >= 8 ? " Layer roles remain independently editable in the Instance Rack." : "") });
         }
+    for (auto& preset : catalog)
+    {
+        preset.subcategory = preset.category;
+        preset.tags.add (preset.category.toLowerCase());
+        preset.tags.add (preset.description.containsIgnoreCase ("motion") ? "motion" : "static");
+        preset.tags.add (preset.description.containsIgnoreCase ("layer") ? "layered" : "single");
+        preset.macroLabels.addArray ({ "brightness", "motion" });
+        if (preset.category == "Bass") { preset.recommendedOctaveMin = 1; preset.recommendedOctaveMax = 3; }
+        else if (preset.category == "Lead" || preset.category == "Keys") { preset.recommendedOctaveMin = 3; preset.recommendedOctaveMax = 6; }
+        else if (preset.category == "Sequence") { preset.tags.add ("arpeggiator"); preset.tags.add ("melodic"); preset.macroLabels = { "cutoff", "wavetable" }; }
+    }
     return catalog;
 }();
 

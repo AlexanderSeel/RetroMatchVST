@@ -13,7 +13,7 @@ class SequencerPanel final : public juce::Component, private juce::Timer
 public:
     explicit SequencerPanel (RetroMatchSynthAudioProcessor& processor) : proc (processor)
     {
-        setSize (820, 410);
+        setSize (820, 500);
         addAndMakeVisible (title); addAndMakeVisible (status);
         title.setText ("STEP SEQUENCER / ARPEGGIATOR", juce::dontSendNotification);
         title.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
@@ -27,6 +27,10 @@ public:
                                                            &randomize, &reverse, &clear, &patternTemplate })
             addAndMakeVisible (*c);
         addAndMakeVisible (rotateLeft); addAndMakeVisible (rotateRight);
+        for (auto* c : { &macroDestination1, &macroDestination2, &macroInterpolation1, &macroInterpolation2 })
+            addAndMakeVisible (*c);
+        addAndMakeVisible (macroRate1); addAndMakeVisible (macroRate2);
+        addAndMakeVisible (savePattern); addAndMakeVisible (loadPattern); addAndMakeVisible (zoom);
 
         enabled.setButtonText ("SEQ ON");
         latch.setButtonText ("LATCH");
@@ -48,6 +52,9 @@ public:
             slider->setTextBoxStyle (juce::Slider::TextBoxRight, false, 72, 21);
         }
         previousPage.setButtonText ("< 16"); nextPage.setButtonText ("16 >");
+        savePattern.setButtonText ("SAVE PATTERN"); loadPattern.setButtonText ("LOAD PATTERN");
+        zoom.setRange (0.65, 1.5, 0.05); zoom.setValue (1.0, juce::dontSendNotification);
+        zoom.setTextValueSuffix (" x"); zoom.setTooltip ("Zoom the step editor lanes while keeping the 16-step page model.");
         randomize.setButtonText ("RANDOMIZE"); reverse.setButtonText ("REVERSE");
         rotateLeft.setButtonText ("ROTATE <"); rotateRight.setButtonText ("ROTATE >"); clear.setButtonText ("CLEAR");
 
@@ -90,8 +97,19 @@ public:
         probability.setTooltip ("Independent note trigger probability for this step.");
         modulationProbability.setTooltip ("Independent probability for applying this step's two macro modulation values; note triggering is unaffected.");
         microTiming.setTooltip ("Bounded offset within the nominal step, +/-45% maximum.");
-        macro1.setTooltip ("Step modulation lane 1 value (stored now; destination routing comes with modulation-lane wiring).");
-        macro2.setTooltip ("Step modulation lane 2 value (stored now; destination routing comes with modulation-lane wiring).");
+        macro1.setTooltip ("Step modulation lane 1 value.");
+        macro2.setTooltip ("Step modulation lane 2 value.");
+        for (auto* destination : { &macroDestination1, &macroDestination2 })
+            destination->addItemList ({ "OFF", "CUTOFF", "RESONANCE", "PITCH", "AMPLITUDE", "WAVETABLE" }, 1);
+        for (auto* interpolation : { &macroInterpolation1, &macroInterpolation2 })
+            interpolation->addItemList ({ "HOLD", "LINEAR", "SMOOTH", "RANDOM" }, 1);
+        for (auto* rate : { &macroRate1, &macroRate2 })
+        {
+            rate->setRange (0.25, 4.0, 0.25);
+            rate->setSliderStyle (juce::Slider::LinearHorizontal);
+            rate->setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 21);
+            rate->setTextValueSuffix (" x");
+        }
 
         enabled.onClick = [this] { commitSettings(); };
         latch.onClick = [this] { commitSettings(); };
@@ -109,6 +127,9 @@ public:
             refreshStepEditor(); refreshStepButtons();
         };
         swing.onValueChange = [this] { commitSettings(); };
+        macroDestination1.onChange = [this] { commitSettings(); }; macroDestination2.onChange = [this] { commitSettings(); };
+        macroInterpolation1.onChange = [this] { commitSettings(); }; macroInterpolation2.onChange = [this] { commitSettings(); };
+        macroRate1.onValueChange = [this] { commitSettings(); }; macroRate2.onValueChange = [this] { commitSettings(); };
         previousPage.onClick = [this] { page = juce::jmax (0, page - 1); selectFirstVisible(); };
         nextPage.onClick = [this] { page = juce::jmin (pageCount() - 1, page + 1); selectFirstVisible(); };
         randomize.onClick = [this] { randomizePattern(); };
@@ -116,6 +137,9 @@ public:
         rotateLeft.onClick = [this] { rotatePattern (-1); };
         rotateRight.onClick = [this] { rotatePattern (1); };
         clear.onClick = [this] { clearPattern(); };
+        savePattern.onClick = [this] { choosePattern (true); };
+        loadPattern.onClick = [this] { choosePattern (false); };
+        zoom.onValueChange = [this] { refreshStepButtons(); resized(); };
         patternTemplate.onChange = [this] { loadPatternTemplate (patternTemplate.getSelectedId() - 1); };
 
         auto stepChanged = [this] { commitSelectedStep(); };
@@ -150,11 +174,13 @@ public:
         patternTemplate.setBounds (tools.removeFromLeft (112).reduced (2));
         randomize.setBounds (tools.removeFromLeft (94).reduced (2)); reverse.setBounds (tools.removeFromLeft (76).reduced (2));
         rotateLeft.setBounds (tools.removeFromLeft (76).reduced (2)); rotateRight.setBounds (tools.removeFromLeft (76).reduced (2));
-        clear.setBounds (tools.removeFromLeft (62).reduced (2)); status.setBounds (tools.reduced (2));
+        clear.setBounds (tools.removeFromLeft (62).reduced (2));
+        savePattern.setBounds (tools.removeFromLeft (100).reduced (2)); loadPattern.setBounds (tools.removeFromLeft (100).reduced (2));
+        zoom.setBounds (tools.removeFromLeft (82).reduced (2)); status.setBounds (tools.reduced (2));
 
         area.removeFromTop (5);
         auto steps = area.removeFromTop (52);
-        const int stepWidth = juce::jmax (30, steps.getWidth() / stepsPerPage);
+        const int stepWidth = juce::jmax (30, (int) std::lround (steps.getWidth() / (stepsPerPage * zoom.getValue())));
         for (auto& button : stepButtons) button.setBounds (steps.removeFromLeft (stepWidth).reduced (2));
 
         area.removeFromTop (7);
@@ -173,6 +199,14 @@ public:
         layoutLabeledSlider (second.removeFromLeft (second.getWidth() / 3), microTiming, "MICRO TIME");
         layoutLabeledSlider (second.removeFromLeft (second.getWidth() / 2), macro1, "MACRO 1");
         layoutLabeledSlider (second, macro2, "MACRO 2");
+        area.removeFromTop (4);
+        auto macros = area.removeFromTop (30);
+        macroDestination1.setBounds (macros.removeFromLeft (130).reduced (2));
+        macroInterpolation1.setBounds (macros.removeFromLeft (120).reduced (2));
+        macroRate1.setBounds (macros.removeFromLeft (120).reduced (2));
+        macroDestination2.setBounds (macros.removeFromLeft (130).reduced (2));
+        macroInterpolation2.setBounds (macros.removeFromLeft (120).reduced (2));
+        macroRate2.setBounds (macros.reduced (2));
     }
 
     void paint (juce::Graphics& g) override
@@ -192,12 +226,18 @@ private:
     int page = 0;
     int lastPlayStep = -1;
     bool updating = false;
+    juce::ValueTree observedState;
 
     juce::Label title, stepLabel, status;
     juce::ToggleButton enabled, latch, rest, tie, glide;
     juce::ComboBox mode, division, rootNote, octaveRange, restartMode;
+    juce::ComboBox macroDestination1, macroDestination2, macroInterpolation1, macroInterpolation2;
     juce::Slider bpm, length, swing;
+    juce::Slider macroRate1, macroRate2;
     juce::TextButton previousPage, nextPage, randomize, reverse, rotateLeft, rotateRight, clear;
+    juce::TextButton savePattern, loadPattern;
+    juce::Slider zoom;
+    std::unique_ptr<juce::FileChooser> patternChooser;
     juce::ComboBox patternTemplate;
     std::array<juce::TextButton, stepsPerPage> stepButtons;
     juce::Slider pitch, octave, velocity, gate, probability, modulationProbability, ratchet, microTiming, macro1, macro2;
@@ -265,6 +305,11 @@ private:
         settings.rootNote = juce::jlimit (0, 127, rootNote.getSelectedId() - 1);
         settings.octaveRange = juce::jlimit (1, 4, octaveRange.getSelectedId());
         settings.restartMode = (RetroMatchSequencer::RestartMode) juce::jlimit (0, 2, restartMode.getSelectedId() - 1);
+        settings.macroDestination = {{ (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 5, macroDestination1.getSelectedId() - 1),
+                                       (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 5, macroDestination2.getSelectedId() - 1) }};
+        settings.macroInterpolation = {{ (RetroMatchSequencer::MacroInterpolation) juce::jlimit (0, 3, macroInterpolation1.getSelectedId() - 1),
+                                          (RetroMatchSequencer::MacroInterpolation) juce::jlimit (0, 3, macroInterpolation2.getSelectedId() - 1) }};
+        settings.macroLaneRate = {{ (float) macroRate1.getValue(), (float) macroRate2.getValue() }};
         refreshModeControls();
         if (settings.enabled) proc.melodyTransport.stop();
         proc.melodyTransport.setSequencerSettings (settings);
@@ -399,6 +444,12 @@ private:
             settings.rootNote = juce::jlimit (0, 127, (int) state.getProperty ("rootNote", 60));
             settings.octaveRange = juce::jlimit (1, 4, (int) state.getProperty ("octaveRange", 1));
             settings.restartMode = (RetroMatchSequencer::RestartMode) juce::jlimit (0, 2, (int) state.getProperty ("restartMode", 2));
+            settings.macroDestination = {{ (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 5, (int) state.getProperty ("macroDestination1", 0)),
+                                           (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 5, (int) state.getProperty ("macroDestination2", 0)) }};
+            settings.macroInterpolation = {{ (RetroMatchSequencer::MacroInterpolation) juce::jlimit (0, 3, (int) state.getProperty ("macroInterpolation1", 0)),
+                                              (RetroMatchSequencer::MacroInterpolation) juce::jlimit (0, 3, (int) state.getProperty ("macroInterpolation2", 0)) }};
+            settings.macroLaneRate = {{ juce::jlimit (0.25f, 4.0f, (float) state.getProperty ("macroRate1", 1.0f)),
+                                        juce::jlimit (0.25f, 4.0f, (float) state.getProperty ("macroRate2", 1.0f)) }};
             for (const auto child : state)
             {
                 if (! child.hasType ("STEP")) continue;
@@ -420,10 +471,14 @@ private:
         rootNote.setSelectedId (settings.rootNote + 1, juce::dontSendNotification);
         octaveRange.setSelectedId (settings.octaveRange, juce::dontSendNotification); restartMode.setSelectedId ((int) settings.restartMode + 1, juce::dontSendNotification);
         bpm.setValue (settings.internalBpm, juce::dontSendNotification); length.setValue (settings.length, juce::dontSendNotification); swing.setValue (settings.swing * 100.0f, juce::dontSendNotification);
+        macroDestination1.setSelectedId ((int) settings.macroDestination[0] + 1, juce::dontSendNotification); macroDestination2.setSelectedId ((int) settings.macroDestination[1] + 1, juce::dontSendNotification);
+        macroInterpolation1.setSelectedId ((int) settings.macroInterpolation[0] + 1, juce::dontSendNotification); macroInterpolation2.setSelectedId ((int) settings.macroInterpolation[1] + 1, juce::dontSendNotification);
+        macroRate1.setValue (settings.macroLaneRate[0], juce::dontSendNotification); macroRate2.setValue (settings.macroLaneRate[1], juce::dontSendNotification);
         updating = false;
         refreshModeControls();
         proc.melodyTransport.setSequencerSettings (settings);
         for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i) proc.melodyTransport.setSequencerStep (i, stepState[(size_t) i]);
+        observedState = proc.apvts.state.getChildWithName ("SEQUENCER");
         refreshStepEditor(); refreshStepButtons();
     }
 
@@ -436,6 +491,9 @@ private:
         state.setProperty ("swing", settings.swing, nullptr); state.setProperty ("latch", settings.latch, nullptr);
         state.setProperty ("rootNote", settings.rootNote, nullptr); state.setProperty ("octaveRange", settings.octaveRange, nullptr);
         state.setProperty ("restartMode", (int) settings.restartMode, nullptr);
+        state.setProperty ("macroDestination1", (int) settings.macroDestination[0], nullptr); state.setProperty ("macroDestination2", (int) settings.macroDestination[1], nullptr);
+        state.setProperty ("macroInterpolation1", (int) settings.macroInterpolation[0], nullptr); state.setProperty ("macroInterpolation2", (int) settings.macroInterpolation[1], nullptr);
+        state.setProperty ("macroRate1", settings.macroLaneRate[0], nullptr); state.setProperty ("macroRate2", settings.macroLaneRate[1], nullptr);
         for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i)
         {
             const auto& step = stepState[(size_t) i];
@@ -451,8 +509,47 @@ private:
         proc.apvts.state.appendChild (state, nullptr);
     }
 
+    void choosePattern (bool saving)
+    {
+        const auto directory = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("RetroMatch/Patterns");
+        if (saving && directory.createDirectory().failed()) return;
+        patternChooser = std::make_unique<juce::FileChooser> (saving ? "Save RetroMatch pattern" : "Load RetroMatch pattern",
+                                                               directory.getChildFile ("My Pattern.xml"), "*.xml");
+        juce::Component::SafePointer<SequencerPanel> safe (this);
+        const int flags = saving ? juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting
+                                 : juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+        patternChooser->launchAsync (flags, [safe, saving] (const juce::FileChooser& chooser)
+        {
+            if (! safe || chooser.getResult() == juce::File()) return;
+            const auto file = chooser.getResult().withFileExtension ("xml");
+            if (saving)
+            {
+                auto state = safe->proc.apvts.state.getChildWithName ("SEQUENCER");
+                if (state.isValid())
+                    if (auto xml = state.createXml()) xml->writeTo (file);
+            }
+            else if (auto xml = juce::XmlDocument::parse (file))
+            {
+                const auto loaded = juce::ValueTree::fromXml (*xml);
+                if (loaded.hasType ("SEQUENCER"))
+                {
+                    auto previous = safe->proc.apvts.state.getChildWithName ("SEQUENCER");
+                    if (previous.isValid()) safe->proc.apvts.state.removeChild (previous, nullptr);
+                    safe->proc.apvts.state.appendChild (loaded, nullptr);
+                    safe->loadState();
+                }
+            }
+        });
+    }
+
     void timerCallback() override
     {
+        const auto currentState = proc.apvts.state.getChildWithName ("SEQUENCER");
+        if (currentState != observedState)
+        {
+            loadState();
+            return;
+        }
         const int current = proc.melodyTransport.getSequencerCurrentStep();
         if (current != lastPlayStep)
         {

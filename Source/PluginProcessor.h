@@ -243,8 +243,13 @@ public:
     void captureMagicOrigin();
     bool restoreMagicOrigin();
     bool hasMagicOrigin() const noexcept { return magicOriginSnapshot.isValid(); }
+    bool hasMagicPreview() const noexcept { return magicPreviewParameters.has_value(); }
+    bool keepMagicPreview();
+    bool applyMagicPreview();
+    void discardMagicPreview() noexcept { magicPreviewParameters.reset(); magicPreviewName.clear(); }
     float getMagicOriginDistance() const;
     juce::StringArray getMagicChangedDimensions() const;
+    juce::String getMagicRenderReport() const;
     int getMagicBranchCount() const noexcept { return (int) magicBranchHistory.size(); }
     bool restoreMagicBranch (int index);
     juce::String getPresetName() const { return apvts.state.getProperty ("patchName", "Custom patch").toString(); }
@@ -254,6 +259,7 @@ public:
     void noteOnFromEditor (int midiNote, float velocity);
     void noteOffFromEditor (int midiNote, float velocity = 0.0f);
     void allEditorNotesOff();
+    float getBrowserAuditionGain (const VoiceParameters&) const;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
@@ -300,7 +306,12 @@ private:
     std::atomic<std::shared_ptr<const VoiceParameters>> editingMain;
     juce::ValueTree editingMainSnapshot;
     juce::ValueTree magicOriginSnapshot;
+    PatchGraph::Document magicOriginGraph;
+    bool magicOriginGraphValid = false;
     std::vector<juce::ValueTree> magicBranchHistory;
+    std::vector<PatchGraph::Document> magicBranchGraphs;
+    std::optional<VoiceParameters> magicPreviewParameters;
+    juce::String magicPreviewName;
     juce::ValueTree snapshotCurrent() const;
     juce::ValueTree canonicalState();
     void applyEditingSnapshot (const juce::ValueTree&);

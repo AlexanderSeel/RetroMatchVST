@@ -6,7 +6,7 @@ This plan is ordered by implementation dependency and release risk. Duplicate re
 
 ## Status legend
 
-- [x] implemented and present on `main`
+- [x] implemented and present in the current source worktree
 - [~] partially implemented / requires closure
 - [ ] planned
 
@@ -20,7 +20,7 @@ This plan is ordered by implementation dependency and release risk. Duplicate re
 - [x] Version and validate serialized graph/patch state; malformed optional state must degrade safely.
 - [x] Preserve immutable match baselines for A/B, Compare and candidate history.
 - [ ] Any future feedback-capable routing must own delay/state explicitly, validate cycles and bound gain.
-- [~] Generated Match/Gold/AI state now passes recursive finite-parameter, bounded-topology, scalar-range and embedded-wavetable compatibility checks before application, alongside render safety telemetry; `.rmsynth` import/export now preflights embedded tables and runs recursive parameter/graph validation, while archive-level release-pack validation remains open.
+- [~] Generated Match/Gold/AI state now passes recursive finite-parameter, bounded-topology, scalar-range and embedded-wavetable compatibility checks before application, alongside render safety telemetry; `.rmsynth` import/export and `.rmpack` archive operations now preflight embedded tables and run recursive parameter/graph/ZIP validation, while broader release-pack compatibility fixtures remain open.
 
 ### Global release gate
 
@@ -138,14 +138,14 @@ The existing Patch Map foundation is usable; finish a small set of deterministic
 
 ## C2. Finish routing v2
 
-- [~] Editable audio fan-in reorder is now validated and serialized through the patch model; explicit pre/post processing-node ownership and UI actions remain open.
+- [~] Editable audio fan-in reorder is validated and serialized through the patch model, with insertion/declared-latency regression coverage; explicit pre/post processing-node ownership and UI actions remain open.
 - [~] Centralize bounded Gain/Pan/Width operations in allocation-free routing utilities; layer combine, parallel branch mixing and stereo width now use shared allocation-free primitives with non-finite input containment, while generalized graph Split/Merge node execution remains open.
 - [~] Added allocation-free normalized parallel branch mixing with deterministic compensation; bounded Parallel Core Gain and Parallel FX Gain controls now drive the supported split, while per-node branch controls remain open.
-- [~] Preserve/compute latency across routed oversampled/nonlinear nodes; patch nodes now expose validated editing, persist bounded declared latency and DspRouting compilation computes deterministic maximum audio-path latency, while runtime delay application for arbitrary future graph processors remains open.
+- [~] Preserve/compute latency across routed oversampled/nonlinear nodes; patch nodes expose validated editing, persist bounded declared latency and DspRouting compilation computes deterministic maximum audio-path latency, with graph insertion regression coverage; runtime delay application for arbitrary future graph processors remains open.
 - [~] Add allocation-free atomic peak meters for the main bus and every rendered companion branch, plus Patch Map instance solo/audition; solo source state now persists through the validated graph and atomic routing plan, while richer audition presentation remains open.
-- [~] Add validated model-level insert, merge, disconnect/restore edge and node-removal actions; generic node context exposes bounded declared-latency presets and undoable remove, while editable audio edges now expose utility insertion, compatible fan-in merge and disconnect-with-undo restoration.
+- [x] Add validated model-level insert, merge, disconnect/restore edge and node-removal actions; generic node context exposes bounded declared-latency presets and undoable remove, while single-path node removal now restores a validated audio bypass and editable audio edges expose utility insertion, compatible fan-in merge and disconnect-with-undo restoration.
 - [x] Add persistent node-lock state and locked-position UI across Patch Map node types, plus modifier-click multi-select/group movement; minimap remains deferred unless eight-instance graphs prove it useful.
-- [~] Deterministic 4096-iteration atomic routing publication stress coverage now exercises valid order/parallel/solo edits; concurrent graph edits against an actively rendering native plug-in remain open.
+- [x] Deterministic 4096-iteration atomic routing publication stress coverage exercises valid order/parallel/solo edits, including concurrent graph publication against active readers.
 
 ## C3. Resynthesis integration
 
@@ -179,24 +179,24 @@ Candidate A/B/C reproduces the exact rack that was scored, including layers/glob
 
 ## E1. Versioned pack format
 
-- [~] Add ZIP-compatible `.rmpack` with manifest: typed stable pack/patch IDs, version, author, description, tags/categories, minimum schema/plugin version and asset list; a deterministic store-only ZIP writer and non-destructive central-directory/CRC validator now cover archive emission, while archive extraction/import remains open.
-- [ ] Reuse versioned `.rmsynth` patch data and include only required owned assets.
-- [~] Validate paths/sizes; reusable pack-safety helpers now provide a typed manifest model, validated `manifest.json` read/write, bounded metadata/tag lists with unique patch IDs, SHA-256 format and root-aware asset-integrity verification, path traversal protection, asset limits and library-root containment, with dedicated round-trip/tamper/traversal regressions; ZIP archive integration remains open.
-- [~] Pack safety now exposes deterministic Ask / Keep / Replace / Import as Copy conflict resolution and unique copy-ID generation; archive/library UI integration remains open.
+- [x] Add ZIP-compatible `.rmpack` with manifest: typed stable pack/patch IDs, version, author, description, tags/categories, minimum schema/plugin version and asset list; deterministic store-only ZIP emission, bounded extraction, non-destructive central-directory/CRC validation and Presets UI export/import are implemented.
+- [x] Reuse versioned `.rmsynth` patch data as the pack payload; embedded reference/user wavetables remain inside the owned patch state and no unrelated files are included.
+- [x] Validate paths/sizes; reusable pack-safety helpers provide a typed manifest model, validated `manifest.json` read/write, bounded metadata/tag lists with unique patch IDs, SHA-256 format and root-aware asset-integrity verification, path traversal protection, asset limits, library-root containment and bounded ZIP round-trip extraction with dedicated regressions.
+- [x] Pack safety exposes deterministic Ask / Keep / Replace / Import as Copy conflict resolution and unique copy-ID generation; archive export/import now persists validated patches into the user library, presents collision policy choices, and reports imported/kept/failed totals.
 
 ## E2. Library operations
 
-- [ ] Import/export a complete pack, export all patches, and bulk-import `.rmsynth` folders.
-- [ ] Report imported/updated/skipped/failed counts.
-- [ ] Keep factory presets read-only; edits save as user copies.
-- [ ] Search/filter by name, category, tags, author, favorite and sound character.
+- [x] Import/export a complete pack, export all user patches, and bulk-import `.rmsynth` folders through the Presets page.
+- [x] Report bulk-import totals and report pack import/export failures in the Presets page.
+- [x] Keep factory presets read-only; edits save as user copies through the user preset folder.
+- [x] Search/filter by name, category, tags, author, favorite and sound character.
 
 ## E3. Factory content target
 
 - [ ] Target **300+ reviewed, genuinely distinct** presets across keys, mallets/bells, strings, pads/textures, leads/plucks, bass, percussion, cinematic atmospheres and sequences/arps.
-- [ ] Store category/subcategory/tags, recommended octave/range and useful macro labels.
-- [ ] Loudness-normalize browsing to a bounded musical range.
-- [ ] Safety-render every factory patch across representative notes/velocities; reject non-finite/severely clipped output and missing assets.
+- [x] Store category/subcategory/tags, recommended octave/range and useful macro labels for every factory entry; the browser searches tags and author metadata.
+- [~] Preset-page audition now uses a bounded short offline RMS/peak estimate to normalize the trigger level without modifying stored patch gain; final loudness-normalized browsing targets and subjective content review remain open.
+- [x] Safety-render every factory patch across representative notes/velocities; factory-library regressions reject non-finite/severely clipped output and missing assets.
 
 ---
 
@@ -212,15 +212,15 @@ Candidate A/B/C reproduces the exact rack that was scored, including layers/glob
 ## F2. Step and modulation data
 
 - [x] Per-step pitch/degree, octave, velocity/accent, gate, rest, tie, probability, ratchet, bounded micro-timing, optional glide and macro values.
-- [~] Two per-step macro lanes and independent modulation probability are bounded, editable and persisted, with regression coverage proving neutral macro fallback does not suppress notes; destination binding and Hold/Linear/Smooth/bounded-random interpolation remain open.
-- [~] Per-step note probability and independent modulation probability are implemented and persisted; polymetric lane rate multipliers remain open.
+- [x] Two per-step macro lanes and independent modulation probability are bounded, editable and persisted, with regression coverage proving neutral macro fallback does not suppress notes; destinations bind to the live voice parameter frame and support Hold/Linear/Smooth/bounded-random interpolation.
+- [x] Per-step note probability and independent modulation probability are implemented and persisted; macro lane rate multipliers are bounded and polymetric.
 
 ## F3. UI/persistence/content
 
-- [~] Sequencer UI exposes the active pattern and editing controls; a large paged/zoomable editor with dedicated tie/probability/ratchet lanes remains open.
+- [x] Sequencer UI exposes the active pattern and editing controls as a dedicated top-level editor tab, with 16-step paging, zoom control and dedicated probability/ratchet/macro controls.
 - [x] Copy/paste/duplicate/rotate/reverse/invert/constrained-randomize and bounded humanize transforms are implemented.
-- [~] Curated reusable pattern library independent of synth presets now provides eight bounded starting patterns and a sequencer UI loader; user-authored pattern files and larger browser remain open.
-- [~] Active sequence state is persisted with the plug-in state; reusable pattern files and `.rmpack` inclusion remain open.
+- [x] Curated reusable pattern library independent of synth presets now provides twelve bounded starting patterns and a sequencer UI loader; the top-level tab, Sequence-family factory demonstrations and user-authored XML pattern files are present.
+- [x] Active sequence state, macro destinations/interpolation/rates and all step data are persisted with the plug-in state; standalone pattern XML save/load and `.rmpack` inclusion through the self-contained `.rmsynth` asset are implemented.
 - [x] MIDI output remains deferred while the internal sequencer transport is stabilized.
 
 ---
@@ -246,11 +246,11 @@ Each direction must map to an explicit bounded set of synthesis/routing dimensio
 
 ## G3. Identity preservation and safety
 
-- [~] Identity/intensity control now scales directed mutation depth and remains bounded to 0..1; the editor exposes subtle/medium/strong/maximum choices, and the processor exposes bounded normalized distance from the immutable Magic origin, while rendered branch-history reporting remains open.
-- [~] Directed Magic variations now reuse the configured pitch/oscillator/FM/envelope/filter/modulation/FX locks after mutation; lifecycle and Patch Map routing locks remain separate follow-up work.
-- [~] Processor captures a Magic origin on the first directed variation, exposes explicit capture/restore actions, keeps and persists a bounded 16-entry branch history with backward-walking restore APIs, and persists that origin through plug-in/preset state.
-- [~] Directed variations are finite/range-clamped, preserve the loaded reference lifecycle, and the processor renders/evaluates them before applying; no-reference patches now receive a bounded offline safety audition, while KEEP/APPLY remains open.
-- [~] Directed Magic labels now include bounded changed-dimension reporting and clear Match state; processor exposes origin-relative dimensions/distance and the editor now provides origin/branch restore controls with status-line diff reporting, while a dedicated audition/diff panel remains open.
+- [x] Identity/intensity control scales directed mutation depth and remains bounded to 0..1; the editor exposes subtle/medium/strong/maximum choices, and the processor exposes bounded normalized distance plus rendered RMS/peak/safety reporting through the dedicated audition/diff panel.
+- [x] Directed Magic variations reuse the configured pitch/oscillator/FM/envelope/filter/modulation/FX locks after mutation, preserve the loaded reference lifecycle and re-publish the authored Patch Map topology.
+- [x] Processor captures a Magic origin on the first directed variation, exposes explicit capture/restore actions, keeps and persists a bounded 16-entry branch history with backward-walking restore APIs, and persists the origin plus per-branch routing topology through plug-in/preset state.
+- [x] Directed variations are finite/range-clamped, are rendered/evaluated before applying, and no-reference patches receive a bounded offline safety audition; non-destructive live previews provide explicit KEEP or APPLY commit actions.
+- [x] Directed Magic labels include bounded changed-dimension reporting and clear Match state; the editor provides origin/branch restore controls and a dedicated audition/diff panel with rendered status reporting.
 
 ---
 
@@ -259,23 +259,25 @@ Each direction must map to an explicit bounded set of synthesis/routing dimensio
 - [ ] Native Windows VST3 + Standalone smoke/validation.
 - [ ] Native macOS AU + VST3 + Standalone smoke/validation; keep JUCE-required ad-hoc VST3 signing separate from Xcode-managed signing policy.
 - [ ] pluginval/auval coverage where practical.
-- [ ] Session/preset migration fixtures for released schemas.
-- [ ] Stress/soak tests for graph edits, candidate background work, preset browsing and sequencer transitions.
+- [~] The optional UI preview is registered with CTest and includes a legacy pre-module preset fixture verifying migration/reset of newer rack state; additional released-schema fixtures remain open.
+- [~] The optional editor preview now performs a 24-cycle factory/sequence load, note-render, finite-audio and state-round-trip transition soak; longer graph-edit/background-worker/preset-browser host soaks remain open.
 - [~] Live output and OfflineRenderer now have final non-finite firewalls; live invalid-sample counts are exposed atomically, and smoke/factory plus full-rack regressions now assert zero non-finite samples and bounded clipping/headroom, while native release validation remains open.
 - [ ] Final listening pass on reference fixtures and representative factory content.
 
 ---
 
-# Implementation order from current `main`
+# Current status and remaining closure gates
 
-1. **Close Phase A:** deterministic fixture corpus -> telemetry -> gain/headroom regressions -> perceptual identity constraints -> native Windows/macOS green.
-2. **Close Phase B:** remaining Compare rendered-direction/reset/level-invariance tests and concise semantics help.
-3. **Close GOLD integrity:** exact full-rack scoring, depth/headroom and offline/live equivalence.
-4. **Finish Patch Map routing v2:** only safe deterministic utilities, latency and stress coverage.
-5. **Preset/pack infrastructure**, then build and safety-render the factory library.
-6. **Sequencer/arp** on stable engine/persistence foundations.
-7. **Magic** as explicit creative evolution using the already-proven identity/safety infrastructure.
-8. **Release hardening** stays continuous and becomes the final shipping gate.
+The implementation phases are no longer a linear “not started” queue. A/B core behavior, the sequencer core/UI, and the Patch Map foundation are implemented and covered by focused source regressions. Remaining items are grouped by the work required to close them:
+
+1. **Release validation:** native Windows/macOS builds, pluginval/auval, host/session recall and the fixture listening review.
+2. **Patch Map:** generalized arbitrary graph processor execution and richer routing audition presentation; the supported serial/parallel layer paths, graph validation, editing, persistence, latency declarations and atomic publication are implemented.
+3. **GOLD:** exact-rack measured-result review and broader bounded rack evolution verification.
+4. **Packs/library:** final loudness-normalized browsing targets and reviewed-content signoff remain; bounded audition compensation, factory read-only/user-copy behavior, pack assets, archive import/export, collision choices, bulk operations, metadata and safety rendering are implemented.
+5. **Sequencer content:** the real-time engine, macro destinations/interpolation/rates, top-level UI, twelve reusable patterns, factory demonstrations, XML pattern files and pack inclusion are implemented.
+6. **Magic:** semantic variations, lifecycle/lock enforcement, routing topology preservation, serialized origin/branch routing history, rendered telemetry and explicit KEEP/APPLY preview commits are implemented with a dedicated audition/diff panel.
+
+Items marked `[ ]` or `[~]` below are deliberate remaining gates, not claims that the feature is complete.
 
 ## Definition of done for new work
 

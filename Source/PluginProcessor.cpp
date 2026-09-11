@@ -856,7 +856,34 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
 
     const auto mode = getReferenceAuditionMode();
     engine.setRoutingPlan (routingPlanPublisher.snapshot());
-    engine.setParameters (readParams());
+    auto renderParameters = magicPreviewParameters.has_value() ? *magicPreviewParameters : readParams();
+    const auto macroValues = melodyTransport.getSequencerMacroValues();
+    const auto macroDestinations = melodyTransport.getSequencerMacroDestinations();
+    for (int lane = 0; lane < RetroMatchSequencer::modulationLaneCount; ++lane)
+    {
+        const float value = juce::jlimit (0.0f, 1.0f, macroValues[(size_t) lane]);
+        switch (macroDestinations[(size_t) lane])
+        {
+            case RetroMatchSequencer::MacroDestination::cutoff:
+                renderParameters.cutoff *= std::pow (2.0f, (value - 0.5f) * 4.0f);
+                break;
+            case RetroMatchSequencer::MacroDestination::resonance:
+                renderParameters.resonance = juce::jlimit (0.0f, 1.0f, value);
+                break;
+            case RetroMatchSequencer::MacroDestination::pitch:
+                renderParameters.masterTuneCents += (value - 0.5f) * 2400.0f;
+                break;
+            case RetroMatchSequencer::MacroDestination::amplitude:
+                renderParameters.mainLayerGain *= value * 2.0f;
+                break;
+            case RetroMatchSequencer::MacroDestination::wavetablePosition:
+                renderParameters.wavetablePosition = value;
+                break;
+            case RetroMatchSequencer::MacroDestination::none:
+                break;
+        }
+    }
+    engine.setParameters (renderParameters);
     engine.render (b, renderMidi);
 
     // Whole-synth global bus. This happens after SynthEngine has rendered and combined
@@ -1344,6 +1371,33 @@ void RetroMatchSynthAudioProcessor::noteOnFromEditor (int midiNote, float veloci
     editorMidi.addEvent (juce::MidiMessage::noteOn (1, juce::jlimit (0, 127, midiNote), juce::jlimit (0.0f, 1.0f, velocity)), 0);
 }
 
+float RetroMatchSynthAudioProcessor::getBrowserAuditionGain (const VoiceParameters& parameters) const
+{
+    // Browser audition compensation is transient UI state. It never changes
+    // the patch's stored output gain or the host-visible master parameter.
+    // Factory/user browser selection can change the patch before its authored
+    // Patch Map is rebuilt. Measure the selected patch's default rack here so
+    // a previous patch's solo/order/parallel plan cannot skew compensation.
+    const auto rendered = OfflineRenderer::renderPatch (parameters, 44100.0, 0.45f, 261.6256f, 256,
+                                                         DspRouting::Plan {}, false);
+    const int samples = rendered.getNumSamples();
+    if (samples <= 0) return 1.0f;
+
+    float rms = 0.0f;
+    float peak = 0.0f;
+    for (int channel = 0; channel < rendered.getNumChannels(); ++channel)
+    {
+        const auto* data = rendered.getReadPointer (channel);
+        rms = juce::jmax (rms, rendered.getRMSLevel (channel, 0, samples));
+        for (int sample = 0; sample < samples; ++sample) peak = juce::jmax (peak, std::abs (data[sample]));
+    }
+    if (! std::isfinite (rms) || ! std::isfinite (peak) || rms <= 1.0e-5f) return 1.0f;
+
+    float gain = juce::jlimit (0.25f, 2.0f, 0.18f / rms);
+    if (peak * gain > 0.72f) gain = 0.72f / peak;
+    return juce::jlimit (0.25f, 2.0f, gain);
+}
+
 void RetroMatchSynthAudioProcessor::noteOffFromEditor (int midiNote, float velocity)
 {
     const juce::ScopedLock lock (editorMidiLock);
@@ -1359,12 +1413,9 @@ void RetroMatchSynthAudioProcessor::allEditorNotesOff()
 
 void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
 {
-    if (! MatchSafetyPolicy::compatible (result.params))
-        return;
-    // Results with a populated safety score were rendered candidates. Never
-    // apply one that failed telemetry; hand-authored/live snapshots use the
-    // sentinel score and remain governed by parameter compatibility alone.
-    if (result.technicalSafetyScore >= 0.0f && ! result.technicallySafe)
+    // A normal voice may be a hand-authored snapshot, but a populated result
+    // must carry a complete measured safety/similarity payload.
+    if (! isMeasuredResultSafe (result, false))
         return;
 
     auto set = [this] (const juce::String& id, float x)
@@ -1460,9 +1511,7 @@ void RetroMatchSynthAudioProcessor::applyGeneratedRack (const MatchResult& mainR
 {
     // Validate the complete rack before touching APVTS or the stored layer bank.
     // Gold must never leave a half-applied main/layer combination behind.
-    if (! MatchSafetyPolicy::compatible (mainResult.params))
-        return;
-    if (mainResult.technicalSafetyScore >= 0.0f && ! mainResult.technicallySafe)
+    if (! isMeasuredResultSafe (mainResult, mainResult.fullRackScore))
         return;
 
     selectEditingLayer (-1);
@@ -1893,11 +1942,58 @@ void RetroMatchSynthAudioProcessor::applyPresetParameters (const VoiceParameters
 void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
 {
     if (! juce::isPositiveAndBelow (index, (int) factoryPresetCatalog.size())) return;
+    discardMagicPreview();
     applyPresetParameters (makeFactoryPreset (index), factoryPresetCatalog[(size_t) index].name);
+
+    if (factoryPresetCatalog[(size_t) index].category != "Sequence") return;
+
+    auto settings = melodyTransport.getSequencerSettings();
+    settings.enabled = true;
+    settings.clockSource = RetroMatchSequencer::ClockSource::internal;
+    settings.mode = RetroMatchSequencer::Mode::pattern;
+    settings.division = RetroMatchSequencer::Division::sixteenth;
+    settings.length = 16;
+    settings.internalBpm = 112.0 + (index % 5) * 6.0;
+    settings.macroDestination = {{ RetroMatchSequencer::MacroDestination::cutoff, RetroMatchSequencer::MacroDestination::wavetablePosition }};
+    settings.macroInterpolation = {{ RetroMatchSequencer::MacroInterpolation::smooth, RetroMatchSequencer::MacroInterpolation::linear }};
+    settings.macroLaneRate = {{ 1.0f, 0.5f }};
+    melodyTransport.setSequencerSettings (settings);
+
+    const std::array<int, 16> motif {{ 0, 3, 7, 10, 12, 10, 7, 3, 0, -2, 5, 7, 10, 7, 5, 2 }};
+    juce::ValueTree sequenceState ("SEQUENCER");
+    sequenceState.setProperty ("schema", 2, nullptr); sequenceState.setProperty ("enabled", true, nullptr);
+    sequenceState.setProperty ("mode", (int) settings.mode, nullptr); sequenceState.setProperty ("division", (int) settings.division, nullptr);
+    sequenceState.setProperty ("length", settings.length, nullptr); sequenceState.setProperty ("bpm", settings.internalBpm, nullptr);
+    sequenceState.setProperty ("macroDestination1", (int) settings.macroDestination[0], nullptr); sequenceState.setProperty ("macroDestination2", (int) settings.macroDestination[1], nullptr);
+    sequenceState.setProperty ("macroInterpolation1", (int) settings.macroInterpolation[0], nullptr); sequenceState.setProperty ("macroInterpolation2", (int) settings.macroInterpolation[1], nullptr);
+    sequenceState.setProperty ("macroRate1", settings.macroLaneRate[0], nullptr); sequenceState.setProperty ("macroRate2", settings.macroLaneRate[1], nullptr);
+    for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i)
+    {
+        RetroMatchSequencer::Step step;
+        step.rest = i >= settings.length;
+        step.semitone = motif[(size_t) (i % motif.size())];
+        step.octave = (i == 4 || i == 12) ? 1 : 0;
+        step.velocity = 0.72f + (i % 4 == 0 ? 0.22f : 0.0f);
+        step.gate = i % 4 == 3 ? 0.55f : 0.82f;
+        step.probability = i % 7 == 6 ? 0.72f : 1.0f;
+        step.ratchet = i % 8 == 7 ? 2 : 1;
+        step.macro = {{ (float) (i % 8) / 7.0f, (float) ((i * 3) % 8) / 7.0f }};
+        melodyTransport.setSequencerStep (i, step);
+        juce::ValueTree child ("STEP");
+        child.setProperty ("index", i, nullptr); child.setProperty ("enabled", step.enabled, nullptr); child.setProperty ("rest", step.rest, nullptr);
+        child.setProperty ("semitone", step.semitone, nullptr); child.setProperty ("octave", step.octave, nullptr); child.setProperty ("velocity", step.velocity, nullptr);
+        child.setProperty ("gate", step.gate, nullptr); child.setProperty ("probability", step.probability, nullptr); child.setProperty ("modulationProbability", step.modulationProbability, nullptr);
+        child.setProperty ("ratchet", step.ratchet, nullptr); child.setProperty ("macro1", step.macro[0], nullptr); child.setProperty ("macro2", step.macro[1], nullptr);
+        sequenceState.appendChild (child, nullptr);
+    }
+    auto previous = apvts.state.getChildWithName ("SEQUENCER");
+    if (previous.isValid()) apvts.state.removeChild (previous, nullptr);
+    apvts.state.appendChild (sequenceState, nullptr);
 }
 
 void RetroMatchSynthAudioProcessor::randomizePreset()
 {
+    discardMagicPreview();
     auto& random = juce::Random::getSystemRandom(); const auto seed = random.nextInt64();
     const int family = random.nextInt (10);
     const int variation = 5 + random.nextInt (5);
@@ -1908,10 +2004,47 @@ void RetroMatchSynthAudioProcessor::randomizePreset()
     applyPresetParameters (patch, "Designed / " + juce::String (factoryPresetCatalog[(size_t) presetIndex].name) + " / " + juce::String::toHexString (seed).substring (0, 6));
 }
 
+bool isMeasuredResultSafe (const MatchResult& result, bool requireFullRack) noexcept
+{
+    if (! MatchSafetyPolicy::compatible (result.params)) return false;
+    if (result.technicalSafetyScore < 0.0f) return ! requireFullRack;
+    if (! result.technicallySafe || ! result.renderTelemetry.isTechnicallySafe()
+        || ! std::isfinite (result.technicalSafetyScore)
+        || result.technicalSafetyScore < 0.0f || result.technicalSafetyScore > 1.0f
+        || ! std::isfinite (result.similarity.total)
+        || result.similarity.total < 0.0f || result.similarity.total > 1.0f
+        || result.candidateFeatures.duration <= 0.0f
+        || ! std::isfinite (result.candidateFeatures.duration))
+        return false;
+
+    if (! requireFullRack) return true;
+    if (! result.fullRackScore || result.complexity < 0 || result.complexity > 3)
+        return false;
+
+    bool hasLayer = false;
+    for (const auto& layer : result.params.layers) hasLayer |= layer != nullptr;
+    return hasLayer;
+}
+
 bool RetroMatchSynthAudioProcessor::applyDirectedVariation (VariationDirection direction, float intensity, int64 seed)
 {
+    // Starting another variation implicitly accepts the currently auditioned
+    // branch as the new working source; KEEP/APPLY remain available when the
+    // user wants an explicit commit boundary.
+    if (magicPreviewParameters.has_value())
+    {
+        applyPresetParameters (*magicPreviewParameters, magicPreviewName);
+        magicPreviewParameters.reset();
+        magicPreviewName.clear();
+    }
     const auto source = readParams();
-    if (! magicOriginSnapshot.isValid()) magicOriginSnapshot = snapshotCurrent();
+    if (! magicOriginSnapshot.isValid())
+    {
+        magicOriginSnapshot = snapshotCurrent();
+        magicOriginGraph = getPatchGraphDocument();
+        magicOriginGraphValid = ! magicOriginGraph.nodes.empty();
+    }
+    const auto preservedGraph = getPatchGraphDocument();
     auto variant = SoundMatcher::makeDirectedVariation (source, direction, seed, intensity, matchSettings);
     if (currentFeatures)
         SoundMatcher::enforceReferenceLifecycle (*currentFeatures, variant);
@@ -1938,8 +2071,15 @@ bool RetroMatchSynthAudioProcessor::applyDirectedVariation (VariationDirection d
             return false;
     }
 
-    magicBranchHistory.push_back (snapshotCurrent());
-    if (magicBranchHistory.size() > 16) magicBranchHistory.erase (magicBranchHistory.begin());
+    auto branchSnapshot = snapshotCurrent();
+    if (! preservedGraph.nodes.empty()) branchSnapshot.appendChild (preservedGraph.toValueTree(), nullptr);
+    magicBranchHistory.push_back (branchSnapshot);
+    magicBranchGraphs.push_back (preservedGraph);
+    if (magicBranchHistory.size() > 16)
+    {
+        magicBranchHistory.erase (magicBranchHistory.begin());
+        magicBranchGraphs.erase (magicBranchGraphs.begin());
+    }
     static constexpr const char* names[] {
         "Cinematic", "Atmospheric", "Organic", "Orchestral", "Staccato", "Percussive",
         "Techno", "Warm Analog", "Dark", "Bright", "Wide", "Intimate", "Rhythmic",
@@ -1947,36 +2087,87 @@ bool RetroMatchSynthAudioProcessor::applyDirectedVariation (VariationDirection d
     };
     const auto index = juce::jlimit (0, (int) std::size (names) - 1, (int) direction);
     const auto changed = SoundMatcher::changedVariationDimensions (source, variant);
-    applyPresetParameters (variant, "Magic / " + juce::String (names[index]) + " / " + changed.joinIntoString (", "));
+    magicPreviewParameters = variant;
+    magicPreviewName = "Magic / " + juce::String (names[index]) + " / " + changed.joinIntoString (", ");
+    // Directed Magic changes synthesis dimensions only. Re-publish the exact
+    // authored routing graph after applying the variant so graph locks and
+    // serial/parallel topology cannot be mutated as a side effect.
+    setPatchGraphDocument (preservedGraph);
     currentCandidateFeatures.reset();
     lastMatch = {};
     return true;
 }
 
+bool RetroMatchSynthAudioProcessor::keepMagicPreview()
+{
+    if (! magicPreviewParameters.has_value()) return false;
+    applyPresetParameters (*magicPreviewParameters, magicPreviewName);
+    magicPreviewParameters.reset();
+    magicPreviewName.clear();
+    return true;
+}
+
+bool RetroMatchSynthAudioProcessor::applyMagicPreview()
+{
+    if (! keepMagicPreview()) return false;
+    captureMagicOrigin();
+    return true;
+}
+
 void RetroMatchSynthAudioProcessor::captureMagicOrigin()
 {
+    discardMagicPreview();
     magicOriginSnapshot = snapshotCurrent();
+    magicOriginGraph = getPatchGraphDocument();
+    magicOriginGraphValid = ! magicOriginGraph.nodes.empty();
     magicBranchHistory.clear();
+    magicBranchGraphs.clear();
 }
 
 float RetroMatchSynthAudioProcessor::getMagicOriginDistance() const
 {
     if (! magicOriginSnapshot.isValid()) return 0.0f;
-    return SoundMatcher::normalizedVariationDistance (readParams (magicOriginSnapshot, false), readParams ({}, false));
+    const auto current = magicPreviewParameters.has_value() ? *magicPreviewParameters : readParams ({}, false);
+    return SoundMatcher::normalizedVariationDistance (readParams (magicOriginSnapshot, false), current);
 }
 
 juce::StringArray RetroMatchSynthAudioProcessor::getMagicChangedDimensions() const
 {
     if (! magicOriginSnapshot.isValid()) return { "NONE" };
-    return SoundMatcher::changedVariationDimensions (readParams (magicOriginSnapshot, false), readParams ({}, false));
+    const auto current = magicPreviewParameters.has_value() ? *magicPreviewParameters : readParams ({}, false);
+    return SoundMatcher::changedVariationDimensions (readParams (magicOriginSnapshot, false), current);
+}
+
+juce::String RetroMatchSynthAudioProcessor::getMagicRenderReport() const
+{
+    const auto parameters = magicPreviewParameters.has_value() ? *magicPreviewParameters : readParams ({}, false);
+    const auto graph = getPatchGraphDocument();
+    const auto compiled = DspRouting::compile (graph);
+    const auto audio = OfflineRenderer::renderPatch (parameters, 44100.0, 0.65f, 261.6256f, 256,
+                                                      compiled.validation.ok ? compiled.plan : DspRouting::Plan {}, false);
+    const auto telemetry = RenderTelemetry::analyze (audio);
+    return "render RMS " + juce::String (telemetry.rms, 3) + " / peak " + juce::String (telemetry.peak, 3)
+           + " / " + (telemetry.isTechnicallySafe() ? "SAFE" : "UNSAFE");
 }
 
 bool RetroMatchSynthAudioProcessor::restoreMagicBranch (int index)
 {
     if (! juce::isPositiveAndBelow (index, (int) magicBranchHistory.size())) return false;
+    discardMagicPreview();
     const auto restored = magicBranchHistory[(size_t) index];
     magicBranchHistory.erase (magicBranchHistory.begin() + index, magicBranchHistory.end());
-    applyEditingSnapshot (restored);
+    if (index < (int) magicBranchGraphs.size())
+    {
+        const auto restoredGraph = magicBranchGraphs[(size_t) index];
+        magicBranchGraphs.erase (magicBranchGraphs.begin() + index, magicBranchGraphs.end());
+        applyEditingSnapshot (restored);
+        if (! restoredGraph.nodes.empty()) setPatchGraphDocument (restoredGraph);
+    }
+    else
+    {
+        magicBranchGraphs.clear();
+        applyEditingSnapshot (restored);
+    }
     lastMatch = {};
     currentCandidateFeatures.reset();
     return true;
@@ -1985,7 +2176,9 @@ bool RetroMatchSynthAudioProcessor::restoreMagicBranch (int index)
 bool RetroMatchSynthAudioProcessor::restoreMagicOrigin()
 {
     if (! magicOriginSnapshot.isValid()) return false;
+    discardMagicPreview();
     applyEditingSnapshot (magicOriginSnapshot);
+    if (magicOriginGraphValid) setPatchGraphDocument (magicOriginGraph);
     lastMatch = {};
     currentCandidateFeatures.reset();
     return true;
@@ -2035,6 +2228,7 @@ bool RetroMatchSynthAudioProcessor::savePreset (const juce::File& file)
     {
         juce::ValueTree origin ("MAGIC_ORIGIN");
         origin.appendChild (magicOriginSnapshot.createCopy(), nullptr);
+        if (magicOriginGraphValid) origin.appendChild (magicOriginGraph.toValueTree(), nullptr);
         state.appendChild (origin, nullptr);
     }
     if (! magicBranchHistory.empty())
@@ -2073,6 +2267,7 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
     if (! MatchSafetyPolicy::compatibleTable (importedReference)
         || ! MatchSafetyPolicy::compatibleTable (importedUser))
         return false;
+    discardMagicPreview();
     melodyTransport.stop();
     const float preservedMaster = apvts.getRawParameterValue ("masterOutputGain")->load();
     const float preservedStrategy = apvts.getRawParameterValue ("resynthStrategy")->load();
@@ -2081,10 +2276,19 @@ bool RetroMatchSynthAudioProcessor::loadPreset (const juce::File& file)
     const auto origin = apvts.state.getChildWithName ("MAGIC_ORIGIN");
     magicOriginSnapshot = origin.isValid() ? origin.getChildWithName ("LAYER")
                                            : apvts.state.getChildWithName ("LAYER");
+    magicOriginGraph = origin.isValid() ? PatchGraph::Document::fromValueTree (origin.getChildWithName ("PATCH_GRAPH")) : PatchGraph::Document {};
+    magicOriginGraphValid = ! magicOriginGraph.nodes.empty() && magicOriginGraph.validate().ok;
     magicBranchHistory.clear();
+    magicBranchGraphs.clear();
     const auto branches = apvts.state.getChildWithName ("MAGIC_BRANCHES");
     for (int i = 0; i < branches.getNumChildren() && magicBranchHistory.size() < 16; ++i)
-        if (branches.getChild (i).hasType ("LAYER")) magicBranchHistory.push_back (branches.getChild (i));
+        if (branches.getChild (i).hasType ("LAYER"))
+        {
+            const auto branch = branches.getChild (i);
+            magicBranchHistory.push_back (branch);
+            const auto graph = PatchGraph::Document::fromValueTree (branch.getChildWithName ("PATCH_GRAPH"));
+            magicBranchGraphs.push_back (graph.validate().ok ? graph : PatchGraph::Document {});
+        }
     auto restoreGlobal = [this] (const char* id, float value)
     {
         if (auto* parameter = apvts.getParameter (id))
@@ -2137,6 +2341,7 @@ void RetroMatchSynthAudioProcessor::getStateInformation (juce::MemoryBlock& d)
     {
         juce::ValueTree origin ("MAGIC_ORIGIN");
         origin.appendChild (magicOriginSnapshot.createCopy(), nullptr);
+        if (magicOriginGraphValid) origin.appendChild (magicOriginGraph.toValueTree(), nullptr);
         state.appendChild (origin, nullptr);
     }
     if (! magicBranchHistory.empty())
@@ -2180,16 +2385,26 @@ void RetroMatchSynthAudioProcessor::setStateInformation (const void* d, int n)
             if (! MatchSafetyPolicy::compatibleTable (importedReference)
                 || ! MatchSafetyPolicy::compatibleTable (importedUser))
                 return;
+            discardMagicPreview();
             melodyTransport.stop();
             lightPalette.store (juce::jlimit (0, 3, xml->getIntAttribute ("lightPalette", 0)));
             apvts.replaceState (stateWithPost10Defaults (*xml));
             const auto origin = apvts.state.getChildWithName ("MAGIC_ORIGIN");
             magicOriginSnapshot = origin.isValid() ? origin.getChildWithName ("LAYER")
                                                    : apvts.state.getChildWithName ("LAYER");
+            magicOriginGraph = origin.isValid() ? PatchGraph::Document::fromValueTree (origin.getChildWithName ("PATCH_GRAPH")) : PatchGraph::Document {};
+            magicOriginGraphValid = ! magicOriginGraph.nodes.empty() && magicOriginGraph.validate().ok;
             magicBranchHistory.clear();
+            magicBranchGraphs.clear();
             const auto branches = apvts.state.getChildWithName ("MAGIC_BRANCHES");
             for (int i = 0; i < branches.getNumChildren() && magicBranchHistory.size() < 16; ++i)
-                if (branches.getChild (i).hasType ("LAYER")) magicBranchHistory.push_back (branches.getChild (i));
+                if (branches.getChild (i).hasType ("LAYER"))
+                {
+                    const auto branch = branches.getChild (i);
+                    magicBranchHistory.push_back (branch);
+                    const auto graph = PatchGraph::Document::fromValueTree (branch.getChildWithName ("PATCH_GRAPH"));
+                    magicBranchGraphs.push_back (graph.validate().ok ? graph : PatchGraph::Document {});
+                }
             restoreLayers();
             rebuildRoutingPlanFromState();
             analysisStartSeconds.store ((float) xml->getDoubleAttribute ("analysisStartSeconds", 0.0));

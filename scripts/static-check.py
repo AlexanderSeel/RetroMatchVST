@@ -58,6 +58,8 @@ if 'Source/UI/RetroMatchEditorV3.cpp' not in cmake or 'Source/AI/AISeedProvider.
     errors.append('CMakeLists.txt must build the workflow-first editor and AI seed provider')
 if 'Source/Reference/ReferenceSamplePlayer.cpp' not in cmake:
     errors.append('CMakeLists.txt must build the reference sample audition player')
+if 'add_test(NAME RetroMatchEditorPreview' not in cmake:
+    errors.append('optional editor/session migration fixture must be registered with CTest')
 
 mseg_path = ROOT / 'Source/Engine/MSEG.h'
 mseg_page_path = ROOT / 'Source/UI/MsegPage.h'
@@ -66,6 +68,11 @@ tempo_sync_path = ROOT / 'Source/Engine/TempoSync.h'
 signal_page_path = ROOT / 'Source/UI/SignalLabPage.h'
 patch_graph_path = ROOT / 'Source/Engine/PatchGraph.h'
 dsp_routing_path = ROOT / 'Source/Engine/DspRoutingPlan.h'
+sequencer_path = ROOT / 'Source/Sequencer/StepSequencer.h'
+pattern_library_path = ROOT / 'Source/Sequencer/PatternLibrary.h'
+pack_safety_path = ROOT / 'Source/Engine/PresetPackSafety.h'
+magic_dialog_path = ROOT / 'Source/UI/MagicAuditionDialog.h'
+editor_preview_path = ROOT / 'Tests/EditorPreview.cpp'
 if not mseg_path.exists(): errors.append('Source/Engine/MSEG.h is missing')
 if not mseg_page_path.exists(): errors.append('Source/UI/MsegPage.h is missing')
 if not user_wavetable_page_path.exists(): errors.append('Source/UI/UserWavetablePage.h is missing')
@@ -73,6 +80,11 @@ if not tempo_sync_path.exists(): errors.append('Source/Engine/TempoSync.h is mis
 if not signal_page_path.exists(): errors.append('Source/UI/SignalLabPage.h is missing')
 if not patch_graph_path.exists(): errors.append('Source/Engine/PatchGraph.h is missing')
 if not dsp_routing_path.exists(): errors.append('Source/Engine/DspRoutingPlan.h is missing')
+if not sequencer_path.exists(): errors.append('Source/Sequencer/StepSequencer.h is missing')
+if not pattern_library_path.exists(): errors.append('Source/Sequencer/PatternLibrary.h is missing')
+if not pack_safety_path.exists(): errors.append('Source/Engine/PresetPackSafety.h is missing')
+if not magic_dialog_path.exists(): errors.append('Source/UI/MagicAuditionDialog.h is missing')
+if not editor_preview_path.exists(): errors.append('Tests/EditorPreview.cpp is missing')
 
 processor = (ROOT / 'Source/PluginProcessor.cpp').read_text(encoding='utf-8')
 processor_h = (ROOT / 'Source/PluginProcessor.h').read_text(encoding='utf-8')
@@ -88,6 +100,11 @@ tempo_sync = tempo_sync_path.read_text(encoding='utf-8') if tempo_sync_path.exis
 signal_page = signal_page_path.read_text(encoding='utf-8') if signal_page_path.exists() else ''
 patch_graph = patch_graph_path.read_text(encoding='utf-8') if patch_graph_path.exists() else ''
 dsp_routing = dsp_routing_path.read_text(encoding='utf-8') if dsp_routing_path.exists() else ''
+sequencer = sequencer_path.read_text(encoding='utf-8') if sequencer_path.exists() else ''
+pattern_library = pattern_library_path.read_text(encoding='utf-8') if pattern_library_path.exists() else ''
+pack_safety = pack_safety_path.read_text(encoding='utf-8') if pack_safety_path.exists() else ''
+magic_dialog = magic_dialog_path.read_text(encoding='utf-8') if magic_dialog_path.exists() else ''
+editor_preview = editor_preview_path.read_text(encoding='utf-8') if editor_preview_path.exists() else ''
 matcher = (ROOT / 'Source/Matching/SoundMatcher.cpp').read_text(encoding='utf-8')
 analyzer = (ROOT / 'Source/Analysis/SampleAnalyzer.cpp').read_text(encoding='utf-8')
 analyzer_h = (ROOT / 'Source/Analysis/SampleAnalyzer.h').read_text(encoding='utf-8')
@@ -138,6 +155,12 @@ required_tokens = {
     'typed persistent patch graph': ['schemaVersion', 'PortType', 'validateConnection', 'wouldCreateAudioCycle', 'topologicalOrder', 'toValueTree', 'fromValueTree', 'modulationSafe'],
     'cable editor v1': ['findEdge', 'replaceEdge', 'removeEdge', 'showReconnectRouteMenu', 'deleteSelectedCable', 'undoCableEdit', 'redoCableEdit', 'KeyPress::deleteKey'],
     'DSP routing compiler v1': ['maxLayerCount', 'layerOrder', 'CompileResult', 'AtomicPlan', 'memory_order_release', 'memory_order_acquire'],
+    'sequencer macro preview plumbing': ['MacroDestination', 'MacroInterpolation', 'macroLaneRate', 'modulationProbability'],
+    'sequencer pattern library': ['patternTemplateCount', 'Euclidean Bloom', 'Polymetric Five'],
+    'validated preset pack workflow': ['validatePackArchive', 'extractPackArchive', 'resolveImportConflict', 'ImportConflictPolicy'],
+    'Magic preview workflow': ['magicPreviewParameters', 'keepMagicPreview', 'applyMagicPreview', 'getMagicRenderReport'],
+    'Magic audition panel': ['KEEP PREVIEW', 'APPLY / NEW ORIGIN', 'MAGIC AUDITION /', 'startTimerHz'],
+    'editor transition soak': ['Deterministic transition soak', 'for (int cycle = 0; cycle < 24', 'getStateInformation', 'validateReleaseState'],
 }
 texts = {
     'processor wavetable parameters': processor,
@@ -179,6 +202,12 @@ texts = {
     'typed persistent patch graph': patch_graph + signal_page + processor_h,
     'cable editor v1': patch_graph + signal_page,
     'DSP routing compiler v1': dsp_routing + engine_h + engine_cpp + processor + processor_h + signal_page,
+    'sequencer macro preview plumbing': sequencer + processor + processor_h,
+    'sequencer pattern library': pattern_library,
+    'validated preset pack workflow': pack_safety + processor + editor_all,
+    'Magic preview workflow': processor + processor_h,
+    'Magic audition panel': magic_dialog + editor_all,
+    'editor transition soak': editor_preview + cmake,
 }
 for name, tokens in required_tokens.items():
     for token in tokens:

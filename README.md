@@ -19,6 +19,14 @@ The result is not a hidden sampler preset: oscillator topology, FM operators, en
 > **Platforms:** Windows 10/11 and macOS  
 > **Development plan:** [`plan.md`](plan.md)
 
+## Implementation status
+
+The current source baseline includes the Phase A/B matching and Compare safety contracts, the validated Patch Map foundation, the sequencer/arpeggiator engine and UI, factory sequence demonstrations, XML pattern files, validated `.rmpack` export/import including bulk user-library operations, a legacy preset migration fixture, and the complete bounded Magic preview/commit workflow. Remaining roadmap entries are explicit closure gates: native release validation, generalized arbitrary-processor graph execution, final GOLD/listening review, larger reviewed factory-content work, and final loudness/content review.
+
+### Validation snapshot
+
+The repository-side checks currently pass: `python scripts/static-check.py`, `git diff --check`, and PowerShell parsing of the Docker/build helpers. The static checker also guards the sequencer macro/pattern plumbing, validated pack workflow, Magic preview/diff integration and optional CTest registration of the editor/session migration and transition-soak fixture. Native CMake/compiler validation is pending on this workstation: no host CMake/MSVC/clang-cl toolchain is installed. The cached `retromatch-source-windows:1.0.0` image is present, but Docker Windows container startup still fails at HCS (`0xc0370106`) before CMake runs, with no reusable container available to resume. These are recorded as release gates in [`plan.md`](plan.md), not reported as passing builds.
+
 ---
 
 ## What makes RetroMatch different
@@ -89,6 +97,22 @@ The large compare view can inspect reference vs resynthesis across waveform/enve
 ### Master gain staging
 
 A dedicated **MASTER OUTPUT** control sits after the complete synth/reference mix so patches with very different internal gain structures can be auditioned and mixed consistently without destroying the patch's own output-gain design.
+
+### Sequencer / arpeggiator
+
+The editor has a dedicated **SEQUENCER** tab for building complete melodic presets. It supports 64 steps, pattern and held-note arpeggiator modes, internal or DAW-synced clocking, swing, ratchets, ties, note probability, modulation probability and per-step micro-timing. Two macro lanes can target cutoff, resonance, pitch, amplitude or wavetable position using Hold, Linear, Smooth or bounded Random interpolation with independent lane rates.
+
+Sequencer state is included in `.rmsynth` plug-in state. The tab includes twelve reusable musical starting patterns, and patterns can also be saved and loaded as XML files. The Sequence factory presets provide playable examples with enabled melodic motion and multiple macro destinations.
+
+The Presets page also exports and imports self-contained `.rmpack` archives. A pack contains a validated manifest and the `.rmsynth` asset, so sequencer patterns and embedded wavetable data travel with the sound. Imports persist validated patches into the user library and offer Keep, Replace or Import as Copy handling for collisions.
+
+The library supports exporting all user patches to one pack and importing folders of `.rmsynth` files with imported/skipped/failed reporting. Factory entries remain read-only catalog entries; user edits are saved in the user preset folder.
+
+Preset-page audition uses a short bounded offline RMS/peak estimate to compensate the trigger level while browsing. This is transient audition state and does not rewrite the patch's saved output gain.
+
+Factory presets carry searchable category, subcategory, tags, author, recommended octave range and macro-label metadata. The factory-library safety test renders the catalog across representative notes and rejects invalid or severely clipped patches.
+
+Magic variations preserve the authored Patch Map topology while applying bounded semantic mutations. Variants are live, non-destructive previews: KEEP commits while retaining the origin trail, APPLY commits and establishes a new origin, and RESTORE/BRANCH can discard a preview. Origin capture, restore and a bounded branch history are persisted with both plug-in state and presets, including each branch's routing topology. The Magic status line reports changed dimensions, origin distance and rendered RMS/peak safety.
 
 ---
 
@@ -192,6 +216,7 @@ The interface includes dedicated pages for:
 - Settings / AI Log
 - Signal Lab
 - Melody / MIDI
+- Sequencer / Arpeggiator
 
 ---
 

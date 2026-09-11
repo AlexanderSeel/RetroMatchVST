@@ -374,6 +374,47 @@ public:
             if (reason != nullptr) *reason = "System or locked nodes cannot be removed: " + nodeId;
             return false;
         }
+        std::vector<Edge> incoming, outgoing;
+        for (const auto& edge : candidate.edges)
+        {
+            if (edge.toNode == nodeId) incoming.push_back (edge);
+            if (edge.fromNode == nodeId) outgoing.push_back (edge);
+        }
+        if (incoming.size() == 1 && outgoing.size() == 1
+            && incoming.front().type == PortType::audio && outgoing.front().type == PortType::audio)
+        {
+            const auto& in = incoming.front();
+            const auto& out = outgoing.front();
+            Edge bypass;
+            bypass.id = in.id + ":bypass";
+            bypass.fromNode = in.fromNode; bypass.fromPort = in.fromPort;
+            bypass.toNode = out.toNode; bypass.toPort = out.toPort;
+            bypass.type = PortType::audio;
+            bypass.editable = in.editable || out.editable;
+            bypass.sequence = in.sequence >= 0 ? in.sequence : out.sequence;
+            candidate.edges.erase (std::remove_if (candidate.edges.begin(), candidate.edges.end(),
+                [&] (const Edge& edge) { return edge.fromNode == nodeId || edge.toNode == nodeId; }), candidate.edges.end());
+            candidate.nodes.erase (it);
+            juce::String bypassReason;
+            if (! candidate.addEdge (std::move (bypass), &bypassReason))
+            {
+                if (reason != nullptr) *reason = "Removing the node would create an invalid bypass: " + bypassReason;
+                return false;
+            }
+            const auto validation = candidate.validate();
+            if (! validation.ok)
+            {
+                if (reason != nullptr) *reason = validation.message;
+                return false;
+            }
+            *this = std::move (candidate);
+            return true;
+        }
+        if (! incoming.empty() || ! outgoing.empty())
+        {
+            if (reason != nullptr) *reason = "Node removal requires one audio input and one audio output so the route can be bypassed";
+            return false;
+        }
         candidate.edges.erase (std::remove_if (candidate.edges.begin(), candidate.edges.end(),
             [&] (const Edge& edge) { return edge.fromNode == nodeId || edge.toNode == nodeId; }), candidate.edges.end());
         candidate.nodes.erase (it);

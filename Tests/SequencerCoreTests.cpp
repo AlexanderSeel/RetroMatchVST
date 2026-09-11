@@ -172,8 +172,44 @@ int main()
         Transport transport;
         if (core.processBlock (1, transport, &event, 1) != 1
             || std::abs (event.macro[0] - 0.5f) > 1.0e-6f
-            || std::abs (event.macro[1] - 0.5f) > 1.0e-6f)
+            || std::abs (event.macro[1] - 0.5f) > 1.0e-6f
+            || event.macroDestination[0] != MacroDestination::none
+            || event.macroDestination[1] != MacroDestination::none)
             return fail ("modulation probability did not preserve the note while neutralizing macro lanes");
+    }
+
+    {
+        Core core;
+        core.prepare (48000.0);
+        auto settings = internalPatternSettings();
+        settings.length = 2;
+        settings.macroDestination = {{ MacroDestination::cutoff, MacroDestination::pitch }};
+        settings.macroInterpolation = {{ MacroInterpolation::linear, MacroInterpolation::smooth }};
+        settings.macroLaneRate = {{ 0.5f, 2.0f }};
+        core.setSettings (settings);
+        Step first, second;
+        first.macro = {{ 0.0f, 0.0f }};
+        second.macro = {{ 1.0f, 1.0f }};
+        core.setStep (0, first);
+        core.setStep (1, second);
+        Trigger events[4] {};
+        Transport transport;
+        if (core.processBlock (24000, transport, events, 4) != 4
+            || std::abs (events[0].macro[0] - 0.0f) > 1.0e-6f
+            || std::abs (events[1].macro[0] - 0.5f) > 1.0e-6f
+            || std::abs (events[2].macro[0] - 1.0f) > 1.0e-6f
+            || events[0].macroDestination[0] != MacroDestination::cutoff
+            || events[0].macroDestination[1] != MacroDestination::pitch)
+            return fail ("macro lane interpolation, polymetric rate, or destination metadata is incorrect");
+
+        settings.macroLaneRate = {{ -10.0f, 10.0f }};
+        settings.macroDestination = {{ (MacroDestination) 99, (MacroDestination) -1 }};
+        core.setSettings (settings);
+        if (core.getSettings().macroLaneRate[0] != 0.25f
+            || core.getSettings().macroLaneRate[1] != 4.0f
+            || core.getSettings().macroDestination[0] != MacroDestination::wavetablePosition
+            || core.getSettings().macroDestination[1] != MacroDestination::none)
+            return fail ("macro lane settings were not bounded");
     }
 
     {

@@ -27,6 +27,8 @@ enum class Division
 enum class ClockSource { host, internal };
 enum class RestartMode { never, transportStart, firstNote };
 enum class Mode { up, down, upDown, downUp, playedOrder, chord, random, walk, pattern };
+enum class MacroDestination { none, cutoff, resonance, pitch, amplitude, wavetablePosition };
+enum class MacroInterpolation { hold, linear, smooth, random };
 
 struct Step
 {
@@ -58,6 +60,9 @@ struct Settings
     int rootNote = 60;
     double internalBpm = 120.0;
     bool latch = false;
+    std::array<MacroDestination, modulationLaneCount> macroDestination {{ MacroDestination::none, MacroDestination::none }};
+    std::array<MacroInterpolation, modulationLaneCount> macroInterpolation {{ MacroInterpolation::hold, MacroInterpolation::hold }};
+    std::array<float, modulationLaneCount> macroLaneRate {{ 1.0f, 1.0f }};
 };
 
 struct Transport
@@ -78,6 +83,7 @@ struct Trigger
     bool glide = false;
     bool tie = false;
     std::array<float, modulationLaneCount> macro {{ 0.5f, 0.5f }};
+    std::array<MacroDestination, modulationLaneCount> macroDestination {{ MacroDestination::none, MacroDestination::none }};
 };
 
 class Core
@@ -150,6 +156,7 @@ private:
     [[nodiscard]] double swungStepSamples (double bpm, std::uint64_t stepNumber) const noexcept;
     [[nodiscard]] int collectHeldIndices (std::array<int, maxHeldNotes>& indices, bool playedOrder) const noexcept;
     [[nodiscard]] int selectSingleArpNote (const Step& step, float& sourceVelocity) noexcept;
+    [[nodiscard]] float macroValue (int lane) noexcept;
     void scheduleStep (int stepIndex, double gridOffset, double stepSamples,
                        int blockSamples, Trigger* output, int outputCapacity, int& outputCount) noexcept;
     void emitOrQueue (Trigger trigger, double offset, int blockSamples,

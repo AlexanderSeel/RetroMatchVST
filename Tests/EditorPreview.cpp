@@ -1,6 +1,7 @@
 #include "../Source/PluginProcessor.h"
 #include "../Source/Engine/PresetLibrary.h"
 #include "../Source/UI/ReferenceRegion.h"
+#include <cmath>
 #include <iostream>
 
 int main (int argc, char** argv)
@@ -237,6 +238,31 @@ int main (int argc, char** argv)
     const auto legacyFile = directory.getChildFile ("legacy-test.xml");
     if (! legacy.createXml()->writeTo (legacyFile, {}) || ! factoryProcessor->loadPreset (legacyFile)) return 39;
     if (factoryProcessor->hasLayer (0) || factoryProcessor->getCurrentVoiceParameters().fxModules[0].type != 0) return 40;
+
+    // Deterministic transition soak: repeated factory/sequence loads, editor
+    // note traffic and state round-trips must not leave stale layers, previews
+    // or non-finite audio behind.
+    for (int cycle = 0; cycle < 24; ++cycle)
+    {
+        factoryProcessor->loadFactoryPreset ((cycle * 17) % (int) factoryPresetCatalog.size());
+        juce::AudioBuffer<float> transitionAudio (2, 256);
+        juce::MidiBuffer transitionMidi;
+        transitionMidi.addEvent (juce::MidiMessage::noteOn (1, 48 + cycle % 24, (juce::uint8) 100), 0);
+        factoryProcessor->processBlock (transitionAudio, transitionMidi);
+        transitionMidi.clear();
+        factoryProcessor->processBlock (transitionAudio, transitionMidi);
+        transitionMidi.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+        factoryProcessor->processBlock (transitionAudio, transitionMidi);
+        for (int channel = 0; channel < transitionAudio.getNumChannels(); ++channel)
+            for (int sample = 0; sample < transitionAudio.getNumSamples(); ++sample)
+                if (! std::isfinite (transitionAudio.getSample (channel, sample))) return 41;
+
+        juce::MemoryBlock transitionState;
+        factoryProcessor->getStateInformation (transitionState);
+        auto roundTrip = std::make_unique<RetroMatchSynthAudioProcessor>();
+        roundTrip->setStateInformation (transitionState.getData(), (int) transitionState.getSize());
+        if (! roundTrip->validateReleaseState()) return 42;
+    }
     std::cout << "Editor snapshots and session/playback lifecycle checks passed.\n";
     return 0;
 }

@@ -4,6 +4,7 @@
 #include "LayersPage.h"
 #include "ReferenceEditorDialog.h"
 #include "MatchCompareDialog.h"
+#include "MagicAuditionDialog.h"
 #include <BinaryData.h>
 #include <algorithm>
 #include <cmath>
@@ -493,11 +494,14 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
         if (auto* window = options.launchAsync()) window->setResizeLimits (780, 520, 1600, 1050);
     };
     addAndMakeVisible (magicVary);
-    for (auto* button : { &magicCapture, &magicRestore, &magicBack }) addAndMakeVisible (*button);
+    for (auto* button : { &magicCapture, &magicRestore, &magicBack, &magicKeep, &magicApply, &magicDiff }) addAndMakeVisible (*button);
     magicVary.setTooltip ("Choose a bounded semantic Magic direction and generate a safe variation.");
     magicCapture.setTooltip ("Capture the current patch as the immutable Magic origin and clear branch history.");
     magicRestore.setTooltip ("Restore the immutable Magic origin.");
     magicBack.setTooltip ("Restore the most recent bounded Magic branch snapshot.");
+    magicKeep.setTooltip ("Commit the auditioned Magic variation while retaining the current origin and branch history.");
+    magicApply.setTooltip ("Commit the auditioned Magic variation and make it the new Magic origin.");
+    magicDiff.setTooltip ("Open the Magic audition/diff panel with rendered telemetry and explicit commit/restore actions.");
     magicVary.onClick = [this]
     {
         static constexpr const char* names[] { "Cinematic", "Atmospheric", "Organic", "Orchestral", "Staccato", "Percussive", "Techno", "Warm Analog", "Dark", "Bright", "Wide", "Intimate", "Rhythmic", "Fragile", "Aggressive", "Glitch" };
@@ -520,8 +524,9 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
             static constexpr float intensities[] { 0.15f, 0.35f, 0.65f, 1.0f };
             const auto direction = (VariationDirection) directionIndex;
             const bool applied = proc.applyDirectedVariation (direction, intensities[intensityIndex], juce::Random::getSystemRandom().nextInt64());
-            status.setText (applied ? "Magic applied. Distance " + juce::String (proc.getMagicOriginDistance() * 100.0f, 1)
+            status.setText (applied ? "Magic preview ready. Use KEEP or APPLY. Distance " + juce::String (proc.getMagicOriginDistance() * 100.0f, 1)
                                        + "% / changed: " + proc.getMagicChangedDimensions().joinIntoString (", ")
+                                       + " / " + proc.getMagicRenderReport()
                                     : "Magic variation rejected by safety policy.", juce::dontSendNotification);
         });
     };
@@ -543,8 +548,28 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
             return;
         }
         status.setText ("Magic branch restored. Distance " + juce::String (proc.getMagicOriginDistance() * 100.0f, 1)
-                            + "% / changed: " + proc.getMagicChangedDimensions().joinIntoString (", "),
+                            + "% / changed: " + proc.getMagicChangedDimensions().joinIntoString (", ")
+                            + " / " + proc.getMagicRenderReport(),
                         juce::dontSendNotification);
+    };
+    magicKeep.onClick = [this]
+    {
+        status.setText (proc.keepMagicPreview() ? "Magic preview kept. Origin and branch history retained."
+                                                 : "No Magic preview is waiting for KEEP.", juce::dontSendNotification);
+    };
+    magicApply.onClick = [this]
+    {
+        status.setText (proc.applyMagicPreview() ? "Magic preview applied as the new origin."
+                                                  : "No Magic preview is waiting for APPLY.", juce::dontSendNotification);
+    };
+    magicDiff.onClick = [this]
+    {
+        auto* content = new MagicAuditionDialog (proc); content->setSize (720, 420);
+        juce::DialogWindow::LaunchOptions options; options.content.setOwned (content);
+        options.dialogTitle = "RM-01  /  MAGIC AUDITION + DIFF";
+        options.dialogBackgroundColour = juce::Colour (0xff06090a);
+        options.escapeKeyTriggersCloseButton = true; options.useNativeTitleBar = true; options.resizable = true; options.componentToCentreAround = this;
+        if (auto* window = options.launchAsync()) window->setResizeLimits (560, 340, 1100, 760);
     };
 
     candidateMorphLabel.setText ("A  <  MORPH  >  C", juce::dontSendNotification);
@@ -1017,6 +1042,8 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
     addAndMakeVisible (tabs);
     tabs.setTabBarDepth (38);
     tabs.addTab ("SYNTH", juce::Colour (0xff14201e), &synthPage, false);
+    sequencerPage = std::make_unique<SequencerPanel> (proc);
+    tabs.addTab ("SEQUENCER", juce::Colour (0xff102024), sequencerPage.get(), false);
     tabs.addTab ("FM", juce::Colour (0xff211b14), &fmPage, false);
     tabs.addTab ("FILTER + AMP", juce::Colour (0xff151e20), &filterAmpPage, false);
     tabs.addTab ("MOD", juce::Colour (0xff151c20), &modPage, false);
@@ -1356,7 +1383,7 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     }
 
     auto actionRow = w.removeFromTop (36);
-    const int buttonW = actionRow.getWidth() / 9;
+    const int buttonW = actionRow.getWidth() / 12;
     quick.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     refine.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     goldMatch.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
@@ -1365,7 +1392,10 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     magicVary.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     magicCapture.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
     magicRestore.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    magicBack.setBounds (actionRow.reduced (2, 0));
+    magicBack.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
+    magicKeep.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
+    magicApply.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
+    magicDiff.setBounds (actionRow.reduced (2, 0));
     w.removeFromTop (5);
 
     auto footer = w.removeFromBottom (76);
@@ -1992,6 +2022,8 @@ void RetroMatchSynthAudioProcessorEditor::timerCallback()
         shownRegionStart = start; shownRegionEnd = end;
     }
     compareMatch.setEnabled (proc.currentFeatures.has_value() && proc.currentCandidateFeatures.has_value());
+    const bool magicPreview = proc.hasMagicPreview();
+    magicKeep.setEnabled (magicPreview); magicApply.setEnabled (magicPreview);
     const bool canSelect = proc.hasReferenceSample() && ! (worker && worker->isThreadRunning());
     referenceRegion.setEnabled (canSelect); referenceRegion.update (proc.getReferenceFile(), regionStart.getValue(), regionEnd.getValue());
     regionStart.setEnabled (canSelect); regionEnd.setEnabled (canSelect);

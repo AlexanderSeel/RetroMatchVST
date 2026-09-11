@@ -33,7 +33,7 @@ inline PatternTemplate makePatternTemplate (int index) noexcept
         step.modulationProbability = 1.0f;
     };
 
-    switch (std::clamp (index, 0, 7))
+    switch (std::clamp (index, 0, 11))
     {
         case 0:
             pattern.name = "Empty"; pattern.length = 1; return pattern;
@@ -65,9 +65,27 @@ inline PatternTemplate makePatternTemplate (int index) noexcept
             pattern.name = "Percussive Rest"; pattern.length = 16;
             for (int i : { 0, 3, 6, 8, 10, 14 }) set (i, i % 8 == 0 ? 0 : 7, 0.9f, 0.24f);
             break;
+        case 8:
+            pattern.name = "Euclidean Bloom"; pattern.length = 16;
+            for (int i : { 0, 3, 6, 9, 12, 15 }) set (i, std::array<int, 6> {{ 0, 7, 12, 7, 4, 2 }}[(size_t) (i / 3)], 0.82f, 0.44f);
+            break;
+        case 9:
+            pattern.name = "Minor Climb"; pattern.length = 16;
+            for (int i = 0; i < 16; ++i) set (i, std::array<int, 8> {{ 0, 3, 7, 10, 12, 10, 7, 3 }}[(size_t) (i % 8)],
+                                                   i % 4 == 0 ? 1.0f : 0.76f, 0.58f);
+            break;
+        case 10:
+            pattern.name = "Chord Stabs"; pattern.length = 8;
+            for (int i : { 0, 4 }) set (i, i == 0 ? 0 : 5, 0.92f, 0.28f);
+            break;
+        case 11:
+            pattern.name = "Polymetric Five"; pattern.length = 15;
+            for (int i = 0; i < pattern.length; ++i)
+                set (i, std::array<int, 5> {{ 0, 7, 3, 10, 5 }}[(size_t) (i % 5)], 0.70f + (i % 3) * 0.10f, 0.50f);
+            break;
     }
     return pattern;
 }
 
-inline constexpr int patternTemplateCount = 8;
+inline constexpr int patternTemplateCount = 12;
 }

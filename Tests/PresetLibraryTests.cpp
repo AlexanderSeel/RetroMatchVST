@@ -41,6 +41,10 @@ int main()
         const auto& info = factoryPresetCatalog[(size_t) index];
         if (info.name.isEmpty() || info.category.isEmpty() || info.description.isEmpty())
             return fail ("preset metadata contains an empty required field");
+        if (info.author.isEmpty() || info.tags.isEmpty() || info.macroLabels.size() < 2
+            || info.recommendedOctaveMin < 1 || info.recommendedOctaveMax > 8
+            || info.recommendedOctaveMin > info.recommendedOctaveMax)
+            return fail ("factory preset metadata is incomplete or out of bounds");
         if (! names.insert (info.name.toStdString()).second)
             return fail ("factory preset names are not unique");
 

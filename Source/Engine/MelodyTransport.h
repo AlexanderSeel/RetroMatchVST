@@ -90,6 +90,8 @@ public:
     }
     int getSequencerCurrentStep() const noexcept { return sequencerCurrentStep.load (std::memory_order_relaxed); }
     bool isSequencerRunning() const noexcept { return sequencerRunning.load (std::memory_order_relaxed); }
+    std::array<float, RetroMatchSequencer::modulationLaneCount> getSequencerMacroValues() const noexcept { return sequencerMacroValues; }
+    std::array<RetroMatchSequencer::MacroDestination, RetroMatchSequencer::modulationLaneCount> getSequencerMacroDestinations() const noexcept { return sequencerMacroDestinations; }
 
     void process (juce::MidiBuffer& midi, int samples, double sr,
                   bool hostPlaying = true, bool hostJustStarted = false, double hostBpm = 120.0)
@@ -154,6 +156,8 @@ private:
     std::atomic<bool> sequencerCommandReady { true };
     std::atomic<int> sequencerCurrentStep { 0 };
     std::atomic<bool> sequencerRunning { false };
+    std::array<float, RetroMatchSequencer::modulationLaneCount> sequencerMacroValues {{ 0.5f, 0.5f }};
+    std::array<RetroMatchSequencer::MacroDestination, RetroMatchSequencer::modulationLaneCount> sequencerMacroDestinations {{ RetroMatchSequencer::MacroDestination::none, RetroMatchSequencer::MacroDestination::none }};
     bool wasHostPlaying = false;
     bool pendingSequencerPatternDirty = true;
     bool appliedSequencerEnabled = false;
@@ -281,6 +285,8 @@ private:
         for (int i = 0; i < triggerCount; ++i)
         {
             const auto& trigger = sequencerTriggers[(size_t) i];
+            sequencerMacroValues = trigger.macro;
+            sequencerMacroDestinations = trigger.macroDestination;
             const auto velocity = (juce::uint8) juce::jlimit (1, 127, (int) std::lround (trigger.velocity * 127.0f));
             midi.addEvent (juce::MidiMessage::noteOn (1, trigger.midiNote, velocity), trigger.sampleOffset);
             ++activeSequencerNotes[(size_t) trigger.midiNote];

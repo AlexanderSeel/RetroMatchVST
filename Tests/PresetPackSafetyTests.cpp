@@ -85,7 +85,7 @@ int main()
         return fail ("duplicate patch IDs passed manifest validation");
 
     auto oversized = manifest.toVar();
-    oversized.getDynamicObject()->setProperty ("description", juce::String::repeatedString ('x', maxMetadataCharacters + 1));
+    oversized.getDynamicObject()->setProperty ("description", juce::String::repeatedString ("x", maxMetadataCharacters + 1));
     if (validateManifest (oversized, nullptr))
         return fail ("oversized metadata passed manifest validation");
 
@@ -110,6 +110,13 @@ int main()
         return fail ("pack archive does not have a ZIP signature");
     if (! validatePackArchive (archiveFile, &reason))
         return fail ("valid pack archive failed structural ZIP validation");
+    const auto extracted = root.getChildFile ("extracted");
+    Manifest extractedManifest;
+    if (! extractPackArchive (archiveFile, extracted, &extractedManifest, &reason)
+        || extractedManifest.packId != loaded.packId
+        || ! extracted.getChildFile ("manifest.json").existsAsFile()
+        || ! extracted.getChildFile ("patches/patch-001.rmsynth").existsAsFile())
+        return fail ("valid pack archive failed safe extraction round-trip");
 
     root.deleteRecursively();
     outsideFile.deleteFile();

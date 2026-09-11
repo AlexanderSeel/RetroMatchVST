@@ -54,6 +54,12 @@ Settings Core::sanitizedSettings (Settings value) noexcept
     value.octaveRange = bounded (1, 4, value.octaveRange);
     value.rootNote = bounded (0, 127, value.rootNote);
     value.internalBpm = bounded (20.0, 400.0, value.internalBpm);
+    for (int lane = 0; lane < modulationLaneCount; ++lane)
+    {
+        value.macroDestination[(std::size_t) lane] = (MacroDestination) bounded (0, 5, (int) value.macroDestination[(std::size_t) lane]);
+        value.macroInterpolation[(std::size_t) lane] = (MacroInterpolation) bounded (0, 3, (int) value.macroInterpolation[(std::size_t) lane]);
+        value.macroLaneRate[(std::size_t) lane] = bounded (0.25f, 4.0f, value.macroLaneRate[(std::size_t) lane]);
+    }
     return value;
 }
 
@@ -323,6 +329,28 @@ int Core::selectSingleArpNote (const Step& step, float& sourceVelocity) noexcept
                           + step.semitone + step.octave * 12);
 }
 
+float Core::macroValue (int lane) noexcept
+{
+    lane = bounded (0, modulationLaneCount - 1, lane);
+    const auto interpolation = settings.macroInterpolation[(std::size_t) lane];
+    if (interpolation == MacroInterpolation::random)
+        return nextRandom01();
+
+    const int length = std::max (1, settings.length);
+    const double position = (double) absoluteStep * settings.macroLaneRate[(std::size_t) lane];
+    const double base = std::floor (position);
+    const int first = ((int) base) % length;
+    const float a = steps[(std::size_t) first].macro[(std::size_t) lane];
+    if (interpolation == MacroInterpolation::hold)
+        return a;
+
+    const float b = steps[(std::size_t) ((first + 1) % length)].macro[(std::size_t) lane];
+    const float fraction = (float) (position - base);
+    const float t = interpolation == MacroInterpolation::smooth
+        ? fraction * fraction * (3.0f - 2.0f * fraction) : fraction;
+    return juce::jmap (t, a, b);
+}
+
 void Core::emitOrQueue (Trigger trigger, double offset, int blockSamples,
                         Trigger* output, int outputCapacity, int& outputCount) noexcept
 {
@@ -412,9 +440,16 @@ void Core::scheduleStep (int stepIndex, double gridOffset, double stepSamples,
         trigger.ratchetIndex = ratchetIndex;
         trigger.glide = step.glide;
         trigger.tie = step.tie;
-    trigger.macro = step.macro;
-    if (step.modulationProbability < 1.0f && nextRandom01() > step.modulationProbability)
-        trigger.macro = {{ 0.5f, 0.5f }};
+        for (int lane = 0; lane < modulationLaneCount; ++lane)
+        {
+            trigger.macro[(std::size_t) lane] = macroValue (lane);
+            trigger.macroDestination[(std::size_t) lane] = settings.macroDestination[(std::size_t) lane];
+        }
+        if (step.modulationProbability < 1.0f && nextRandom01() > step.modulationProbability)
+        {
+            trigger.macro = {{ 0.5f, 0.5f }};
+            trigger.macroDestination = {{ MacroDestination::none, MacroDestination::none }};
+        }
         return trigger;
     };
 

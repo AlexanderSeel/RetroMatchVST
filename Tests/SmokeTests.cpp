@@ -3,6 +3,7 @@
 #include "../Source/Engine/MSEG.h"
 #include "../Source/Engine/PatchGraph.h"
 #include "../Source/Engine/DspRoutingPlan.h"
+#include "../Source/Engine/RoutingUtilities.h"
 #include "../Source/Engine/ReferenceWavetable.h"
 #include "../Source/Engine/PresetLibrary.h"
 #include "../Source/Matching/OfflineRenderer.h"
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <thread>
 
 namespace
 {
@@ -117,6 +119,36 @@ int main (int argc, char** argv)
                 || stressSnapshot.parallelFx != stressPlan.parallelFx || stressSnapshot.soloLayer != stressPlan.soloLayer)
                 return fail ("atomic routing publication lost a valid graph edit during stress coverage");
         }
+
+        DspRouting::AtomicPlan concurrent;
+        std::atomic<bool> writerDone { false };
+        std::atomic<bool> concurrentFailure { false };
+        std::thread writer ([&]
+        {
+            for (int iteration = 0; iteration < 4096; ++iteration)
+            {
+                auto plan = DspRouting::Plan {};
+                const int first = iteration % DspRouting::maxLayerCount;
+                const int second = (iteration * 5 + 2) % DspRouting::maxLayerCount;
+                std::swap (plan.layerOrder[(size_t) first], plan.layerOrder[(size_t) second]);
+                plan.parallelFx[(size_t) (iteration % DspRouting::maxInstanceCount)] = (iteration & 1) != 0;
+                plan.soloLayer = (iteration % 13 == 0) ? -1 : iteration % DspRouting::maxLayerCount;
+                plan.graphAuthored = true;
+                concurrent.publish (plan);
+            }
+            writerDone.store (true, std::memory_order_release);
+        });
+
+        do
+        {
+            const auto snapshot = concurrent.snapshot();
+            if (! snapshot.valid() || ! snapshot.validPermutation())
+                concurrentFailure.store (true, std::memory_order_release);
+        }
+        while (! writerDone.load (std::memory_order_acquire));
+        writer.join();
+        if (concurrentFailure.load (std::memory_order_acquire))
+            return fail ("concurrent atomic routing reads observed a torn or invalid plan");
     }
     {
         juce::AudioBuffer<float> destination (2, 4), layer (2, 4);
@@ -824,6 +856,28 @@ int main (int argc, char** argv)
         PatchGraph::Edge ab; ab.id = "ab"; ab.fromNode = "A"; ab.fromPort = "audio.out"; ab.toNode = "B"; ab.toPort = "audio.in"; ab.type = PatchGraph::PortType::audio;
         PatchGraph::Edge ba; ba.id = "ba"; ba.fromNode = "B"; ba.fromPort = "audio.out"; ba.toNode = "A"; ba.toPort = "audio.in"; ba.type = PatchGraph::PortType::audio;
         if (! cycle.addEdge (ab) || cycle.validateConnection (ba).ok) return fail ("patch graph allowed a zero-delay audio cycle");
+
+        PatchGraph::Document fanIn;
+        PatchGraph::Node fanSourceA; fanSourceA.id = "A"; fanSourceA.type = PatchGraph::NodeType::source; fanSourceA.ports = { PatchGraph::audioOutput() };
+        PatchGraph::Node fanSourceB = fanSourceA; fanSourceB.id = "B";
+        PatchGraph::Node mixer; mixer.id = "MIX"; mixer.type = PatchGraph::NodeType::mixer; mixer.ports = { PatchGraph::audioInput (true), PatchGraph::audioOutput() };
+        PatchGraph::Node fanMaster; fanMaster.id = "OUT"; fanMaster.type = PatchGraph::NodeType::master; fanMaster.ports = { PatchGraph::audioInput() };
+        if (! fanIn.addNode (fanSourceA) || ! fanIn.addNode (fanSourceB) || ! fanIn.addNode (mixer) || ! fanIn.addNode (fanMaster))
+            return fail ("fan-in graph fixture setup failed");
+        PatchGraph::Edge fanA { "fan-a", "A", "audio.out", "MIX", "audio.in", PatchGraph::PortType::audio, true };
+        PatchGraph::Edge fanB { "fan-b", "B", "audio.out", "MIX", "audio.in", PatchGraph::PortType::audio, true };
+        PatchGraph::Edge fanOut { "fan-out", "MIX", "audio.out", "OUT", "audio.in", PatchGraph::PortType::audio, false };
+        if (! fanIn.addEdge (fanA) || ! fanIn.addEdge (fanB) || ! fanIn.addEdge (fanOut)) return fail ("fan-in graph rejected valid routes");
+        if (! fanIn.reorderEdge ("fan-a", 1, &mutationReason) || fanIn.findEdge ("fan-a")->sequence != 1)
+            return fail ("editable fan-in reorder was not persisted");
+        PatchGraph::Node inserted; inserted.id = "INSERT"; inserted.type = PatchGraph::NodeType::utility;
+        inserted.ports = { PatchGraph::audioInput(), PatchGraph::audioOutput() }; inserted.latencySamples = 64;
+        if (! fanIn.insertNodeOnEdge ("fan-out", inserted, &mutationReason) || fanIn.findNode ("INSERT") == nullptr
+            || fanIn.maxAudioLatencySamples() != 64)
+            return fail ("validated processing-node insertion or latency propagation failed");
+        if (! fanIn.removeNode ("INSERT", &mutationReason) || fanIn.findNode ("INSERT") != nullptr
+            || fanIn.findEdge ("fan-out:bypass") == nullptr)
+            return fail ("single-path node removal did not restore a valid bypass route");
 
         graph.view.pan = { 33.0f, -17.0f }; graph.view.zoom = 1.37f; graph.view.snapToGrid = false;
         const auto roundTrip = PatchGraph::Document::fromValueTree (graph.toValueTree());

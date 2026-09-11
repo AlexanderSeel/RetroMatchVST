@@ -2,6 +2,7 @@
 #include "../PluginProcessor.h"
 #include "../Engine/PresetLibrary.h"
 #include "LayersPage.h"
+#include "../Engine/PresetPackSafety.h"
 
 class PresetsPage final : public juce::Component, private juce::ListBoxModel, private juce::Timer
 {
@@ -16,8 +17,10 @@ public:
         autoLoad.setTooltip ("When enabled, a single click loads the highlighted preset immediately. Double-click and LOAD SELECTED always work.");
         visual.parameters = [this] { return proc.getMainVoiceParameters(); };
 
-        for (auto* b : { &load, &save, &open, &randomize, &audition, &favorite, &surprise, &clearSearch, &openFolder }) addAndMakeVisible (*b);
+        for (auto* b : { &load, &save, &open, &exportPack, &importPack, &importFolder, &exportAll, &randomize, &audition, &favorite, &surprise, &clearSearch, &openFolder }) addAndMakeVisible (*b);
         load.setButtonText ("LOAD SELECTED"); save.setButtonText ("SAVE CURRENT"); open.setButtonText ("OPEN PRESET");
+        exportPack.setButtonText ("EXPORT PACK"); importPack.setButtonText ("IMPORT PACK");
+        importFolder.setButtonText ("IMPORT FOLDER"); exportAll.setButtonText ("EXPORT ALL");
         randomize.setButtonText ("DESIGN NEW LAYERED PATCH"); audition.setButtonText ("AUDITION");
         favorite.setButtonText ("FAVORITE"); surprise.setButtonText ("SURPRISE ME"); clearSearch.setButtonText ("CLEAR"); openFolder.setButtonText ("FOLDER");
         favorite.setTooltip ("Add or remove the selected preset from Favorites. Favorites are stored locally in the RetroMatch preset folder.");
@@ -37,7 +40,9 @@ public:
             if (auditionUntil > 0) proc.noteOffFromEditor (auditionMidiNote);
             auditionMidiNote = 36 + (auditionNote.getSelectedId() - 1) * 12;
             proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::synthOnly);
-            proc.noteOnFromEditor (auditionMidiNote, 0.75f); auditionUntil = juce::Time::getMillisecondCounterHiRes() + 1200;
+            const auto auditionGain = proc.getBrowserAuditionGain (proc.getMainVoiceParameters());
+            proc.noteOnFromEditor (auditionMidiNote, juce::jlimit (0.0f, 1.0f, 0.75f * auditionGain));
+            auditionUntil = juce::Time::getMillisecondCounterHiRes() + 1200;
         };
         favorite.onClick = [this] { toggleFavorite(); };
         surprise.onClick = [this]
@@ -53,9 +58,11 @@ public:
             else description.setText ("Cannot create or reveal the user preset folder.", juce::dontSendNotification);
         };
         save.onClick = [this] { choose (true); }; open.onClick = [this] { choose (false); };
+        exportPack.onClick = [this] { choosePack (true); }; importPack.onClick = [this] { choosePack (false); };
+        importFolder.onClick = [this] { chooseFolderImport(); }; exportAll.onClick = [this] { chooseAllExport(); };
 
         addAndMakeVisible (search); search.setTextToShowWhenEmpty ("Search name, type, Core, Motion, Dimension...", juce::Colours::grey);
-        search.setTooltip ("Searches factory preset name, category and authored character metadata. Try Core, Motion, Dimension, MSEG or instance counts.");
+        search.setTooltip ("Searches factory preset name, category, tags, author and sound character. Try Core, Motion, Dimension, arpeggiator or melodic.");
         addAndMakeVisible (category); category.addItem ("All types", 1);
         juce::StringArray types;
         for (const auto& preset : factoryPresetCatalog) types.addIfNotAlreadyThere (preset.category);
@@ -91,12 +98,14 @@ public:
         search.setBounds (filters.reduced (2));
         r.removeFromTop (8);
 
-        auto actions = r.removeFromTop (34); const int w = actions.getWidth() / 5;
+        auto actions = r.removeFromTop (34); const int w = actions.getWidth() / 9;
         load.setBounds (actions.removeFromLeft (w).reduced (2));
         favorite.setBounds (actions.removeFromLeft (w).reduced (2));
         surprise.setBounds (actions.removeFromLeft (w).reduced (2));
         save.setBounds (actions.removeFromLeft (w).reduced (2));
-        open.setBounds (actions.reduced (2));
+        open.setBounds (actions.removeFromLeft (w).reduced (2));
+        exportPack.setBounds (actions.removeFromLeft (w).reduced (2)); importPack.setBounds (actions.removeFromLeft (w).reduced (2));
+        importFolder.setBounds (actions.removeFromLeft (w).reduced (2)); exportAll.setBounds (actions.reduced (2));
 
         r.removeFromTop (8); auto bottom = r.removeFromBottom (36);
         randomize.setBounds (bottom.removeFromLeft (bottom.getWidth() * 5 / 12).reduced (2));
@@ -114,7 +123,7 @@ private:
     juce::TextEditor search; juce::ComboBox category, auditionNote; std::vector<int> visibleRows;
     juce::TextEditor description; juce::Label current, stats; SynthInstanceVisual visual;
     juce::ToggleButton autoLoad, favoritesOnly;
-    juce::TextButton load, save, open, randomize, audition, favorite, surprise, clearSearch, openFolder;
+    juce::TextButton load, save, open, exportPack, importPack, importFolder, exportAll, randomize, audition, favorite, surprise, clearSearch, openFolder;
     juce::Array<juce::File> userFiles; std::unique_ptr<juce::FileChooser> chooser;
     juce::StringArray favoriteKeys;
     double auditionUntil = 0;
@@ -186,7 +195,7 @@ private:
             const bool factory = i < (int) factoryPresetCatalog.size();
             const auto name = factory ? factoryPresetCatalog[(size_t) i].name : userFiles[i - (int) factoryPresetCatalog.size()].getFileNameWithoutExtension();
             const auto type = factory ? factoryPresetCatalog[(size_t) i].category : juce::String ("User");
-            const auto metadata = factory ? factoryPresetCatalog[(size_t) i].description + " " + factoryCharacterForRow (i) : juce::String ("user custom");
+            const auto metadata = factory ? factoryPresetCatalog[(size_t) i].description + " " + factoryPresetCatalog[(size_t) i].tags.joinIntoString (" ") + " " + factoryPresetCatalog[(size_t) i].author + " " + factoryCharacterForRow (i) : juce::String ("user custom");
             const bool categoryMatch = category.getSelectedId() == 1 || type == category.getText();
             const bool searchMatch = (name + " " + type + " " + metadata).containsIgnoreCase (search.getText().trim());
             if (categoryMatch && searchMatch && (! favoritesOnly.getToggleState() || isFavorite (i))) visibleRows.push_back (i);
@@ -300,7 +309,8 @@ private:
         if (row < (int) factoryPresetCatalog.size())
         {
             const auto& info = factoryPresetCatalog[(size_t) row];
-            description.setText (fav + "FACTORY / " + info.category + " / " + factoryCharacterForRow (row) + " / " + info.name + "\n\n"
+            description.setText (fav + "FACTORY / " + info.category + " / " + factoryCharacterForRow (row) + " / " + info.name + "\n"
+                                 + "Author: " + info.author + " | Tags: " + info.tags.joinIntoString (", ") + " | Range: C" + juce::String (info.recommendedOctaveMin) + "–C" + juce::String (info.recommendedOctaveMax) + "\n\n"
                                  + describePatch (makeFactoryPreset (row), info.description), false);
         }
         else
@@ -334,6 +344,182 @@ private:
                 else ok = safe->proc.loadPreset (file);
                 safe->description.setText (ok ? (saving ? "Saved " : "Loaded ") + file.getFileName() : "Preset operation failed.", juce::dontSendNotification);
                 safe->rescan(); safe->refreshCurrent();
+            });
+    }
+
+    void choosePack (bool exporting)
+    {
+        const auto packDirectory = directory().getChildFile ("Packs");
+        if (exporting && packDirectory.createDirectory().failed()) return;
+        chooser = std::make_unique<juce::FileChooser> (exporting ? "Export RetroMatch pack" : "Import RetroMatch pack",
+                                                       packDirectory.getChildFile ("RetroMatch Pack.rmpack"), "*.rmpack");
+        juce::Component::SafePointer<PresetsPage> safe (this);
+        const int flags = exporting ? juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting
+                                    : juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+        chooser->launchAsync (flags, [safe, exporting] (const juce::FileChooser& fc)
+        {
+            if (! safe || fc.getResult() == juce::File()) return;
+            const auto file = fc.getResult().withFileExtension ("rmpack");
+            juce::String reason;
+            if (exporting)
+            {
+                const auto staging = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("RetroMatch-Pack-" + juce::Uuid().toString());
+                const auto patch = staging.getChildFile ("patches").getChildFile (safe->proc.getPresetName() + ".rmsynth");
+                bool ok = staging.createDirectory().wasOk() && patch.getParentDirectory().createDirectory().wasOk() && safe->proc.savePreset (patch);
+                PresetPackSafety::Manifest manifest;
+                manifest.packId = "retromatch." + juce::Uuid().toString(); manifest.version = "1.0.0";
+                manifest.author = "RetroMatch user"; manifest.description = "RetroMatch preset with complete sequencer state";
+                manifest.minimumSchema = "3"; manifest.minimumPluginVersion = "1.0.0";
+                manifest.tags.add ("sequencer"); manifest.categories.add ("User"); manifest.patchIds.add ("user-patch");
+                if (ok)
+                {
+                    PresetPackSafety::Asset asset;
+                    asset.path = "patches/" + patch.getFileName(); asset.size = patch.getSize(); asset.sha256 = juce::SHA256 (patch).toHexString();
+                    manifest.assets.push_back (asset);
+                    ok = PresetPackSafety::writePackArchive (file, staging, manifest, &reason);
+                }
+                staging.deleteRecursively();
+                safe->description.setText (ok ? "Exported " + file.getFileName() : "Pack export failed: " + reason, juce::dontSendNotification);
+            }
+            else
+            {
+                const auto staging = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("RetroMatch-Import-" + juce::Uuid().toString());
+                PresetPackSafety::Manifest manifest;
+                bool ok = PresetPackSafety::extractPackArchive (file, staging, &manifest, &reason);
+                if (! ok)
+                {
+                    staging.deleteRecursively();
+                    safe->description.setText ("Pack import failed: " + reason, juce::dontSendNotification);
+                    return;
+                }
+
+                juce::Array<juce::File> patches;
+                staging.findChildFiles (patches, juce::File::findFiles, true, "*.rmsynth");
+                juce::Array<juce::File> xmlPatches;
+                staging.findChildFiles (xmlPatches, juce::File::findFiles, true, "*.xml");
+                for (const auto& candidate : xmlPatches) patches.addIfNotAlreadyThere (candidate);
+                if (patches.isEmpty())
+                {
+                    staging.deleteRecursively();
+                    safe->description.setText ("Pack import failed: no preset assets found.", juce::dontSendNotification);
+                    return;
+                }
+
+                juce::StringArray existingIds;
+                for (const auto& existing : safe->userFiles) existingIds.add (existing.getFileNameWithoutExtension());
+                bool hasConflict = false;
+                for (const auto& candidate : patches)
+                    if (existingIds.contains (candidate.getFileNameWithoutExtension())) { hasConflict = true; break; }
+
+                if (hasConflict)
+                {
+                    juce::PopupMenu policy;
+                    policy.addItem (1, "KEEP EXISTING");
+                    policy.addItem (2, "REPLACE EXISTING");
+                    policy.addItem (3, "IMPORT AS COPY");
+                    policy.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&safe->importPack), [safe, staging, manifest, patches] (int choice)
+                    {
+                        if (! safe) { staging.deleteRecursively(); return; }
+                        if (choice < 1 || choice > 3) { staging.deleteRecursively(); safe->description.setText ("Pack import cancelled.", juce::dontSendNotification); return; }
+                        safe->finishPackImport (staging, manifest, patches, (PresetPackSafety::ImportConflictPolicy) (choice == 1 ? 1 : choice == 2 ? 2 : 3));
+                    });
+                    return;
+                }
+
+                safe->finishPackImport (staging, manifest, patches, PresetPackSafety::ImportConflictPolicy::importAsCopy);
+            }
+        });
+    }
+
+    void finishPackImport (const juce::File& staging, const PresetPackSafety::Manifest&, const juce::Array<juce::File>& patches,
+                           PresetPackSafety::ImportConflictPolicy policy)
+    {
+        int imported = 0, kept = 0, failed = 0;
+        juce::File firstImported;
+        directory().createDirectory();
+        juce::StringArray existingIds;
+        for (const auto& existing : userFiles) existingIds.add (existing.getFileNameWithoutExtension());
+
+        for (const auto& source : patches)
+        {
+            const auto requestedId = source.getFileNameWithoutExtension();
+            const auto resolution = PresetPackSafety::resolveImportConflict (requestedId, existingIds, policy);
+            if (resolution.action == PresetPackSafety::ImportConflictAction::keepExisting) { ++kept; continue; }
+            const auto target = directory().getChildFile (resolution.patchId).withFileExtension ("xml");
+            if (! source.copyFileTo (target)) { ++failed; continue; }
+            existingIds.addIfNotAlreadyThere (resolution.patchId);
+            if (firstImported == juce::File()) firstImported = target;
+            ++imported;
+        }
+        staging.deleteRecursively();
+        rescan();
+        const bool loaded = firstImported != juce::File() && proc.loadPreset (firstImported);
+        description.setText ("Pack import: " + juce::String (imported) + " imported, " + juce::String (kept)
+                             + " kept, " + juce::String (failed) + " failed." + (loaded ? " Loaded first imported preset." : ""),
+                             juce::dontSendNotification);
+        if (loaded) refreshCurrent();
+    }
+
+    void chooseFolderImport()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Import RetroMatch presets from folder", directory(), "");
+        juce::Component::SafePointer<PresetsPage> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [safe] (const juce::FileChooser& fc)
+            {
+                if (! safe || ! fc.getResult().isDirectory()) return;
+                const auto source = fc.getResult();
+                juce::Array<juce::File> files; source.findChildFiles (files, juce::File::findFiles, true, "*.xml");
+                int imported = 0, skipped = 0, failed = 0;
+                safe->directory().createDirectory();
+                for (const auto& input : files)
+                {
+                    const auto target = safe->directory().getNonexistentChildFile (input.getFileNameWithoutExtension(), ".xml", false);
+                    if (input.copyFileTo (target)) ++imported; else ++failed;
+                }
+                skipped = juce::jmax (0, files.size() - imported - failed);
+                safe->rescan();
+                safe->description.setText ("Bulk import: " + juce::String (imported) + " imported, " + juce::String (skipped)
+                                           + " skipped, " + juce::String (failed) + " failed.", juce::dontSendNotification);
+            });
+    }
+
+    void chooseAllExport()
+    {
+        if (userFiles.isEmpty())
+        {
+            description.setText ("No user presets are available to export.", juce::dontSendNotification);
+            return;
+        }
+        const auto packDirectory = directory().getChildFile ("Packs");
+        if (packDirectory.createDirectory().failed()) return;
+        chooser = std::make_unique<juce::FileChooser> ("Export all RetroMatch presets", packDirectory.getChildFile ("RetroMatch User Library.rmpack"), "*.rmpack");
+        juce::Component::SafePointer<PresetsPage> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+            [safe] (const juce::FileChooser& fc)
+            {
+                if (! safe || fc.getResult() == juce::File()) return;
+                const auto archive = fc.getResult().withFileExtension ("rmpack");
+                const auto staging = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("RetroMatch-All-" + juce::Uuid().toString());
+                const auto patchDirectory = staging.getChildFile ("patches");
+                bool ok = staging.createDirectory().wasOk() && patchDirectory.createDirectory().wasOk();
+                PresetPackSafety::Manifest manifest;
+                manifest.packId = "retromatch.library." + juce::Uuid().toString(); manifest.version = "1.0.0";
+                manifest.author = "RetroMatch user"; manifest.description = "RetroMatch user preset library";
+                manifest.minimumSchema = "3"; manifest.minimumPluginVersion = "1.0.0"; manifest.categories.add ("User");
+                for (const auto& input : safe->userFiles)
+                {
+                    const auto target = patchDirectory.getChildFile (input.getFileName());
+                    if (! input.copyFileTo (target)) { ok = false; continue; }
+                    PresetPackSafety::Asset asset;
+                    asset.path = "patches/" + target.getFileName(); asset.size = target.getSize(); asset.sha256 = juce::SHA256 (target).toHexString();
+                    manifest.assets.push_back (asset); manifest.patchIds.add (target.getFileNameWithoutExtension());
+                }
+                juce::String reason;
+                if (ok) ok = PresetPackSafety::writePackArchive (archive, staging, manifest, &reason);
+                staging.deleteRecursively();
+                safe->description.setText (ok ? "Exported " + juce::String (manifest.assets.size()) + " presets to " + archive.getFileName()
+                                               : "Bulk export failed: " + reason, juce::dontSendNotification);
             });
     }
 };

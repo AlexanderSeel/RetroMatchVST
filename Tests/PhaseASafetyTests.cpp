@@ -242,8 +242,8 @@ int main()
         return fail ("gain-budgeted additive rack is not rendered headroom-safe");
 
     SynthEngine layeredLiveEngine;
+    layeredLiveEngine.prepare (sampleRate, 256, 2, true);
     layeredLiveEngine.setRandomSeed ((int64) 0x524d534f);
-    layeredLiveEngine.prepare (sampleRate, 256, 2, false);
     layeredLiveEngine.setParameters (generatedRack);
     juce::AudioBuffer<float> layeredLive (2, layered.getNumSamples());
     layeredLive.clear();
@@ -264,7 +264,18 @@ int main()
                                                        std::abs (layeredLive.getSample (ch, i) - layered.getSample (ch, i)));
     if (! layeredLiveTelemetry.isTechnicallySafe() || layeredLiveTelemetry.peak > 0.98f
         || layeredLiveOfflineDifference > 1.0e-6f)
-        return fail ("offline and live renders diverged or lost headroom for the generated multilayer rack");
+    {
+        std::cerr << "Generated rack diagnostics: live peak=" << layeredLiveTelemetry.peak
+                  << " live rms=" << layeredLiveTelemetry.rms
+                  << " offline peak=" << layeredTelemetry.peak
+                  << " offline rms=" << layeredTelemetry.rms
+                  << " max difference=" << layeredLiveOfflineDifference << '\n';
+        if (! layeredLiveTelemetry.isTechnicallySafe())
+            return fail ("live generated multilayer rack failed technical safety telemetry");
+        if (layeredLiveTelemetry.peak > 0.98f)
+            return fail ("live generated multilayer rack exceeded the headroom limit");
+        return fail ("offline and live renders diverged for the generated multilayer rack");
+    }
 
     auto nonAdditive = cleanPatch;
     nonAdditive.layers[0] = std::make_shared<VoiceParameters> (cleanPatch);
