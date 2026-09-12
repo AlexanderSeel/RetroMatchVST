@@ -60,7 +60,7 @@ echo Building plug-in, standalone app and all registered test executables...
 if errorlevel 1 goto :build_failed
 
 echo Running tests...
-"%CTEST%" --test-dir C:\build --output-on-failure
+"%CTEST%" --test-dir C:\build --output-on-failure -VV
 if errorlevel 1 goto :tests_failed
 
 echo Windows container build completed successfully.

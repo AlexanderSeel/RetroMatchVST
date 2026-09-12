@@ -386,7 +386,8 @@ public:
             const auto& in = incoming.front();
             const auto& out = outgoing.front();
             Edge bypass;
-            bypass.id = in.id + ":bypass";
+            const auto insertedEdgeStem = in.id.endsWith (":in") ? in.id.dropLastCharacters (3) : in.id;
+            bypass.id = insertedEdgeStem + ":bypass";
             bypass.fromNode = in.fromNode; bypass.fromPort = in.fromPort;
             bypass.toNode = out.toNode; bypass.toPort = out.toPort;
             bypass.type = PortType::audio;
@@ -438,9 +439,9 @@ public:
             if (reason != nullptr) *reason = "Connection not found: " + edgeId;
             return false;
         }
-        if (! old->editable || old->type != PortType::audio)
+        if (old->type != PortType::audio)
         {
-            if (reason != nullptr) *reason = "Only editable audio connections can accept an inserted node";
+            if (reason != nullptr) *reason = "Only audio connections can accept an inserted node";
             return false;
         }
         if (node.id.isEmpty() || candidate.findNode (node.id) != nullptr)

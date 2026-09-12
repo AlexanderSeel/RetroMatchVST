@@ -354,9 +354,9 @@ private:
         chooser = std::make_unique<juce::FileChooser> (exporting ? "Export RetroMatch pack" : "Import RetroMatch pack",
                                                        packDirectory.getChildFile ("RetroMatch Pack.rmpack"), "*.rmpack");
         juce::Component::SafePointer<PresetsPage> safe (this);
-        const int flags = exporting ? juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting
-                                    : juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
-        chooser->launchAsync (flags, [safe, exporting] (const juce::FileChooser& fc)
+        const int browserFlags = exporting ? juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting
+                                           : juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+        chooser->launchAsync (browserFlags, [safe, exporting] (const juce::FileChooser& fc)
         {
             if (! safe || fc.getResult() == juce::File()) return;
             const auto file = fc.getResult().withFileExtension ("rmpack");

@@ -348,7 +348,7 @@ float Core::macroValue (int lane) noexcept
     const float fraction = (float) (position - base);
     const float t = interpolation == MacroInterpolation::smooth
         ? fraction * fraction * (3.0f - 2.0f * fraction) : fraction;
-    return juce::jmap (t, a, b);
+    return a + (b - a) * t;
 }
 
 void Core::emitOrQueue (Trigger trigger, double offset, int blockSamples,

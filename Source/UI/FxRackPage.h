@@ -64,11 +64,11 @@ public:
             for (size_t k = 0; k < fxModuleCatalog.size(); ++k) row.type.addItem (fxModuleCatalog[k].name, (int) k + 1);
             row.stage.addItemList ({ "PRE", "POST" }, 1); row.bypass.setButtonText ("BYPASS");
             row.up.setButtonText ("UP"); row.down.setButtonText ("DN"); row.copy.setButtonText ("COPY"); row.remove.setButtonText ("X");
-            const auto prefix = parameterPrefix + juce::String (i + 1);
-            row.typeAttachment = std::make_unique<ComboAttachment> (proc.apvts, prefix + "Type", row.type);
-            row.stageAttachment = std::make_unique<ComboAttachment> (proc.apvts, prefix + "Stage", row.stage);
-            row.bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, prefix + "Bypass", row.bypass);
-            row.sync = std::make_unique<TempoSyncSelector> (proc, prefix + "TempoSync", prefix + "Division", "BEAT");
+            const auto rowPrefix = parameterPrefix + juce::String (i + 1);
+            row.typeAttachment = std::make_unique<ComboAttachment> (proc.apvts, rowPrefix + "Type", row.type);
+            row.stageAttachment = std::make_unique<ComboAttachment> (proc.apvts, rowPrefix + "Stage", row.stage);
+            row.bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, rowPrefix + "Bypass", row.bypass);
+            row.sync = std::make_unique<TempoSyncSelector> (proc, rowPrefix + "TempoSync", rowPrefix + "Division", "BEAT");
             row.panel.addAndMakeVisible (*row.sync);
             for (int k = 0; k < 4; ++k)
             {

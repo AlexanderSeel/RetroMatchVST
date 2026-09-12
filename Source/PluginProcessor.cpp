@@ -17,6 +17,8 @@
 #include <iterator>
 #include <vector>
 
+bool isMeasuredResultSafe (const MatchResult& result, bool requireFullRack) noexcept;
+
 namespace
 {
 bool isGlobalRackOrClockParameter (const juce::String& id)
@@ -835,8 +837,8 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
     bool hostPlaying = true;
     bool hostJustStarted = false;
     if (apvts.getRawParameterValue ("tempoSource")->load() >= 0.5f)
-        if (auto* playHead = getPlayHead())
-            if (auto position = playHead->getPosition())
+        if (auto* currentPlayHead = getPlayHead())
+            if (auto position = currentPlayHead->getPosition())
             {
                 if (auto hostBpm = position->getBpm()) bpm = (float) *hostBpm;
                 hostPlaying = position->getIsPlaying();
