@@ -1,8 +1,53 @@
 #include "../Source/PluginProcessor.h"
 #include "../Source/Engine/PresetLibrary.h"
+#include "../Source/UI/MelodyPage.h"
 #include "../Source/UI/ReferenceRegion.h"
+#include "../Source/UI/SequencerPanel.h"
+#include "../Source/UI/SignalLabPage.h"
 #include <cmath>
 #include <iostream>
+
+namespace
+{
+bool hasUsableVisualInk (const juce::Image& image, const juce::String& name,
+                         int expectedWidth, int expectedHeight, double minimumCoverage = 0.04)
+{
+    if (! image.isValid() || image.getWidth() != expectedWidth || image.getHeight() != expectedHeight)
+    {
+        std::cerr << "UI visual test failed: " << name << " has viewport "
+                  << image.getWidth() << "x" << image.getHeight() << "; expected "
+                  << expectedWidth << "x" << expectedHeight << ".\n";
+        return false;
+    }
+
+    // Sample the rendered image rather than relying on component existence. This
+    // catches collapsed layouts, invisible tab pages, and accidental full-frame
+    // paint failures while remaining tolerant of theme and font raster changes.
+    const auto background = image.getPixelAt (0, 0);
+    int ink = 0;
+    const int stride = 4;
+    const int sampled = ((image.getWidth() + stride - 1) / stride)
+                      * ((image.getHeight() + stride - 1) / stride);
+    for (int y = 0; y < image.getHeight(); y += stride)
+        for (int x = 0; x < image.getWidth(); x += stride)
+        {
+            const auto pixel = image.getPixelAt (x, y);
+            const int distance = std::abs (pixel.getRed() - background.getRed())
+                               + std::abs (pixel.getGreen() - background.getGreen())
+                               + std::abs (pixel.getBlue() - background.getBlue());
+            if (pixel.getAlpha() > 8 && distance > 18) ++ink;
+        }
+
+    const double coverage = (double) ink / (double) juce::jmax (1, sampled);
+    if (coverage < minimumCoverage || coverage > 0.985)
+    {
+        std::cerr << "UI visual test failed: " << name << " has suspicious ink coverage "
+                  << coverage << ".\n";
+        return false;
+    }
+    return true;
+}
+}
 
 int main (int argc, char** argv)
 {
@@ -89,6 +134,15 @@ int main (int argc, char** argv)
     for (int i = 0; i < editor->getNumChildComponents(); ++i)
         if (auto* found = dynamic_cast<juce::TabbedComponent*> (editor->getChildComponent (i))) tabs = found;
     if (! tabs) return 5;
+    const auto requiredTabs = juce::StringArray { "PRESETS", "LAYERS", "SYNTH", "SEQUENCER", "FM", "MSEG", "FILTER", "MOD", "FX", "WAVETABLE", "SIGNAL", "MIDI MAP", "MELODY", "SETTINGS" };
+    bool tabMismatch = tabs->getNumTabs() != requiredTabs.size();
+    for (int i = 0; ! tabMismatch && i < requiredTabs.size(); ++i)
+        tabMismatch = tabs->getTabName (i) != requiredTabs[i];
+    if (tabMismatch
+        || dynamic_cast<SequencerPanel*> (tabs->getTabContentComponent (tabs->getTabNames().indexOf ("SEQUENCER"))) == nullptr
+        || dynamic_cast<SignalLabPage*> (tabs->getTabContentComponent (tabs->getTabNames().indexOf ("SIGNAL"))) == nullptr
+        || dynamic_cast<MelodyPage*> (tabs->getTabContentComponent (tabs->getTabNames().indexOf ("MELODY"))) == nullptr)
+        return 47;
     juce::TextButton* applyRegion = nullptr;
     juce::TextButton* createTable = nullptr;
     for (auto* child : editor->getChildren())
@@ -123,6 +177,9 @@ int main (int argc, char** argv)
         auto output = file.createOutputStream();
         if (! output) return false;
         output->setPosition (0); output->truncate();
+        const int expectedWidth = editor->getWidth();
+        const int expectedHeight = editor->getHeight();
+        if (! hasUsableVisualInk (image, name, expectedWidth, expectedHeight)) return false;
         return juce::PNGImageFormat().writeImageToStream (image, *output);
     };
     if (! capture ("01-synth-mint")) return 6;

@@ -23,6 +23,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void refreshPageNavigator();
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
     void filesDropped (const juce::StringArray&, int, int) override;
 
@@ -240,6 +241,7 @@ private:
 
     // Persistent reference -> match -> audition workspace.
     juce::TextButton load { "LOAD REFERENCE" }, quick { "QUICK x3" }, refine { "REFINE x3" }, goldMatch { "GOLD" }, aiVariants { "AI x3" }, compareMatch { "COMPARE" };
+    juce::TextButton matchMenu { "MATCH" }, magicMenu { "MAGIC" };
     juce::TextButton magicVary { "MAGIC" }, magicCapture { "ORIGIN" }, magicRestore { "RESTORE" }, magicBack { "BRANCH <" },
                                magicKeep { "KEEP" }, magicApply { "APPLY" }, magicDiff { "DIFF" };
     CandidateButton candidateA { "A", "NATURAL" }, candidateB { "B", "FM / HARMONIC" }, candidateC { "C", "WT / TEXTURE" };
@@ -266,6 +268,7 @@ private:
 
     // Editing pages. Matching deliberately stays outside these tabs.
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
+    juce::ComboBox pageNavigator;
     TabPage synthPage, fmPage, filterAmpPage, modPage, fxPage, settingsPage, aiLogPage;
 
     juce::Label synthOscSection, synthTextureSection;

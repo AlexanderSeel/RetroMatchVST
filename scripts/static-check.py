@@ -85,6 +85,11 @@ if not pattern_library_path.exists(): errors.append('Source/Sequencer/PatternLib
 if not pack_safety_path.exists(): errors.append('Source/Engine/PresetPackSafety.h is missing')
 if not magic_dialog_path.exists(): errors.append('Source/UI/MagicAuditionDialog.h is missing')
 if not editor_preview_path.exists(): errors.append('Tests/EditorPreview.cpp is missing')
+if not (ROOT / 'scripts/update-ui-example.py').exists(): errors.append('README UI example updater is missing')
+if 'hasUsableVisualInk' not in editor_preview_path.read_text(encoding='utf-8'):
+    errors.append('editor preview must include visual ink sanity checks')
+if 'retromatch-editor-example.png' not in (ROOT / 'README.md').read_text(encoding='utf-8'):
+    errors.append('README must reference the generated editor example')
 
 processor = (ROOT / 'Source/PluginProcessor.cpp').read_text(encoding='utf-8')
 processor_h = (ROOT / 'Source/PluginProcessor.h').read_text(encoding='utf-8')

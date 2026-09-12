@@ -239,6 +239,14 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
 
     rebindFmOperatorEditor();
     configurePages();
+    pageNavigator.setTooltip ("Compact page index for grouped navigation. The full tab strip remains available above.");
+    pageNavigator.onChange = [this]
+    {
+        const int target = pageNavigator.getSelectedId() - 1;
+        if (juce::isPositiveAndBelow (target, tabs.getNumTabs())) tabs.setCurrentTabIndex (target);
+    };
+    addAndMakeVisible (pageNavigator);
+    refreshPageNavigator();
 
     // Size changes call resized() synchronously, so do this only after all dynamic
     // components, attachments and tab pages have been created.

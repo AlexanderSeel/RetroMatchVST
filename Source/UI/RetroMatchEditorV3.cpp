@@ -494,6 +494,8 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
         if (auto* window = options.launchAsync()) window->setResizeLimits (780, 520, 1600, 1050);
     };
     addAndMakeVisible (magicVary);
+    addAndMakeVisible (matchMenu);
+    addAndMakeVisible (magicMenu);
     for (auto* button : { &magicCapture, &magicRestore, &magicBack, &magicKeep, &magicApply, &magicDiff }) addAndMakeVisible (*button);
     magicVary.setTooltip ("Choose a bounded semantic Magic direction and generate a safe variation.");
     magicCapture.setTooltip ("Capture the current patch as the immutable Magic origin and clear branch history.");
@@ -570,6 +572,47 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
         options.dialogBackgroundColour = juce::Colour (0xff06090a);
         options.escapeKeyTriggersCloseButton = true; options.useNativeTitleBar = true; options.resizable = true; options.componentToCentreAround = this;
         if (auto* window = options.launchAsync()) window->setResizeLimits (560, 340, 1100, 760);
+    };
+
+    matchMenu.setTooltip ("Choose the matching depth from one compact action menu.");
+    matchMenu.onClick = [this]
+    {
+        juce::PopupMenu menu;
+        menu.addItem (1, "QUICK x3  /  fast local variants");
+        menu.addItem (2, "REFINE x3  /  closed-loop variants");
+        menu.addItem (3, "GOLD  /  full-rack search");
+        menu.addItem (4, "AI x3  /  provider-assisted seeds");
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&matchMenu), [this] (int result)
+        {
+            if (result == 1) startVariantSearch (WorkMode::quick);
+            else if (result == 2) startVariantSearch (WorkMode::refine);
+            else if (result == 3) startVariantSearch (WorkMode::gold);
+            else if (result == 4) startVariantSearch (WorkMode::ai);
+        });
+    };
+    magicMenu.setTooltip ("Open all Magic variation, origin, branch and commit actions in one context menu.");
+    magicMenu.onClick = [this]
+    {
+        juce::PopupMenu menu;
+        menu.addItem (1, "CREATE VARIATION...");
+        menu.addSeparator();
+        menu.addItem (2, "CAPTURE ORIGIN");
+        menu.addItem (3, "RESTORE ORIGIN");
+        menu.addItem (4, "RESTORE LAST BRANCH");
+        menu.addSeparator();
+        menu.addItem (5, "KEEP PREVIEW", proc.hasMagicPreview());
+        menu.addItem (6, "APPLY AS NEW ORIGIN", proc.hasMagicPreview());
+        menu.addItem (7, "OPEN DIFF PANEL");
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&magicMenu), [this] (int result)
+        {
+            if (result == 1) magicVary.triggerClick();
+            else if (result == 2) magicCapture.triggerClick();
+            else if (result == 3) magicRestore.triggerClick();
+            else if (result == 4) magicBack.triggerClick();
+            else if (result == 5) magicKeep.triggerClick();
+            else if (result == 6) magicApply.triggerClick();
+            else if (result == 7) magicDiff.triggerClick();
+        });
     };
 
     candidateMorphLabel.setText ("A  <  MORPH  >  C", juce::dontSendNotification);
@@ -1123,6 +1166,21 @@ void RetroMatchSynthAudioProcessorEditor::configurePages()
     for (auto* c : aiLogControls) aiLogPage.addAndMakeVisible (*c);
 }
 
+void RetroMatchSynthAudioProcessorEditor::refreshPageNavigator()
+{
+    pageNavigator.clear (juce::dontSendNotification);
+    const auto names = tabs.getTabNames();
+    for (int i = 0; i < names.size(); ++i)
+    {
+        const auto group = i < 2 ? "WORKFLOW / "
+                         : i < 10 ? "SYNTH / "
+                         : i < 13 ? "ANALYSIS / "
+                         : "SYSTEM / ";
+        pageNavigator.addItem (group + names[i], i + 1);
+    }
+    pageNavigator.setSelectedId (tabs.getCurrentTabIndex() + 1, juce::dontSendNotification);
+}
+
 //==============================================================================
 void RetroMatchSynthAudioProcessorEditor::layoutKnobGrid (const juce::StringArray& ids, juce::Rectangle<int> area, int maxColumns)
 {
@@ -1318,8 +1376,15 @@ void RetroMatchSynthAudioProcessorEditor::resized()
 
     auto contextRow = outer.removeFromTop (34);
     instanceChoice.setBounds (contextRow.removeFromRight (220).reduced (2));
+    pageNavigator.setBounds (contextRow.removeFromRight (210).reduced (2));
     instanceContext.setBounds (contextRow.reduced (8, 0));
     outer.removeFromTop (4);
+    const bool compactNavigation = outer.getWidth() < 1150;
+    // The tab strip is always the primary navigation. The dropdown is an
+    // additional compact index, never a replacement that can make pages seem
+    // to disappear at common editor sizes.
+    tabs.getTabbedButtonBar().setVisible (true);
+    pageNavigator.setVisible (compactNavigation);
     tabs.setBounds (outer.reduced (6, 0));
 
     auto w = workspaceBounds.reduced (12);
@@ -1383,19 +1448,13 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     }
 
     auto actionRow = w.removeFromTop (36);
-    const int buttonW = actionRow.getWidth() / 12;
-    quick.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    refine.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    goldMatch.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    aiVariants.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    compareMatch.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    magicVary.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    magicCapture.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    magicRestore.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    magicBack.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    magicKeep.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    magicApply.setBounds (actionRow.removeFromLeft (buttonW).reduced (2, 0));
-    magicDiff.setBounds (actionRow.reduced (2, 0));
+    for (auto* button : { &quick, &refine, &goldMatch, &aiVariants, &magicVary,
+                          &magicCapture, &magicRestore, &magicBack, &magicKeep, &magicApply, &magicDiff })
+        button->setBounds (0, 0, 0, 0);
+    const int actionWidth = juce::jmax (1, actionRow.getWidth() / 3);
+    matchMenu.setBounds (actionRow.removeFromLeft (actionWidth).reduced (2, 0));
+    compareMatch.setBounds (actionRow.removeFromLeft (actionWidth).reduced (2, 0));
+    magicMenu.setBounds (actionRow.reduced (2, 0));
     w.removeFromTop (5);
 
     auto footer = w.removeFromBottom (76);
@@ -1606,7 +1665,8 @@ void RetroMatchSynthAudioProcessorEditor::paint (juce::Graphics& g)
                 headerFrame.getWidth() - 24.0f, 1.0f);
 
     // Main synth module frame. The live tab component sits inside this recess.
-    auto mainFrame = tabs.getBounds().getUnion (instanceContext.getBounds()).getUnion (instanceChoice.getBounds()).toFloat().expanded (10.0f, 7.0f);
+    auto mainFrame = tabs.getBounds().getUnion (instanceContext.getBounds()).getUnion (instanceChoice.getBounds())
+                         .getUnion (pageNavigator.getBounds()).toFloat().expanded (10.0f, 7.0f);
     if (! mainFrame.isEmpty())
         RetroHardware3D::drawRecessedPanel (g, mainFrame, palette, 10.0f);
 
@@ -1663,7 +1723,7 @@ void RetroMatchSynthAudioProcessorEditor::startVariantSearch (WorkMode mode)
     matchProgress.store (0.0f);
     progressDisplay = 0.0;
     progressBar.setVisible (true);
-    for (auto* b : { &load, &quick, &refine, &goldMatch, &aiVariants }) b->setEnabled (false);
+    for (auto* b : { &load, &quick, &refine, &goldMatch, &aiVariants, &matchMenu, &magicMenu }) b->setEnabled (false);
     status.setText (mode == WorkMode::quick ? "Quick matching: rendering three distinct local variants..."
                    : mode == WorkMode::refine ? "Refining three variant families with the closed-loop optimizer..."
                    : mode == WorkMode::gold ? "GOLD: sweeping all methods, deep-refining the strongest three and scoring every completed rack depth..."
@@ -1790,7 +1850,7 @@ void RetroMatchSynthAudioProcessorEditor::finishVariantSearch (std::array<MatchR
                                                                const juce::String& error,
                                                                const juce::String& diagnostics)
 {
-    for (auto* b : { &load, &quick, &refine, &goldMatch, &aiVariants }) b->setEnabled (true);
+    for (auto* b : { &load, &quick, &refine, &goldMatch, &aiVariants, &matchMenu, &magicMenu }) b->setEnabled (true);
     progressDisplay = error.isEmpty() ? 1.0 : 0.0;
     progressBar.setVisible (false);
 
@@ -2011,6 +2071,9 @@ void RetroMatchSynthAudioProcessorEditor::timerCallback()
         for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) if (proc.hasLayer (i)) instanceChoice.addItem ("Instance " + juce::String (i + 2), i + 2);
     }
     instanceChoice.setSelectedId (selected + 2, juce::dontSendNotification);
+    const int currentTab = tabs.getCurrentTabIndex();
+    if (pageNavigator.getSelectedId() != currentTab + 1)
+        pageNavigator.setSelectedId (currentTab + 1, juce::dontSendNotification);
     for (int i = 0; i < tabs.getNumTabs(); ++i) tabs.setTabBackgroundColour (i, accent.darker (0.82f));
     const float start = proc.getAnalysisStartSeconds();
     const float end = proc.getAnalysisEndSeconds() > 0 ? proc.getAnalysisEndSeconds() : proc.getReferenceAnalysisDuration();

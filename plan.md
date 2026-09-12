@@ -261,6 +261,7 @@ Each direction must map to an explicit bounded set of synthesis/routing dimensio
 - [ ] pluginval/auval coverage where practical.
 - [~] The optional UI preview is registered with CTest and includes a legacy pre-module preset fixture verifying migration/reset of newer rack state; additional released-schema fixtures remain open.
 - [~] The optional editor preview now performs a 24-cycle factory/sequence load, note-render, finite-audio and state-round-trip transition soak; longer graph-edit/background-worker/preset-browser host soaks remain open.
+- [x] The editor preview renders representative wide and minimum-size UI snapshots and rejects invalid viewport sizes, collapsed/blank pages and suspicious full-frame paint coverage; `scripts/update-ui-example.py` promotes the tested primary snapshot into the README asset.
 - [~] Live output and OfflineRenderer now have final non-finite firewalls; live invalid-sample counts are exposed atomically, and smoke/factory plus full-rack regressions now assert zero non-finite samples and bounded clipping/headroom, while native release validation remains open.
 - [ ] Final listening pass on reference fixtures and representative factory content.
 

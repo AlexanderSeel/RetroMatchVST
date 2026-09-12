@@ -424,14 +424,15 @@ public:
             // Base editor contributes these pages without transferring ownership.
             // Rebuild the outer tab strip in the requested sound-design workflow order.
             auto* synthContent = tabbed->getTabContentComponent (0);
-            auto* fmContent = tabbed->getTabContentComponent (1);
-            auto* filterContent = tabbed->getTabContentComponent (2);
-            auto* builtInMod = tabbed->getTabContentComponent (3);
-            auto* builtInFx = tabbed->getTabContentComponent (4);
-            auto* baseSettings = tabbed->getTabContentComponent (5);
-            auto* baseAiLog = tabbed->getTabContentComponent (6);
-            auto* signalContent = tabbed->getTabContentComponent (7);
-            auto* melodyContent = tabbed->getTabContentComponent (8);
+            auto* sequencerContent = tabbed->getTabContentComponent (1);
+            auto* fmContent = tabbed->getTabContentComponent (2);
+            auto* filterContent = tabbed->getTabContentComponent (3);
+            auto* builtInMod = tabbed->getTabContentComponent (4);
+            auto* builtInFx = tabbed->getTabContentComponent (5);
+            auto* baseSettings = tabbed->getTabContentComponent (6);
+            auto* baseAiLog = tabbed->getTabContentComponent (7);
+            auto* signalContent = tabbed->getTabContentComponent (8);
+            auto* melodyContent = tabbed->getTabContentComponent (9);
 
             settingsPage = baseSettings;
             if (settingsPage != nullptr)
@@ -451,6 +452,7 @@ public:
             tabbed->addTab ("PRESETS", juce::Colour (0xff101719), new PresetsPage (proc), true);
             tabbed->addTab ("LAYERS", juce::Colour (0xff101719), new LayersPage (proc), true);
             tabbed->addTab ("SYNTH", juce::Colour (0xff14201e), synthContent, false);
+            tabbed->addTab ("SEQUENCER", juce::Colour (0xff102024), sequencerContent, false);
             tabbed->addTab ("FM", juce::Colour (0xff211b14), fmContent, false);
             tabbed->addTab ("MSEG", juce::Colour (0xff10201d), new MsegPage (proc), true);
             tabbed->addTab ("FILTER", juce::Colour (0xff151e20), filterContent, false);
@@ -462,6 +464,7 @@ public:
             tabbed->addTab ("MELODY", juce::Colour (0xff102024), melodyContent, false);
             tabbed->addTab ("SETTINGS", juce::Colour (0xff171d1d), settingsHub, true);
             tabbed->setCurrentTabIndex (0);
+            refreshPageNavigator();
         }
         resized();
     }

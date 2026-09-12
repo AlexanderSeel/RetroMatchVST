@@ -14,6 +14,8 @@ The result is not a hidden sampler preset: oscillator topology, FM operators, en
   <img src="Assets/screenshots/retromatch-hardware-overview.svg" width="100%" alt="RetroMatch RM-01 hardware-style synthesizer interface" />
 </p>
 
+The current editor surface is rendered by the optional UI preview and can be refreshed with `python scripts/update-ui-example.py --preview <path-to-RetroMatchEditorPreview>`. The generated example is kept at [`Assets/screenshots/retromatch-editor-example.png`](Assets/screenshots/retromatch-editor-example.png) so documentation follows the tested UI.
+
 > **Formats:** VST3, Audio Unit (macOS), Standalone  
 > **Framework:** JUCE 9.0.1 / C++20 / CMake  
 > **Platforms:** Windows 10/11 and macOS  
@@ -21,7 +23,7 @@ The result is not a hidden sampler preset: oscillator topology, FM operators, en
 
 ## Implementation status
 
-The current source baseline includes the Phase A/B matching and Compare safety contracts, the validated Patch Map foundation, the sequencer/arpeggiator engine and UI, factory sequence demonstrations, XML pattern files, validated `.rmpack` export/import including bulk user-library operations, a legacy preset migration fixture, and the complete bounded Magic preview/commit workflow. Remaining roadmap entries are explicit closure gates: native release validation, generalized arbitrary-processor graph execution, final GOLD/listening review, larger reviewed factory-content work, and final loudness/content review.
+The current source baseline includes the Phase A/B matching and Compare safety contracts, the validated Patch Map foundation, the sequencer/arpeggiator engine and UI, factory sequence demonstrations, XML pattern files, validated `.rmpack` export/import including bulk user-library operations, a legacy preset migration fixture, and the complete bounded Magic preview/commit workflow. The editor keeps the primary workflow tabs (Presets, Layers, Synth, Sequencer, Signal and Melody) addressable in one consistent tab map; narrow layouts replace the long strip with a grouped page dropdown. Remaining roadmap entries are explicit closure gates: native release validation, generalized arbitrary-processor graph execution, final GOLD/listening review, larger reviewed factory-content work, and final loudness/content review.
 
 ### Validation snapshot
 
