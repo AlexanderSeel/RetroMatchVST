@@ -62,6 +62,7 @@ struct Settings
     int rootNote = 60;
     double internalBpm = 120.0;
     bool latch = false;
+    bool noteGate = true;
     OutputMode outputMode = OutputMode::notesAndMotion;
     TargetScope targetScope = TargetScope::global;
     int targetLayer = 0;

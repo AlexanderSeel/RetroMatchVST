@@ -31,7 +31,7 @@ bool RetroMatchSynthAudioProcessor::applySequencerInference()
         melodyTransport.setSequencerStep (i, suggestion.steps[(size_t) i]);
     juce::ValueTree state ("SEQUENCER");
     state.setProperty ("schema", 3, nullptr); state.setProperty ("enabled", false, nullptr);
-    state.setProperty ("mode", (int) settings.mode, nullptr); state.setProperty ("outputMode", (int) settings.outputMode, nullptr);
+    state.setProperty ("mode", (int) settings.mode, nullptr); state.setProperty ("outputMode", (int) settings.outputMode, nullptr); state.setProperty ("noteGate", settings.noteGate, nullptr);
     state.setProperty ("targetScope", (int) settings.targetScope, nullptr); state.setProperty ("targetLayer", settings.targetLayer, nullptr);
     state.setProperty ("division", (int) settings.division, nullptr); state.setProperty ("length", settings.length, nullptr);
     state.setProperty ("bpm", settings.internalBpm, nullptr); state.setProperty ("restartMode", (int) settings.restartMode, nullptr);
@@ -1998,7 +1998,8 @@ void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
 
     auto settings = melodyTransport.getSequencerSettings();
     settings.enabled = true;
-    settings.clockSource = RetroMatchSequencer::ClockSource::internal;
+    settings.clockSource = RetroMatchSequencer::ClockSource::host;
+    settings.noteGate = true;
     settings.mode = RetroMatchSequencer::Mode::pattern;
     settings.division = RetroMatchSequencer::Division::sixteenth;
     settings.length = 16;
@@ -2035,7 +2036,7 @@ void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
     juce::ValueTree sequenceState ("SEQUENCER");
     sequenceState.setProperty ("schema", 2, nullptr); sequenceState.setProperty ("enabled", true, nullptr);
     sequenceState.setProperty ("mode", (int) settings.mode, nullptr); sequenceState.setProperty ("outputMode", (int) settings.outputMode, nullptr); sequenceState.setProperty ("targetScope", (int) settings.targetScope, nullptr); sequenceState.setProperty ("targetLayer", settings.targetLayer, nullptr); sequenceState.setProperty ("division", (int) settings.division, nullptr);
-    sequenceState.setProperty ("length", settings.length, nullptr); sequenceState.setProperty ("bpm", settings.internalBpm, nullptr);
+    sequenceState.setProperty ("length", settings.length, nullptr); sequenceState.setProperty ("bpm", settings.internalBpm, nullptr); sequenceState.setProperty ("noteGate", settings.noteGate, nullptr);
     sequenceState.setProperty ("macroDestination1", (int) settings.macroDestination[0], nullptr); sequenceState.setProperty ("macroDestination2", (int) settings.macroDestination[1], nullptr);
     sequenceState.setProperty ("macroInterpolation1", (int) settings.macroInterpolation[0], nullptr); sequenceState.setProperty ("macroInterpolation2", (int) settings.macroInterpolation[1], nullptr);
     sequenceState.setProperty ("macroRate1", settings.macroLaneRate[0], nullptr); sequenceState.setProperty ("macroRate2", settings.macroLaneRate[1], nullptr);

@@ -1,6 +1,5 @@
 #include "../Source/Sequencer/StepSequencer.h"
 #include "../Source/Sequencer/PatternLibrary.h"
-#include "../Source/Matching/SequencerInference.h"
 
 #include <cmath>
 #include <iostream>
@@ -30,6 +29,7 @@ Settings internalPatternSettings()
     settings.internalBpm = 120.0;
     settings.length = 4;
     settings.rootNote = 60;
+    settings.noteGate = false;
     return settings;
 }
 }
@@ -67,20 +67,6 @@ int main()
         return fail ("musical division lengths are incorrect");
 
     {
-        SoundFeatures evolving;
-        evolving.duration = 2.0f; evolving.spectralMotion = 0.12f; evolving.sustainLevel = 0.7f;
-        for (int i = 0; i < SoundFeatures::temporalFrameCount; ++i)
-        { evolving.temporalRms[(size_t) i] = i / 7.0f; evolving.temporalSpectralBands[(size_t) i][15] = 1.0f - i / 14.0f; }
-        const auto suggestion = SequencerInference::fromReference (evolving);
-        if (! suggestion.useful || suggestion.settings.outputMode != OutputMode::motionOnly
-            || suggestion.settings.mode != Mode::pattern || suggestion.steps[15].macro[0] <= suggestion.steps[0].macro[0])
-            return fail ("reference motion inference did not produce a bounded evolving lane suggestion");
-        evolving.transientScore = 0.9f; evolving.sustainLevel = 0.1f;
-        if (SequencerInference::fromReference (evolving).useful)
-            return fail ("one-shot reference was incorrectly forced into sequencer motion");
-    }
-
-    {
         Core core;
         core.prepare (48000.0);
         core.setSettings (internalPatternSettings());
@@ -93,6 +79,28 @@ int main()
             || ! near (events[2].sampleOffset, 12000)
             || ! near (events[3].sampleOffset, 18000))
             return fail ("120 BPM sixteenth-note clock is not sample accurate");
+    }
+
+    {
+        Core core;
+        core.prepare (48000.0);
+        auto settings = internalPatternSettings();
+        settings.noteGate = true;
+        core.setSettings (settings);
+        Trigger events[8] {};
+        Transport transport;
+        if (core.processBlock (24000, transport, events, 8) != 0)
+            return fail ("note-gated sequencer advanced without a held note");
+        core.noteOn (60, 1.0f);
+        if (core.processBlock (24000, transport, events, 8) == 0)
+            return fail ("note-gated sequencer did not start from a held note");
+
+        core.allNotesOff();
+        core.reset();
+        core.setSettings (settings);
+        core.noteOn (62, 1.0f);
+        if (core.processBlock (1, transport, events, 8) == 0 || events[0].midiNote != 62)
+            return fail ("pattern mode did not transpose from the played root note");
     }
 
     {

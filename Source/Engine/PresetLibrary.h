@@ -62,7 +62,7 @@ inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
                 + "Deterministically voiced with tuned oscillator balance, envelope contour, filter colour and complementary spatial processing."
                 + (variation >= 6 && (family == 2 || family == 3 || family == 4 || family == 5 || family == 6 || family == 8 || family == 9)
                     ? " MSEG motion is part of the authored sound." : "")
-                + (family == 4 ? " Includes an enabled 16-step melodic sequencer with macro destinations." : "")
+                + (family == 4 ? " Includes an enabled note-gated 16-step phrase or motion lane with macro destinations; it never starts without a played note." : "")
                 + (variation >= 8 ? " Layer roles remain independently editable in the Instance Rack." : "") });
         }
     int sequenceOrdinal = 0;
@@ -86,7 +86,7 @@ inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
         else if (preset.category == "Lead" || preset.category == "Keys") { preset.recommendedOctaveMin = 3; preset.recommendedOctaveMax = 6; }
         else if (preset.category == "Sequence")
         {
-            preset.tags.add ("arpeggiator"); preset.tags.add ("melodic"); preset.tags.add ("sound-design");
+            preset.tags.add ("arpeggiator"); preset.tags.add ("note-gated"); preset.tags.add ("melodic"); preset.tags.add ("sound-design");
             const auto use = sequenceUses[(size_t) (sequenceOrdinal % sequenceUses.size())];
             preset.description = use + " " + preset.description;
             preset.macroLabels = { "timbre motion", "dynamics" };

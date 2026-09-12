@@ -22,7 +22,7 @@ public:
         status.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
         status.setColour (juce::Label::textColourId, findColour (RetroLookAndFeel::secondaryLed));
 
-        for (auto* c : std::array<juce::Component*, 17> { &enabled, &mode, &outputMode, &division, &bpm, &length, &swing, &latch,
+        for (auto* c : std::array<juce::Component*, 20> { &enabled, &mode, &outputMode, &targetScope, &targetLayer, &division, &bpm, &length, &swing, &latch, &noteGate,
                                                            &rootNote, &octaveRange, &restartMode, &previousPage, &nextPage,
                                                            &randomize, &reverse, &clear, &patternTemplate })
             addAndMakeVisible (*c);
@@ -35,6 +35,7 @@ public:
 
         enabled.setButtonText ("SEQ ON");
         latch.setButtonText ("LATCH");
+        noteGate.setButtonText ("NOTE GATE");
         mode.addItemList ({ "UP", "DOWN", "UP / DOWN", "DOWN / UP", "PLAYED ORDER", "CHORD", "RANDOM", "WALK", "PATTERN" }, 1);
         outputMode.addItemList ({ "NOTES + MOTION", "MOTION ONLY" }, 1);
         targetScope.addItemList ({ "GLOBAL", "MAIN INSTANCE", "LAYER INSTANCE" }, 1);
@@ -97,6 +98,7 @@ public:
         outputMode.setTooltip ("NOTES + MOTION emits sequencer notes. MOTION ONLY advances the lanes and evolves the current sound without creating a second melody/MIDI player.");
         targetScope.setTooltip ("Select where the motion lanes are applied: the whole instrument, main instance, or one companion layer.");
         targetLayer.setTooltip ("Companion layer receiving motion when LAYER INSTANCE is selected.");
+        noteGate.setTooltip ("Require a played keyboard note or chord before the phrase advances. This prevents presets from behaving like unattended MIDI players.");
         rootNote.setTooltip ("Base MIDI note for PATTERN mode. Each step adds its pitch and octave offsets to this root.");
         division.setTooltip ("Step division. In DAW Tempo mode, steps follow the host play/stop state and BPM; Manual BPM runs independently.");
         swing.setTooltip ("Alternating swing while preserving each two-step pair duration.");
@@ -126,6 +128,7 @@ public:
         outputMode.onChange = [this] { commitSettings(); };
         targetScope.onChange = [this] { commitSettings(); };
         targetLayer.onChange = [this] { commitSettings(); };
+        noteGate.onClick = [this] { commitSettings(); };
         division.onChange = [this] { commitSettings(); };
         rootNote.onChange = [this] { commitSettings(); };
         octaveRange.onChange = [this] { commitSettings(); };
@@ -200,7 +203,7 @@ public:
         zoom.setBounds (tools.removeFromLeft (82).reduced (2)); fitMotion.setBounds (tools.removeFromLeft (112).reduced (2)); status.setBounds (tools.reduced (2));
 
         area.removeFromTop (5);
-        auto steps = area.removeFromTop (52);
+        auto steps = area.removeFromTop (juce::jlimit (140, 170, area.getHeight() / 3));
         const int stepWidth = juce::jmax (30, (int) std::lround (steps.getWidth() / (stepsPerPage * zoom.getValue())));
         stepGridBounds = steps.reduced (2);
         for (auto& button : stepButtons) button.setBounds (0, 0, 0, 0);
@@ -255,7 +258,7 @@ private:
     juce::ValueTree observedState;
 
     juce::Label title, stepLabel, status;
-    juce::ToggleButton enabled, latch, rest, tie, glide;
+    juce::ToggleButton enabled, latch, noteGate, rest, tie, glide;
     juce::ComboBox mode, outputMode, targetScope, targetLayer, division, rootNote, octaveRange, restartMode;
     juce::ComboBox macroDestination1, macroDestination2, macroInterpolation1, macroInterpolation2;
     juce::Slider bpm, length, swing;
@@ -333,6 +336,7 @@ private:
         settings.length = juce::jlimit (1, RetroMatchSequencer::maxSteps, (int) std::lround (length.getValue()));
         settings.swing = juce::jlimit (0.0f, 0.95f, (float) swing.getValue() * 0.01f);
         settings.latch = latch.getToggleState();
+        settings.noteGate = noteGate.getToggleState();
         settings.rootNote = juce::jlimit (0, 127, rootNote.getSelectedId() - 1);
         settings.octaveRange = juce::jlimit (1, 4, octaveRange.getSelectedId());
         settings.restartMode = (RetroMatchSequencer::RestartMode) juce::jlimit (0, 2, restartMode.getSelectedId() - 1);
@@ -518,6 +522,7 @@ private:
         settings.restartMode = RetroMatchSequencer::RestartMode::firstNote;
         settings.octaveRange = 1;
         settings.rootNote = 60;
+        settings.noteGate = true;
         for (auto& step : stepState) step = {};
 
         const auto state = proc.apvts.state.getChildWithName ("SEQUENCER");
@@ -533,6 +538,7 @@ private:
             settings.internalBpm = juce::jlimit (20.0, 400.0, (double) state.getProperty ("bpm", 120.0));
             settings.swing = juce::jlimit (0.0f, 0.95f, (float) state.getProperty ("swing", 0.0f));
             settings.latch = (bool) state.getProperty ("latch", false);
+            settings.noteGate = (bool) state.getProperty ("noteGate", true);
             settings.rootNote = juce::jlimit (0, 127, (int) state.getProperty ("rootNote", 60));
             settings.octaveRange = juce::jlimit (1, 4, (int) state.getProperty ("octaveRange", 1));
             settings.restartMode = (RetroMatchSequencer::RestartMode) juce::jlimit (0, 2, (int) state.getProperty ("restartMode", 2));
@@ -558,7 +564,7 @@ private:
         }
 
         updating = true;
-        enabled.setToggleState (settings.enabled, juce::dontSendNotification); latch.setToggleState (settings.latch, juce::dontSendNotification);
+        enabled.setToggleState (settings.enabled, juce::dontSendNotification); latch.setToggleState (settings.latch, juce::dontSendNotification); noteGate.setToggleState (settings.noteGate, juce::dontSendNotification);
         mode.setSelectedId ((int) settings.mode + 1, juce::dontSendNotification); outputMode.setSelectedId ((int) settings.outputMode + 1, juce::dontSendNotification); targetScope.setSelectedId ((int) settings.targetScope + 1, juce::dontSendNotification); targetLayer.setSelectedId (settings.targetLayer + 1, juce::dontSendNotification); division.setSelectedId ((int) settings.division + 1, juce::dontSendNotification);
         targetLayer.setEnabled (settings.targetScope == RetroMatchSequencer::TargetScope::layerInstance);
         rootNote.setSelectedId (settings.rootNote + 1, juce::dontSendNotification);
@@ -583,7 +589,7 @@ private:
         state.setProperty ("outputMode", (int) settings.outputMode, nullptr);
         state.setProperty ("targetScope", (int) settings.targetScope, nullptr); state.setProperty ("targetLayer", settings.targetLayer, nullptr);
         state.setProperty ("length", settings.length, nullptr); state.setProperty ("bpm", settings.internalBpm, nullptr);
-        state.setProperty ("swing", settings.swing, nullptr); state.setProperty ("latch", settings.latch, nullptr);
+        state.setProperty ("swing", settings.swing, nullptr); state.setProperty ("latch", settings.latch, nullptr); state.setProperty ("noteGate", settings.noteGate, nullptr);
         state.setProperty ("rootNote", settings.rootNote, nullptr); state.setProperty ("octaveRange", settings.octaveRange, nullptr);
         state.setProperty ("restartMode", (int) settings.restartMode, nullptr);
         state.setProperty ("macroDestination1", (int) settings.macroDestination[0], nullptr); state.setProperty ("macroDestination2", (int) settings.macroDestination[1], nullptr);

@@ -271,8 +271,24 @@ int Core::selectSingleArpNote (const Step& step, float& sourceVelocity) noexcept
 {
     if (settings.mode == Mode::pattern)
     {
-        sourceVelocity = 1.0f;
-        return bounded (0, 127, settings.rootNote + step.semitone + step.octave * 12);
+        std::array<int, maxHeldNotes> indices {};
+        const int count = collectHeldIndices (indices, true);
+        if (count == 0)
+        {
+            // Keep the low-level, non-gated pattern API useful for offline
+            // pattern tests/tools, but never let a note-gated preset free-run.
+            if (settings.noteGate)
+                return -1;
+            sourceVelocity = 1.0f;
+            return bounded (0, 127, settings.rootNote + step.semitone + step.octave * 12);
+        }
+
+        const auto& held = heldNotes[(std::size_t) indices[0]];
+        sourceVelocity = held.velocity;
+        // Pattern pitches are authored around rootNote. A played key becomes
+        // the live root, so the same pattern can be performed in any key.
+        const int transposedRoot = held.note;
+        return bounded (0, 127, transposedRoot + step.semitone + step.octave * 12);
     }
 
     std::array<int, maxHeldNotes> indices {};
@@ -495,7 +511,8 @@ int Core::processBlock (int numSamples, const Transport& transport,
         return 0;
 
     const bool running = settings.enabled
-                      && (settings.clockSource == ClockSource::internal || transport.playing);
+                      && (settings.clockSource == ClockSource::internal || transport.playing)
+                      && (! settings.noteGate || heldNoteCount() > 0);
     if (! running)
     {
         clearPending();

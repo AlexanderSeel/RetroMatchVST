@@ -250,17 +250,22 @@ private:
         sequencerInput.clear();
         sequencerInput.addEvents (midi, 0, samples, 0);
         midi.clear();
+        const bool motionOnly = appliedSequencerSettings.outputMode == RetroMatchSequencer::OutputMode::motionOnly;
         for (const auto metadata : sequencerInput)
         {
             const auto message = metadata.getMessage();
             if (message.isNoteOn())
             {
                 sequencer.noteOn (message.getNoteNumber(), message.getFloatVelocity());
+                if (motionOnly)
+                    midi.addEvent (message, metadata.samplePosition);
                 continue;
             }
             if (message.isNoteOff())
             {
                 sequencer.noteOff (message.getNoteNumber());
+                if (motionOnly)
+                    midi.addEvent (message, metadata.samplePosition);
                 continue;
             }
             if (message.isAllNotesOff())
@@ -291,7 +296,7 @@ private:
             const auto& trigger = sequencerTriggers[(size_t) i];
             sequencerMacroValues = trigger.macro;
             sequencerMacroDestinations = trigger.macroDestination;
-            if (appliedSequencerSettings.outputMode == RetroMatchSequencer::OutputMode::motionOnly)
+            if (motionOnly)
                 continue;
             const auto velocity = (juce::uint8) juce::jlimit (1, 127, (int) std::lround (trigger.velocity * 127.0f));
             midi.addEvent (juce::MidiMessage::noteOn (1, trigger.midiNote, velocity), trigger.sampleOffset);

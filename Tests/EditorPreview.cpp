@@ -4,6 +4,7 @@
 #include "../Source/UI/ReferenceRegion.h"
 #include "../Source/UI/SequencerPanel.h"
 #include "../Source/UI/SignalLabPage.h"
+#include "../Source/Matching/SequencerInference.h"
 #include <cmath>
 #include <iostream>
 
@@ -90,6 +91,17 @@ int main (int argc, char** argv)
     const auto extracted = MelodyAnalyzer::analyzeFile (fixture, false, 120);
     if (extracted.notes.size() != 4) return 16;
     processor->setMelodyClip (extracted);
+    {
+        auto evolving = *processor->currentFeatures;
+        evolving.duration = 2.0f; evolving.spectralMotion = 0.12f; evolving.sustainLevel = 0.7f;
+        for (int i = 0; i < SoundFeatures::temporalFrameCount; ++i)
+        { evolving.temporalRms[(size_t) i] = i / 7.0f; evolving.temporalSpectralBands[(size_t) i][15] = 1.0f - i / 14.0f; }
+        const auto suggestion = SequencerInference::fromReference (evolving);
+        if (! suggestion.useful || suggestion.settings.outputMode != RetroMatchSequencer::OutputMode::motionOnly
+            || suggestion.steps[15].macro[0] <= suggestion.steps[0].macro[0]) return 51;
+        evolving.transientScore = 0.9f; evolving.sustainLevel = 0.1f;
+        if (SequencerInference::fromReference (evolving).useful) return 52;
+    }
     if (! processor->setReferenceAnalysisRegion (0.1f, 0.5f)
         || ! processor->createUserWavetableFromReference (0.1f, 0.5f)) return 17;
     processor->apvts.getParameter ("distortionMode")->setValueNotifyingHost (0.5f);

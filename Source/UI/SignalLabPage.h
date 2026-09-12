@@ -39,11 +39,10 @@ public:
         lastPersistedGraphFingerprint = restored.fingerprint();
         for (const auto& node : restored.nodes)
         {
-            // The BIG map is a presentation/editor surface, not a magnified copy
-            // of the compact map's persisted manual geometry. Start it from the
-            // canonical signal-flow layout so a displaced compact node cannot
-            // create metres of dead space in the large window.
-            if (! mapOnlyMode && node.positionValid)
+            // Both views use the same persisted world geometry. The large view
+            // changes only the viewport/fit scale, so opening it cannot silently
+            // reorder or relocate the signal path shown in Signal Lab.
+            if (node.positionValid)
                 restoredNodePositions[node.id.toStdString()] = { node.position.x, node.position.y };
             if (node.routingMode != 0) restoredNodeRoutingModes[node.id.toStdString()] = node.routingMode;
             if (node.locked) restoredNodeLocks[node.id.toStdString()] = true;
