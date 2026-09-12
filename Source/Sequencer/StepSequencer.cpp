@@ -54,6 +54,9 @@ Settings Core::sanitizedSettings (Settings value) noexcept
     value.octaveRange = bounded (1, 4, value.octaveRange);
     value.rootNote = bounded (0, 127, value.rootNote);
     value.internalBpm = bounded (20.0, 400.0, value.internalBpm);
+    value.outputMode = (OutputMode) bounded (0, 1, (int) value.outputMode);
+    value.targetScope = (TargetScope) bounded (0, 2, (int) value.targetScope);
+    value.targetLayer = bounded (0, 6, value.targetLayer);
     for (int lane = 0; lane < modulationLaneCount; ++lane)
     {
         value.macroDestination[(std::size_t) lane] = (MacroDestination) bounded (0, 5, (int) value.macroDestination[(std::size_t) lane]);

@@ -42,6 +42,49 @@ bool MelodyClip::writeMidi (const juce::File& file) const
     return temp.overwriteTargetFileWithTemporary();
 }
 
+MelodyClip MelodyClip::readMidi (const juce::File& file)
+{
+    MelodyClip clip;
+    clip.sourceName = file.getFileName();
+    juce::FileInputStream input (file);
+    juce::MidiFile midi;
+    if (! input.openedOk() || ! midi.readFrom (input)) return clip;
+    midi.convertTimestampTicksToSeconds();
+
+    std::array<double, 128> starts {};
+    std::array<float, 128> velocities {};
+    std::array<bool, 128> active {};
+    for (int trackIndex = 0; trackIndex < midi.getNumTracks(); ++trackIndex)
+    {
+        const auto* track = midi.getTrack (trackIndex);
+        if (track == nullptr) continue;
+        for (int eventIndex = 0; eventIndex < track->getNumEvents(); ++eventIndex)
+        {
+            const auto& message = track->getEventPointer (eventIndex)->message;
+            const int note = message.getNoteNumber();
+            if (! juce::isPositiveAndBelow (note, 128)) continue;
+            if (message.isNoteOn() && ! active[(size_t) note])
+            {
+                starts[(size_t) note] = juce::jmax (0.0, message.getTimeStamp());
+                velocities[(size_t) note] = juce::jlimit (0.05f, 1.0f, message.getFloatVelocity());
+                active[(size_t) note] = true;
+            }
+            else if (message.isNoteOff() && active[(size_t) note])
+            {
+                const double start = starts[(size_t) note];
+                const double end = juce::jmax (start + 0.01, message.getTimeStamp());
+                if ((int) clip.notes.size() < MelodyClip::maxNotes)
+                    clip.notes.push_back ({ note, start, end - start, velocities[(size_t) note], 1.0f });
+                clip.duration = juce::jmax (clip.duration, end);
+                active[(size_t) note] = false;
+            }
+        }
+    }
+    std::sort (clip.notes.begin(), clip.notes.end(), [] (const auto& a, const auto& b)
+    { return a.start == b.start ? a.pitch < b.pitch : a.start < b.start; });
+    return clip;
+}
+
 juce::ValueTree MelodyClip::toState() const
 {
     juce::ValueTree state ("MELODY");

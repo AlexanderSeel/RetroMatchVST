@@ -22,7 +22,7 @@ public:
         status.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
         status.setColour (juce::Label::textColourId, findColour (RetroLookAndFeel::secondaryLed));
 
-        for (auto* c : std::array<juce::Component*, 16> { &enabled, &mode, &division, &bpm, &length, &swing, &latch,
+        for (auto* c : std::array<juce::Component*, 17> { &enabled, &mode, &outputMode, &division, &bpm, &length, &swing, &latch,
                                                            &rootNote, &octaveRange, &restartMode, &previousPage, &nextPage,
                                                            &randomize, &reverse, &clear, &patternTemplate })
             addAndMakeVisible (*c);
@@ -31,10 +31,14 @@ public:
             addAndMakeVisible (*c);
         addAndMakeVisible (macroRate1); addAndMakeVisible (macroRate2);
         addAndMakeVisible (savePattern); addAndMakeVisible (loadPattern); addAndMakeVisible (zoom);
+        addAndMakeVisible (fitMotion);
 
         enabled.setButtonText ("SEQ ON");
         latch.setButtonText ("LATCH");
         mode.addItemList ({ "UP", "DOWN", "UP / DOWN", "DOWN / UP", "PLAYED ORDER", "CHORD", "RANDOM", "WALK", "PATTERN" }, 1);
+        outputMode.addItemList ({ "NOTES + MOTION", "MOTION ONLY" }, 1);
+        targetScope.addItemList ({ "GLOBAL", "MAIN INSTANCE", "LAYER INSTANCE" }, 1);
+        for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) targetLayer.addItem ("LAYER " + juce::String (i + 1), i + 1);
         division.addItemList ({ "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/8T", "1/16T", "1/8.", "1/16." }, 1);
         octaveRange.addItemList ({ "1 OCT", "2 OCT", "3 OCT", "4 OCT" }, 1);
         restartMode.addItemList ({ "FREE RUN", "TRANSPORT", "FIRST NOTE" }, 1);
@@ -53,6 +57,8 @@ public:
         }
         previousPage.setButtonText ("< 16"); nextPage.setButtonText ("16 >");
         savePattern.setButtonText ("SAVE PATTERN"); loadPattern.setButtonText ("LOAD PATTERN");
+        fitMotion.setButtonText ("FIT FROM REF");
+        fitMotion.setTooltip ("Analyze the reference's temporal RMS and spectral movement, then create a disabled motion-only lane suggestion. Review it and arm SEQ ON when ready.");
         zoom.setRange (0.65, 1.5, 0.05); zoom.setValue (1.0, juce::dontSendNotification);
         zoom.setTextValueSuffix (" x"); zoom.setTooltip ("Zoom the step editor lanes while keeping the 16-step page model.");
         randomize.setButtonText ("RANDOMIZE"); reverse.setButtonText ("REVERSE");
@@ -88,6 +94,9 @@ public:
         configureStepSlider (macro2, 0, 100, 1, " %");
 
         mode.setTooltip ("Arp modes use held MIDI notes. PATTERN uses ROOT + per-step pitch/octave and runs without held notes.");
+        outputMode.setTooltip ("NOTES + MOTION emits sequencer notes. MOTION ONLY advances the lanes and evolves the current sound without creating a second melody/MIDI player.");
+        targetScope.setTooltip ("Select where the motion lanes are applied: the whole instrument, main instance, or one companion layer.");
+        targetLayer.setTooltip ("Companion layer receiving motion when LAYER INSTANCE is selected.");
         rootNote.setTooltip ("Base MIDI note for PATTERN mode. Each step adds its pitch and octave offsets to this root.");
         division.setTooltip ("Step division. In DAW Tempo mode, steps follow the host play/stop state and BPM; Manual BPM runs independently.");
         swing.setTooltip ("Alternating swing while preserving each two-step pair duration.");
@@ -114,6 +123,9 @@ public:
         enabled.onClick = [this] { commitSettings(); };
         latch.onClick = [this] { commitSettings(); };
         mode.onChange = [this] { commitSettings(); };
+        outputMode.onChange = [this] { commitSettings(); };
+        targetScope.onChange = [this] { commitSettings(); };
+        targetLayer.onChange = [this] { commitSettings(); };
         division.onChange = [this] { commitSettings(); };
         rootNote.onChange = [this] { commitSettings(); };
         octaveRange.onChange = [this] { commitSettings(); };
@@ -140,6 +152,12 @@ public:
         savePattern.onClick = [this] { choosePattern (true); };
         loadPattern.onClick = [this] { choosePattern (false); };
         zoom.onValueChange = [this] { refreshStepButtons(); resized(); };
+        fitMotion.onClick = [this]
+        {
+            if (! proc.applySequencerInference())
+            { status.setText ("REFERENCE TOO STATIC FOR MOTION FIT", juce::dontSendNotification); return; }
+            loadState(); status.setText ("MOTION FIT READY - REVIEW LANES, THEN ARM", juce::dontSendNotification);
+        };
         patternTemplate.onChange = [this] { loadPatternTemplate (patternTemplate.getSelectedId() - 1); };
 
         auto stepChanged = [this] { commitSelectedStep(); };
@@ -161,6 +179,9 @@ public:
         auto transport = area.removeFromTop (30);
         enabled.setBounds (transport.removeFromLeft (70).reduced (2));
         mode.setBounds (transport.removeFromLeft (132).reduced (2));
+        outputMode.setBounds (transport.removeFromLeft (132).reduced (2));
+        targetScope.setBounds (transport.removeFromLeft (118).reduced (2));
+        targetLayer.setBounds (transport.removeFromLeft (82).reduced (2));
         division.setBounds (transport.removeFromLeft (70).reduced (2));
         rootNote.setBounds (transport.removeFromLeft (96).reduced (2));
         bpm.setBounds (transport.removeFromLeft (122).reduced (2));
@@ -176,12 +197,13 @@ public:
         rotateLeft.setBounds (tools.removeFromLeft (76).reduced (2)); rotateRight.setBounds (tools.removeFromLeft (76).reduced (2));
         clear.setBounds (tools.removeFromLeft (62).reduced (2));
         savePattern.setBounds (tools.removeFromLeft (100).reduced (2)); loadPattern.setBounds (tools.removeFromLeft (100).reduced (2));
-        zoom.setBounds (tools.removeFromLeft (82).reduced (2)); status.setBounds (tools.reduced (2));
+        zoom.setBounds (tools.removeFromLeft (82).reduced (2)); fitMotion.setBounds (tools.removeFromLeft (112).reduced (2)); status.setBounds (tools.reduced (2));
 
         area.removeFromTop (5);
         auto steps = area.removeFromTop (52);
         const int stepWidth = juce::jmax (30, (int) std::lround (steps.getWidth() / (stepsPerPage * zoom.getValue())));
-        for (auto& button : stepButtons) button.setBounds (steps.removeFromLeft (stepWidth).reduced (2));
+        stepGridBounds = steps.reduced (2);
+        for (auto& button : stepButtons) button.setBounds (0, 0, 0, 0);
 
         area.removeFromTop (7);
         stepLabel.setBounds (area.removeFromTop (23));
@@ -214,7 +236,11 @@ public:
         g.fillAll (juce::Colour (0xff0b1215));
         g.setColour (juce::Colour (0xff3f5559));
         g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1), 8.0f, 1.0f);
+        paintStepGrid (g);
     }
+
+    void mouseDown (const juce::MouseEvent& e) override { editStepAt (e.position); }
+    void mouseDrag (const juce::MouseEvent& e) override { editStepAt (e.position); }
 
 private:
     static constexpr int schemaVersion = 1;
@@ -230,16 +256,18 @@ private:
 
     juce::Label title, stepLabel, status;
     juce::ToggleButton enabled, latch, rest, tie, glide;
-    juce::ComboBox mode, division, rootNote, octaveRange, restartMode;
+    juce::ComboBox mode, outputMode, targetScope, targetLayer, division, rootNote, octaveRange, restartMode;
     juce::ComboBox macroDestination1, macroDestination2, macroInterpolation1, macroInterpolation2;
     juce::Slider bpm, length, swing;
     juce::Slider macroRate1, macroRate2;
     juce::TextButton previousPage, nextPage, randomize, reverse, rotateLeft, rotateRight, clear;
     juce::TextButton savePattern, loadPattern;
+    juce::TextButton fitMotion;
     juce::Slider zoom;
     std::unique_ptr<juce::FileChooser> patternChooser;
     juce::ComboBox patternTemplate;
     std::array<juce::TextButton, stepsPerPage> stepButtons;
+    juce::Rectangle<int> stepGridBounds;
     juce::Slider pitch, octave, velocity, gate, probability, modulationProbability, ratchet, microTiming, macro1, macro2;
     std::vector<std::unique_ptr<juce::Label>> labels;
     std::vector<std::pair<juce::Slider*, juce::Label*>> sliderLabels;
@@ -297,6 +325,9 @@ private:
         settings.enabled = enabled.getToggleState();
         settings.clockSource = RetroMatchSequencer::ClockSource::internal;
         settings.mode = (RetroMatchSequencer::Mode) juce::jlimit (0, 8, mode.getSelectedId() - 1);
+        settings.outputMode = (RetroMatchSequencer::OutputMode) juce::jlimit (0, 1, outputMode.getSelectedId() - 1);
+        settings.targetScope = (RetroMatchSequencer::TargetScope) juce::jlimit (0, 2, targetScope.getSelectedId() - 1);
+        settings.targetLayer = juce::jlimit (0, VoiceParameters::extraLayerCount - 1, targetLayer.getSelectedId() - 1);
         settings.division = (RetroMatchSequencer::Division) juce::jlimit (0, 9, division.getSelectedId() - 1);
         settings.internalBpm = bpm.getValue();
         settings.length = juce::jlimit (1, RetroMatchSequencer::maxSteps, (int) std::lround (length.getValue()));
@@ -380,6 +411,61 @@ private:
         saveState(); refreshStepEditor(); refreshStepButtons();
     }
 
+    void paintStepGrid (juce::Graphics& g)
+    {
+        if (stepGridBounds.isEmpty()) return;
+        const auto area = stepGridBounds.toFloat();
+        const auto led = findColour (RetroLookAndFeel::primaryLed);
+        g.setColour (juce::Colour (0xff071014)); g.fillRoundedRectangle (area, 6.0f);
+        g.setColour (juce::Colour (0xff52686c)); g.drawRoundedRectangle (area, 6.0f, 1.0f);
+        const float cellW = area.getWidth() / (float) stepsPerPage;
+        const float laneH = area.getHeight() / 4.0f;
+        const int first = page * stepsPerPage;
+        for (int lane = 0; lane < 4; ++lane)
+        {
+            const float y = area.getY() + lane * laneH;
+            g.setColour (led.withAlpha (0.10f)); g.drawHorizontalLine ((int) y, area.getX(), area.getRight());
+            g.setColour (led.withAlpha (0.55f));
+            g.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+            g.drawText (lane == 0 ? "PITCH" : lane == 1 ? "VELOCITY / GATE" : lane == 2 ? "MACRO 1" : "MACRO 2",
+                        (int) area.getX() + 5, (int) y + 2, 115, 14, juce::Justification::left);
+        }
+        for (int i = 0; i < stepsPerPage; ++i)
+        {
+            const int index = first + i; if (index >= settings.length) break;
+            const auto& step = stepState[(size_t) index];
+            const float x = area.getX() + i * cellW;
+            g.setColour (index == selectedStep ? findColour (RetroLookAndFeel::secondaryLed).withAlpha (0.18f) : led.withAlpha (0.04f));
+            g.fillRect (x + 1.0f, area.getY() + 1.0f, cellW - 2.0f, area.getHeight() - 2.0f);
+            g.setColour (led.withAlpha (0.22f)); g.drawVerticalLine ((int) x, area.getY(), area.getBottom());
+            const float pitchY = area.getY() + laneH * 0.5f - juce::jlimit (-24.0f, 24.0f, (float) step.semitone + step.octave * 12.0f) / 48.0f * laneH * 0.38f;
+            g.setColour (step.rest ? led.withAlpha (0.18f) : led); g.fillEllipse (x + cellW * 0.5f - 4.0f, pitchY - 4.0f, 8.0f, 8.0f);
+            g.setColour (led.withAlpha (0.65f)); g.fillRect (x + cellW * 0.28f, area.getY() + laneH * 2.0f - step.macro[0] * laneH * 0.8f, cellW * 0.44f, step.macro[0] * laneH * 0.8f);
+            g.setColour (findColour (RetroLookAndFeel::secondaryLed).withAlpha (0.75f)); g.fillRect (x + cellW * 0.28f, area.getY() + laneH * 3.0f - step.macro[1] * laneH * 0.8f, cellW * 0.44f, step.macro[1] * laneH * 0.8f);
+            g.setColour (led.withAlpha (0.65f)); g.fillRect (x + cellW * 0.72f, area.getY() + laneH - step.velocity * laneH * 0.75f, cellW * 0.16f, step.velocity * laneH * 0.75f);
+            g.setColour (led.withAlpha (0.75f)); g.setFont (juce::Font (juce::FontOptions (9.0f))); g.drawText (juce::String (index + 1), (int) x + 2, (int) area.getBottom() - 14, (int) cellW - 4, 12, juce::Justification::centred);
+        }
+        const int play = proc.melodyTransport.getSequencerCurrentStep();
+        if (play >= first && play < first + stepsPerPage)
+        { g.setColour (juce::Colours::white.withAlpha (0.8f)); g.drawRect (area.withX (area.getX() + (play - first) * cellW).withWidth (cellW), 1.5f); }
+    }
+
+    void editStepAt (juce::Point<float> position)
+    {
+        if (! stepGridBounds.contains (position.toInt())) return;
+        const float cellW = stepGridBounds.getWidth() / (float) stepsPerPage;
+        const int index = page * stepsPerPage + juce::jlimit (0, stepsPerPage - 1, (int) ((position.x - stepGridBounds.getX()) / cellW));
+        if (! juce::isPositiveAndBelow (index, settings.length)) return;
+        selectedStep = index;
+        auto& step = stepState[(size_t) index];
+        const float lane = (position.y - stepGridBounds.getY()) / (float) stepGridBounds.getHeight();
+        if (lane < 0.25f) step.semitone = juce::jlimit (-48, 48, (int) std::lround ((0.125f - lane) * 192.0f));
+        else if (lane < 0.5f) step.velocity = juce::jlimit (0.0f, 1.0f, 1.0f - (lane - 0.25f) * 4.0f);
+        else if (lane < 0.75f) step.macro[0] = juce::jlimit (0.0f, 1.0f, 1.0f - (lane - 0.5f) * 4.0f);
+        else step.macro[1] = juce::jlimit (0.0f, 1.0f, 1.0f - (lane - 0.75f) * 4.0f);
+        proc.melodyTransport.setSequencerStep (index, step); refreshStepEditor(); repaint();
+    }
+
     void loadPatternTemplate (int index)
     {
         if (index < 0 || index >= RetroMatchSequencer::patternTemplateCount) return;
@@ -387,6 +473,9 @@ private:
         settings.length = pattern.length;
         stepState = pattern.steps;
         settings.mode = RetroMatchSequencer::Mode::pattern;
+        settings.outputMode = RetroMatchSequencer::OutputMode::notesAndMotion;
+        settings.targetScope = RetroMatchSequencer::TargetScope::global;
+        settings.targetLayer = 0;
         pushPattern();
         updating = true;
         length.setValue (settings.length, juce::dontSendNotification);
@@ -436,6 +525,9 @@ private:
         {
             settings.enabled = (bool) state.getProperty ("enabled", false);
             settings.mode = (RetroMatchSequencer::Mode) juce::jlimit (0, 8, (int) state.getProperty ("mode", 8));
+            settings.outputMode = (RetroMatchSequencer::OutputMode) juce::jlimit (0, 1, (int) state.getProperty ("outputMode", 0));
+            settings.targetScope = (RetroMatchSequencer::TargetScope) juce::jlimit (0, 2, (int) state.getProperty ("targetScope", 0));
+            settings.targetLayer = juce::jlimit (0, VoiceParameters::extraLayerCount - 1, (int) state.getProperty ("targetLayer", 0));
             settings.division = (RetroMatchSequencer::Division) juce::jlimit (0, 9, (int) state.getProperty ("division", 4));
             settings.length = juce::jlimit (1, RetroMatchSequencer::maxSteps, (int) state.getProperty ("length", 16));
             settings.internalBpm = juce::jlimit (20.0, 400.0, (double) state.getProperty ("bpm", 120.0));
@@ -467,7 +559,8 @@ private:
 
         updating = true;
         enabled.setToggleState (settings.enabled, juce::dontSendNotification); latch.setToggleState (settings.latch, juce::dontSendNotification);
-        mode.setSelectedId ((int) settings.mode + 1, juce::dontSendNotification); division.setSelectedId ((int) settings.division + 1, juce::dontSendNotification);
+        mode.setSelectedId ((int) settings.mode + 1, juce::dontSendNotification); outputMode.setSelectedId ((int) settings.outputMode + 1, juce::dontSendNotification); targetScope.setSelectedId ((int) settings.targetScope + 1, juce::dontSendNotification); targetLayer.setSelectedId (settings.targetLayer + 1, juce::dontSendNotification); division.setSelectedId ((int) settings.division + 1, juce::dontSendNotification);
+        targetLayer.setEnabled (settings.targetScope == RetroMatchSequencer::TargetScope::layerInstance);
         rootNote.setSelectedId (settings.rootNote + 1, juce::dontSendNotification);
         octaveRange.setSelectedId (settings.octaveRange, juce::dontSendNotification); restartMode.setSelectedId ((int) settings.restartMode + 1, juce::dontSendNotification);
         bpm.setValue (settings.internalBpm, juce::dontSendNotification); length.setValue (settings.length, juce::dontSendNotification); swing.setValue (settings.swing * 100.0f, juce::dontSendNotification);
@@ -487,6 +580,8 @@ private:
         juce::ValueTree state ("SEQUENCER");
         state.setProperty ("schema", schemaVersion, nullptr); state.setProperty ("enabled", settings.enabled, nullptr);
         state.setProperty ("mode", (int) settings.mode, nullptr); state.setProperty ("division", (int) settings.division, nullptr);
+        state.setProperty ("outputMode", (int) settings.outputMode, nullptr);
+        state.setProperty ("targetScope", (int) settings.targetScope, nullptr); state.setProperty ("targetLayer", settings.targetLayer, nullptr);
         state.setProperty ("length", settings.length, nullptr); state.setProperty ("bpm", settings.internalBpm, nullptr);
         state.setProperty ("swing", settings.swing, nullptr); state.setProperty ("latch", settings.latch, nullptr);
         state.setProperty ("rootNote", settings.rootNote, nullptr); state.setProperty ("octaveRange", settings.octaveRange, nullptr);

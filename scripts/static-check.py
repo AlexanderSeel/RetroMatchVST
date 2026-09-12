@@ -72,6 +72,7 @@ sequencer_path = ROOT / 'Source/Sequencer/StepSequencer.h'
 pattern_library_path = ROOT / 'Source/Sequencer/PatternLibrary.h'
 pack_safety_path = ROOT / 'Source/Engine/PresetPackSafety.h'
 magic_dialog_path = ROOT / 'Source/UI/MagicAuditionDialog.h'
+sequencer_inference_path = ROOT / 'Source/Matching/SequencerInference.h'
 editor_preview_path = ROOT / 'Tests/EditorPreview.cpp'
 if not mseg_path.exists(): errors.append('Source/Engine/MSEG.h is missing')
 if not mseg_page_path.exists(): errors.append('Source/UI/MsegPage.h is missing')
@@ -84,6 +85,7 @@ if not sequencer_path.exists(): errors.append('Source/Sequencer/StepSequencer.h 
 if not pattern_library_path.exists(): errors.append('Source/Sequencer/PatternLibrary.h is missing')
 if not pack_safety_path.exists(): errors.append('Source/Engine/PresetPackSafety.h is missing')
 if not magic_dialog_path.exists(): errors.append('Source/UI/MagicAuditionDialog.h is missing')
+if not sequencer_inference_path.exists(): errors.append('reference-driven sequencer inference is missing')
 if not editor_preview_path.exists(): errors.append('Tests/EditorPreview.cpp is missing')
 if not (ROOT / 'scripts/update-ui-example.py').exists(): errors.append('README UI example updater is missing')
 if 'hasUsableVisualInk' not in editor_preview_path.read_text(encoding='utf-8'):

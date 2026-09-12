@@ -27,6 +27,8 @@ enum class Division
 enum class ClockSource { host, internal };
 enum class RestartMode { never, transportStart, firstNote };
 enum class Mode { up, down, upDown, downUp, playedOrder, chord, random, walk, pattern };
+enum class OutputMode { notesAndMotion, motionOnly };
+enum class TargetScope { global, mainInstance, layerInstance };
 enum class MacroDestination { none, cutoff, resonance, pitch, amplitude, wavetablePosition };
 enum class MacroInterpolation { hold, linear, smooth, random };
 
@@ -60,6 +62,9 @@ struct Settings
     int rootNote = 60;
     double internalBpm = 120.0;
     bool latch = false;
+    OutputMode outputMode = OutputMode::notesAndMotion;
+    TargetScope targetScope = TargetScope::global;
+    int targetLayer = 0;
     std::array<MacroDestination, modulationLaneCount> macroDestination {{ MacroDestination::none, MacroDestination::none }};
     std::array<MacroInterpolation, modulationLaneCount> macroInterpolation {{ MacroInterpolation::hold, MacroInterpolation::hold }};
     std::array<float, modulationLaneCount> macroLaneRate {{ 1.0f, 1.0f }};

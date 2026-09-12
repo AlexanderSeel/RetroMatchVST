@@ -67,6 +67,11 @@ bool runMelodyTests()
         if (message.isNoteOff()) ++offs;
     }
     if (ons != 4 || offs != 4) return fail ("MIDI note pairs incomplete");
+    const auto imported = MelodyClip::readMidi (midiFile.getFile());
+    if (imported.notes.size() != restored.notes.size()
+        || imported.notes[2].pitch != restored.notes[2].pitch
+        || std::abs (imported.notes[2].start - restored.notes[2].start) > 0.002)
+        return fail ("MIDI import did not restore note timing and pitch");
 
     MelodyTransport transport; MelodyClip probe;
     probe.notes.push_back ({ 60, 0.05, 0.15, 0.8f, 1.0f });

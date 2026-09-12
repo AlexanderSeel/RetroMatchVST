@@ -92,6 +92,8 @@ public:
     bool isSequencerRunning() const noexcept { return sequencerRunning.load (std::memory_order_relaxed); }
     std::array<float, RetroMatchSequencer::modulationLaneCount> getSequencerMacroValues() const noexcept { return sequencerMacroValues; }
     std::array<RetroMatchSequencer::MacroDestination, RetroMatchSequencer::modulationLaneCount> getSequencerMacroDestinations() const noexcept { return sequencerMacroDestinations; }
+    RetroMatchSequencer::TargetScope getSequencerTargetScope() const noexcept { return appliedSequencerSettings.targetScope; }
+    int getSequencerTargetLayer() const noexcept { return appliedSequencerSettings.targetLayer; }
 
     void process (juce::MidiBuffer& midi, int samples, double sr,
                   bool hostPlaying = true, bool hostJustStarted = false, double hostBpm = 120.0)
@@ -192,6 +194,7 @@ private:
         if (! guard.isLocked()) return;
 
         const bool wasEnabled = appliedSequencerEnabled;
+        const auto wasOutputMode = appliedSequencerSettings.outputMode;
         appliedSequencerSettings = pendingSequencerSettings;
         sequencer.setSettings (appliedSequencerSettings);
         if (pendingSequencerPatternDirty)
@@ -201,7 +204,8 @@ private:
             pendingSequencerPatternDirty = false;
         }
         appliedSequencerEnabled = appliedSequencerSettings.enabled;
-        if (wasEnabled && ! appliedSequencerEnabled)
+        if ((wasEnabled && ! appliedSequencerEnabled)
+            || (wasEnabled && wasOutputMode != appliedSequencerSettings.outputMode))
             releaseSequencerNotes (midi, 0);
         sequencerCommandReady.store (false, std::memory_order_release);
     }
@@ -287,6 +291,8 @@ private:
             const auto& trigger = sequencerTriggers[(size_t) i];
             sequencerMacroValues = trigger.macro;
             sequencerMacroDestinations = trigger.macroDestination;
+            if (appliedSequencerSettings.outputMode == RetroMatchSequencer::OutputMode::motionOnly)
+                continue;
             const auto velocity = (juce::uint8) juce::jlimit (1, 127, (int) std::lround (trigger.velocity * 127.0f));
             midi.addEvent (juce::MidiMessage::noteOn (1, trigger.midiNote, velocity), trigger.sampleOffset);
             ++activeSequencerNotes[(size_t) trigger.midiNote];

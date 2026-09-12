@@ -68,6 +68,7 @@ public:
     void setMidiAnalysisRegion (float startSeconds, float endSeconds);
     float getEffectiveBpm() const noexcept { return effectiveBpm.load (std::memory_order_relaxed); }
     bool setReferenceAnalysisRegion (float startSeconds, float endSeconds);
+    bool applySequencerInference();
     MelodyClip getMelodyClip() const { return MelodyClip::fromState (apvts.state.getChildWithName ("MELODY")); }
     void setMelodyClip (const MelodyClip& clip)
     {

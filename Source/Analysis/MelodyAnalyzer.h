@@ -19,6 +19,7 @@ struct MelodyClip
     bool layered = false, truncated = false;
     juce::MidiMessageSequence sequenceInSeconds() const;
     bool writeMidi (const juce::File&) const;
+    static MelodyClip readMidi (const juce::File&);
     juce::ValueTree toState() const;
     static MelodyClip fromState (const juce::ValueTree&);
 };

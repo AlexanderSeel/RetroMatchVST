@@ -102,9 +102,11 @@ A dedicated **MASTER OUTPUT** control sits after the complete synth/reference mi
 
 ### Sequencer / arpeggiator
 
-The editor has a dedicated **SEQUENCER** tab for building complete melodic presets. It supports 64 steps, pattern and held-note arpeggiator modes, internal or DAW-synced clocking, swing, ratchets, ties, note probability, modulation probability and per-step micro-timing. Two macro lanes can target cutoff, resonance, pitch, amplitude or wavetable position using Hold, Linear, Smooth or bounded Random interpolation with independent lane rates.
+The editor has a dedicated **SEQUENCER** tab for note-gated sound design as well as melodic phrases. Its graphical step surface shows pitch, velocity/gate and two timbre lanes directly. It supports 64 steps, pattern and held-note arpeggiator modes, internal or DAW-synced clocking, swing, ratchets, ties, note probability, modulation probability and per-step micro-timing. Two macro lanes can target cutoff, resonance, pitch, amplitude or wavetable position using Hold, Linear, Smooth or bounded Random interpolation with independent lane rates. **MOTION ONLY** advances those lanes without emitting sequencer notes, so a held pad, bass, drone or riser can develop a complex timbre without behaving like a second MIDI player. The motion target can be Global, Main Instance or a selected Layer Instance; independent clocks/phrases per instance remain a later DSP extension.
 
-Sequencer state is included in `.rmsynth` plug-in state. The tab includes twelve reusable musical starting patterns, and patterns can also be saved and loaded as XML files. The Sequence factory presets provide playable examples with enabled melodic motion and multiple macro destinations.
+Sequencer state is included in `.rmsynth` plug-in state. The tab includes twelve reusable musical starting patterns, and patterns can also be saved and loaded as XML files. The Sequence factory presets now demonstrate bass ostinatos, held-chord pads, motion-only atmospheres, risers, probabilistic textures and layer-targeted motion instead of presenting every sequence as a simple melodic player.
+
+For complex references, **FIT FROM REF** uses the measured temporal RMS and spectral-motion frames to propose a disabled motion-only pattern. The proposal must be reviewed and armed by the user; static, short and one-shot-like material is deliberately not sequenced.
 
 The Presets page also exports and imports self-contained `.rmpack` archives. A pack contains a validated manifest and the `.rmsynth` asset, so sequencer patterns and embedded wavetable data travel with the sound. Imports persist validated patches into the user library and offer Keep, Replace or Import as Copy handling for collisions.
 
@@ -175,6 +177,8 @@ Reference audio can also be analyzed into editable timed notes. Long-track trans
 - predominant-melody mode
 - experimental layered-note mode
 - interactive piano roll
+- double-click to add notes and drag to move pitch/time
+- MIDI import, export and drag-to-DAW
 - replay through the current RetroMatch patch
 - standard MIDI export with tempo metadata
 - separate selection for MIDI vs timbre resynthesis

@@ -65,6 +65,16 @@ inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
                 + (family == 4 ? " Includes an enabled 16-step melodic sequencer with macro destinations." : "")
                 + (variation >= 8 ? " Layer roles remain independently editable in the Instance Rack." : "") });
         }
+    int sequenceOrdinal = 0;
+    const juce::StringArray sequenceUses {
+        "Note-gated bass ostinato with controlled cutoff motion.",
+        "Held-chord arpeggiator for a rhythmic pad bed.",
+        "Motion-only atmosphere: no sequencer notes, just evolving resonance and level.",
+        "Motion-only riser with pitch and wavetable ramps.",
+        "Layered chord pulse with alternating timbre lanes.",
+        "Probabilistic generative texture with ratchets and evolving amplitude.",
+        "Cinematic motion bed for drones and long held notes."
+    };
     for (auto& preset : catalog)
     {
         preset.subcategory = preset.category;
@@ -74,7 +84,17 @@ inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
         preset.macroLabels.addArray ({ "brightness", "motion" });
         if (preset.category == "Bass") { preset.recommendedOctaveMin = 1; preset.recommendedOctaveMax = 3; }
         else if (preset.category == "Lead" || preset.category == "Keys") { preset.recommendedOctaveMin = 3; preset.recommendedOctaveMax = 6; }
-        else if (preset.category == "Sequence") { preset.tags.add ("arpeggiator"); preset.tags.add ("melodic"); preset.macroLabels = { "cutoff", "wavetable" }; }
+        else if (preset.category == "Sequence")
+        {
+            preset.tags.add ("arpeggiator"); preset.tags.add ("melodic"); preset.tags.add ("sound-design");
+            const auto use = sequenceUses[(size_t) (sequenceOrdinal % sequenceUses.size())];
+            preset.description = use + " " + preset.description;
+            preset.macroLabels = { "timbre motion", "dynamics" };
+            if (use.containsIgnoreCase ("riser")) preset.tags.add ("riser");
+            if (use.containsIgnoreCase ("atmosphere") || use.containsIgnoreCase ("drone")) preset.tags.add ("atmosphere");
+            if (use.containsIgnoreCase ("bass")) preset.tags.add ("bass ostinato");
+            ++sequenceOrdinal;
+        }
     }
     return catalog;
 }();

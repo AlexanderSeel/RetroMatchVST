@@ -10,6 +10,7 @@
 #include "UI/PresetsPage.h"
 #include "Matching/GeneratedRackGainPolicy.h"
 #include "Matching/ResynthesisAdvisor.h"
+#include "Matching/SequencerInference.h"
 #include "Matching/MatchSafetyPolicy.h"
 #include "Engine/PresetPackSafety.h"
 #include <algorithm>
@@ -18,6 +19,35 @@
 #include <vector>
 
 bool isMeasuredResultSafe (const MatchResult& result, bool requireFullRack) noexcept;
+
+bool RetroMatchSynthAudioProcessor::applySequencerInference()
+{
+    if (! currentFeatures) return false;
+    const auto suggestion = SequencerInference::fromReference (*currentFeatures);
+    if (! suggestion.useful) return false;
+    auto settings = suggestion.settings;
+    melodyTransport.setSequencerSettings (settings);
+    for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i)
+        melodyTransport.setSequencerStep (i, suggestion.steps[(size_t) i]);
+    juce::ValueTree state ("SEQUENCER");
+    state.setProperty ("schema", 3, nullptr); state.setProperty ("enabled", false, nullptr);
+    state.setProperty ("mode", (int) settings.mode, nullptr); state.setProperty ("outputMode", (int) settings.outputMode, nullptr);
+    state.setProperty ("targetScope", (int) settings.targetScope, nullptr); state.setProperty ("targetLayer", settings.targetLayer, nullptr);
+    state.setProperty ("division", (int) settings.division, nullptr); state.setProperty ("length", settings.length, nullptr);
+    state.setProperty ("bpm", settings.internalBpm, nullptr); state.setProperty ("restartMode", (int) settings.restartMode, nullptr);
+    state.setProperty ("macroDestination1", (int) settings.macroDestination[0], nullptr); state.setProperty ("macroDestination2", (int) settings.macroDestination[1], nullptr);
+    state.setProperty ("macroInterpolation1", (int) settings.macroInterpolation[0], nullptr); state.setProperty ("macroInterpolation2", (int) settings.macroInterpolation[1], nullptr);
+    state.setProperty ("macroRate1", settings.macroLaneRate[0], nullptr); state.setProperty ("macroRate2", settings.macroLaneRate[1], nullptr);
+    for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i)
+    {
+        const auto& step = suggestion.steps[(size_t) i]; juce::ValueTree node ("STEP");
+        node.setProperty ("index", i, nullptr); node.setProperty ("rest", step.rest, nullptr); node.setProperty ("macro1", step.macro[0], nullptr); node.setProperty ("macro2", step.macro[1], nullptr);
+        node.setProperty ("velocity", step.velocity, nullptr); node.setProperty ("gate", step.gate, nullptr); state.appendChild (node, nullptr);
+    }
+    auto old = apvts.state.getChildWithName ("SEQUENCER"); if (old.isValid()) apvts.state.removeChild (old, nullptr);
+    apvts.state.appendChild (state, nullptr);
+    return true;
+}
 
 namespace
 {
@@ -864,7 +894,16 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
     auto renderParameters = magicPreviewParameters.has_value() ? *magicPreviewParameters : readParams();
     const auto macroValues = melodyTransport.getSequencerMacroValues();
     const auto macroDestinations = melodyTransport.getSequencerMacroDestinations();
-    for (int lane = 0; lane < RetroMatchSequencer::modulationLaneCount; ++lane)
+    SynthEngine::SequencerModulation layerModulation;
+    layerModulation.values = macroValues;
+    layerModulation.destinations = macroDestinations;
+    const auto sequencerScope = melodyTransport.getSequencerTargetScope();
+    layerModulation.targetLayer = sequencerScope == RetroMatchSequencer::TargetScope::layerInstance
+                                ? melodyTransport.getSequencerTargetLayer()
+                                : sequencerScope == RetroMatchSequencer::TargetScope::global ? -2 : -1;
+    engine.setSequencerModulation (layerModulation);
+    const bool applyToMain = melodyTransport.getSequencerTargetScope() != RetroMatchSequencer::TargetScope::layerInstance;
+    for (int lane = 0; applyToMain && lane < RetroMatchSequencer::modulationLaneCount; ++lane)
     {
         const float value = juce::jlimit (0.0f, 1.0f, macroValues[(size_t) lane]);
         switch (macroDestinations[(size_t) lane])
@@ -1923,6 +1962,11 @@ void RetroMatchSynthAudioProcessor::applyPresetParameters (const VoiceParameters
 {
     selectEditingLayer (-1);
     melodyTransport.stop(); setReferenceAuditionMode (ReferenceAuditionMode::synthOnly);
+    auto sequencerReset = melodyTransport.getSequencerSettings();
+    sequencerReset.enabled = false;
+    melodyTransport.setSequencerSettings (sequencerReset);
+    if (auto sequence = apvts.state.getChildWithName ("SEQUENCER"); sequence.isValid())
+        sequence.setProperty ("enabled", false, nullptr);
     for (auto* parameter : getParameters())
         if (auto* identified = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
             if (identified->paramID != "oversamplingQuality" && identified->paramID != "masterOutputGain"
@@ -1959,15 +2003,38 @@ void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
     settings.division = RetroMatchSequencer::Division::sixteenth;
     settings.length = 16;
     settings.internalBpm = 112.0 + (index % 5) * 6.0;
-    settings.macroDestination = {{ RetroMatchSequencer::MacroDestination::cutoff, RetroMatchSequencer::MacroDestination::wavetablePosition }};
-    settings.macroInterpolation = {{ RetroMatchSequencer::MacroInterpolation::smooth, RetroMatchSequencer::MacroInterpolation::linear }};
-    settings.macroLaneRate = {{ 1.0f, 0.5f }};
+    const int variation = (index - 10) % FactoryPresetDesign::variationsPerFamily;
+    settings.outputMode = variation == 2 || variation == 3 || variation == 5 || variation >= 20
+                        ? RetroMatchSequencer::OutputMode::motionOnly : RetroMatchSequencer::OutputMode::notesAndMotion;
+    settings.targetScope = variation >= 14 && variation % 3 == 2
+                         ? RetroMatchSequencer::TargetScope::layerInstance
+                         : variation == 2 || variation == 3 || variation >= 20
+                             ? RetroMatchSequencer::TargetScope::global
+                             : RetroMatchSequencer::TargetScope::mainInstance;
+    const int availableLayers = FactoryPresetDesign::companionCountForVariation (variation);
+    settings.targetLayer = availableLayers > 0 ? (variation / 5) % availableLayers : 0;
+    settings.mode = variation == 1 ? RetroMatchSequencer::Mode::chord
+                  : variation == 5 ? RetroMatchSequencer::Mode::random
+                  : RetroMatchSequencer::Mode::pattern;
+    settings.division = variation == 3 ? RetroMatchSequencer::Division::eighth
+                     : variation >= 20 ? RetroMatchSequencer::Division::eighthDotted
+                     : RetroMatchSequencer::Division::sixteenth;
+    settings.length = variation == 3 ? 32 : variation >= 20 ? 24 : 16;
+    settings.macroDestination = variation == 3
+        ? std::array<RetroMatchSequencer::MacroDestination, 2> {{ RetroMatchSequencer::MacroDestination::pitch, RetroMatchSequencer::MacroDestination::wavetablePosition }}
+        : variation == 4 || variation >= 20
+            ? std::array<RetroMatchSequencer::MacroDestination, 2> {{ RetroMatchSequencer::MacroDestination::resonance, RetroMatchSequencer::MacroDestination::amplitude }}
+            : std::array<RetroMatchSequencer::MacroDestination, 2> {{ RetroMatchSequencer::MacroDestination::cutoff, RetroMatchSequencer::MacroDestination::wavetablePosition }};
+    settings.macroInterpolation = variation == 3
+        ? std::array<RetroMatchSequencer::MacroInterpolation, 2> {{ RetroMatchSequencer::MacroInterpolation::linear, RetroMatchSequencer::MacroInterpolation::linear }}
+        : std::array<RetroMatchSequencer::MacroInterpolation, 2> {{ RetroMatchSequencer::MacroInterpolation::smooth, RetroMatchSequencer::MacroInterpolation::linear }};
+    settings.macroLaneRate = variation >= 20 ? std::array<float, 2> {{ 0.5f, 2.0f }} : std::array<float, 2> {{ 1.0f, 0.5f }};
     melodyTransport.setSequencerSettings (settings);
 
     const std::array<int, 16> motif {{ 0, 3, 7, 10, 12, 10, 7, 3, 0, -2, 5, 7, 10, 7, 5, 2 }};
     juce::ValueTree sequenceState ("SEQUENCER");
     sequenceState.setProperty ("schema", 2, nullptr); sequenceState.setProperty ("enabled", true, nullptr);
-    sequenceState.setProperty ("mode", (int) settings.mode, nullptr); sequenceState.setProperty ("division", (int) settings.division, nullptr);
+    sequenceState.setProperty ("mode", (int) settings.mode, nullptr); sequenceState.setProperty ("outputMode", (int) settings.outputMode, nullptr); sequenceState.setProperty ("targetScope", (int) settings.targetScope, nullptr); sequenceState.setProperty ("targetLayer", settings.targetLayer, nullptr); sequenceState.setProperty ("division", (int) settings.division, nullptr);
     sequenceState.setProperty ("length", settings.length, nullptr); sequenceState.setProperty ("bpm", settings.internalBpm, nullptr);
     sequenceState.setProperty ("macroDestination1", (int) settings.macroDestination[0], nullptr); sequenceState.setProperty ("macroDestination2", (int) settings.macroDestination[1], nullptr);
     sequenceState.setProperty ("macroInterpolation1", (int) settings.macroInterpolation[0], nullptr); sequenceState.setProperty ("macroInterpolation2", (int) settings.macroInterpolation[1], nullptr);
@@ -1977,12 +2044,14 @@ void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
         RetroMatchSequencer::Step step;
         step.rest = i >= settings.length;
         step.semitone = motif[(size_t) (i % motif.size())];
-        step.octave = (i == 4 || i == 12) ? 1 : 0;
+        step.octave = variation == 3 ? i / 12 : ((i == 4 || i == 12) ? 1 : 0);
         step.velocity = 0.72f + (i % 4 == 0 ? 0.22f : 0.0f);
         step.gate = i % 4 == 3 ? 0.55f : 0.82f;
         step.probability = i % 7 == 6 ? 0.72f : 1.0f;
-        step.ratchet = i % 8 == 7 ? 2 : 1;
-        step.macro = {{ (float) (i % 8) / 7.0f, (float) ((i * 3) % 8) / 7.0f }};
+        step.ratchet = variation >= 20 && i % 4 == 3 ? 2 : (i % 8 == 7 ? 2 : 1);
+        step.macro = variation == 3
+            ? std::array<float, 2> {{ (float) i / juce::jmax (1, settings.length - 1), (float) i / juce::jmax (1, settings.length - 1) }}
+            : std::array<float, 2> {{ (float) (i % 8) / 7.0f, (float) ((i * 3) % 8) / 7.0f }};
         melodyTransport.setSequencerStep (i, step);
         juce::ValueTree child ("STEP");
         child.setProperty ("index", i, nullptr); child.setProperty ("enabled", step.enabled, nullptr); child.setProperty ("rest", step.rest, nullptr);

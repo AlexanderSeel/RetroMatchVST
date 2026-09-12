@@ -1,5 +1,6 @@
 #include "../Source/Sequencer/StepSequencer.h"
 #include "../Source/Sequencer/PatternLibrary.h"
+#include "../Source/Matching/SequencerInference.h"
 
 #include <cmath>
 #include <iostream>
@@ -64,6 +65,20 @@ int main()
         || std::abs (Core::quarterNotesForDivision (Division::eighthTriplet) - 1.0 / 3.0) > 1.0e-12
         || std::abs (Core::quarterNotesForDivision (Division::sixteenthDotted) - 0.375) > 1.0e-12)
         return fail ("musical division lengths are incorrect");
+
+    {
+        SoundFeatures evolving;
+        evolving.duration = 2.0f; evolving.spectralMotion = 0.12f; evolving.sustainLevel = 0.7f;
+        for (int i = 0; i < SoundFeatures::temporalFrameCount; ++i)
+        { evolving.temporalRms[(size_t) i] = i / 7.0f; evolving.temporalSpectralBands[(size_t) i][15] = 1.0f - i / 14.0f; }
+        const auto suggestion = SequencerInference::fromReference (evolving);
+        if (! suggestion.useful || suggestion.settings.outputMode != OutputMode::motionOnly
+            || suggestion.settings.mode != Mode::pattern || suggestion.steps[15].macro[0] <= suggestion.steps[0].macro[0])
+            return fail ("reference motion inference did not produce a bounded evolving lane suggestion");
+        evolving.transientScore = 0.9f; evolving.sustainLevel = 0.1f;
+        if (SequencerInference::fromReference (evolving).useful)
+            return fail ("one-shot reference was incorrectly forced into sequencer motion");
+    }
 
     {
         Core core;
@@ -204,11 +219,17 @@ int main()
 
         settings.macroLaneRate = {{ -10.0f, 10.0f }};
         settings.macroDestination = {{ (MacroDestination) 99, (MacroDestination) -1 }};
+        settings.outputMode = (OutputMode) 99;
+        settings.targetScope = (TargetScope) 99;
+        settings.targetLayer = 99;
         core.setSettings (settings);
         if (core.getSettings().macroLaneRate[0] != 0.25f
             || core.getSettings().macroLaneRate[1] != 4.0f
             || core.getSettings().macroDestination[0] != MacroDestination::wavetablePosition
-            || core.getSettings().macroDestination[1] != MacroDestination::none)
+            || core.getSettings().macroDestination[1] != MacroDestination::none
+            || core.getSettings().outputMode != OutputMode::motionOnly
+            || core.getSettings().targetScope != TargetScope::layerInstance
+            || core.getSettings().targetLayer != 6)
             return fail ("macro lane settings were not bounded");
     }
 

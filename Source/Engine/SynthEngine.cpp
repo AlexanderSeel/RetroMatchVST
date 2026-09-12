@@ -810,6 +810,20 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
         p.masterTuneCents += juce::jlimit (-24.0f, 24.0f, current.layerTune[i]) * 100.0f;
         p.oversamplingQuality = current.oversamplingQuality;
         p.inheritTempoFrom (current);
+        if (sequencerModulation.targetLayer == -2 || sequencerModulation.targetLayer == (int) i)
+            for (int lane = 0; lane < RetroMatchSequencer::modulationLaneCount; ++lane)
+            {
+                const float value = juce::jlimit (0.0f, 1.0f, sequencerModulation.values[(size_t) lane]);
+                switch (sequencerModulation.destinations[(size_t) lane])
+                {
+                    case RetroMatchSequencer::MacroDestination::cutoff: p.cutoff *= std::pow (2.0f, (value - 0.5f) * 4.0f); break;
+                    case RetroMatchSequencer::MacroDestination::resonance: p.resonance = value; break;
+                    case RetroMatchSequencer::MacroDestination::pitch: p.masterTuneCents += (value - 0.5f) * 2400.0f; break;
+                    case RetroMatchSequencer::MacroDestination::amplitude: p.mainLayerGain *= value * 2.0f; break;
+                    case RetroMatchSequencer::MacroDestination::wavetablePosition: p.wavetablePosition = value; break;
+                    case RetroMatchSequencer::MacroDestination::none: break;
+                }
+            }
         layer->setParameters (p);
         DspRouting::Plan layerRouting;
         layerRouting.parallelFx[0] = routingPlan.parallelFx[i + 1];

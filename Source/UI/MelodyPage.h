@@ -9,7 +9,7 @@ class MelodyPage final : public juce::Component, private juce::Timer
 public:
     explicit MelodyPage (RetroMatchSynthAudioProcessor& p) : proc (p), roll (*this)
     {
-        for (auto* button : std::array<juce::Button*, 16> { &analyze, &play, &samplePlay, &stop, &save, &drag, &lower, &higher, &remove, &midiFromSynth, &midiFull, &octaveDown, &octaveUp, &quantize, &undoEdit, &sequencer }) addAndMakeVisible (*button);
+        for (auto* button : std::array<juce::Button*, 17> { &analyze, &play, &samplePlay, &stop, &save, &importMidi, &drag, &lower, &higher, &remove, &midiFromSynth, &midiFull, &octaveDown, &octaveUp, &quantize, &undoEdit, &sequencer }) addAndMakeVisible (*button);
         addAndMakeVisible (mode); addAndMakeVisible (tempo); addAndMakeVisible (quantizeGrid); addAndMakeVisible (hint); addAndMakeVisible (roll);
         for (auto* slider : { &synthStart, &synthEnd, &midiStart, &midiEnd })
         { addAndMakeVisible (*slider); slider->setRange (0.0, 60.0, 0.01); slider->setSliderStyle (juce::Slider::LinearHorizontal); slider->setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 20); slider->setTextValueSuffix (" s"); }
@@ -39,6 +39,7 @@ public:
         play.setTooltip ("Play the extracted notes through the current synth and enabled layers. This disables the live sequencer so the two transports cannot fight for MIDI.");
         stop.onClick = [this] { disableSequencerForDirectPlayback(); proc.melodyTransport.stop(); proc.allEditorNotesOff(); proc.setReferenceAuditionMode (RetroMatchSynthAudioProcessor::ReferenceAuditionMode::synthOnly); };
         save.onClick = [this] { chooseMidi(); };
+        importMidi.onClick = [this] { chooseMidiImport(); };
         drag.begin = [this]
         {
             auto directory = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("RetroMatch-MIDI");
@@ -108,7 +109,7 @@ public:
         midiFromSynth.setBounds (midi.removeFromLeft (112).reduced (2)); midiFull.setBounds (midi.reduced (2));
         area.removeFromTop (5); auto actions = area.removeFromTop (34);
         play.setBounds (actions.removeFromLeft (112).reduced (2)); samplePlay.setBounds (actions.removeFromLeft (108).reduced (2)); stop.setBounds (actions.removeFromLeft (65).reduced (2));
-        save.setBounds (actions.removeFromLeft (125).reduced (2)); drag.setBounds (actions.removeFromLeft (155).reduced (2));
+        save.setBounds (actions.removeFromLeft (112).reduced (2)); importMidi.setBounds (actions.removeFromLeft (112).reduced (2)); drag.setBounds (actions.removeFromLeft (145).reduced (2));
         area.removeFromTop (6); sampleView.setBounds (area.removeFromTop (112)); area.removeFromTop (8); auto edit = area.removeFromTop (28);
         lower.setBounds (edit.removeFromLeft (90).reduced (2)); higher.setBounds (edit.removeFromLeft (90).reduced (2));
         remove.setBounds (edit.removeFromLeft (100).reduced (2));
@@ -158,7 +159,30 @@ private:
             page.selected = -1;
             for (int i = (int) page.clip.notes.size() - 1; i >= 0; --i)
                 if (rect (page.clip.notes[(size_t) i]).contains (e.position)) { page.selected = i; break; }
+            dragging = page.selected >= 0;
+            if (dragging) page.rememberUndo();
             page.updateHint(); repaint();
+        }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (! dragging || ! juce::isPositiveAndBelow (page.selected, (int) page.clip.notes.size())) return;
+            int low, high; range (low, high); const auto p = plot();
+            const double seconds = std::max (1.0, page.clip.duration);
+            auto& note = page.clip.notes[(size_t) page.selected];
+            note.start = juce::jlimit (0.0, std::max (0.0, seconds - note.duration), (double) (e.position.x - p.getX()) / p.getWidth() * seconds);
+            note.pitch = juce::jlimit (0, 127, (int) std::lround (high - (e.position.y - p.getY()) / p.getHeight() * (high - low)));
+            page.proc.setMelodyClip (page.clip); page.updateHint(); repaint();
+        }
+        void mouseUp (const juce::MouseEvent&) override { dragging = false; }
+        void mouseDoubleClick (const juce::MouseEvent& e) override
+        {
+            int low, high; range (low, high); const auto p = plot();
+            const double seconds = std::max (1.0, page.clip.duration);
+            const int pitch = juce::jlimit (0, 127, (int) std::lround (high - (e.position.y - p.getY()) / p.getHeight() * (high - low)));
+            const double start = juce::jlimit (0.0, std::max (0.0, seconds - 0.12), (double) (e.position.x - p.getX()) / p.getWidth() * seconds);
+            page.rememberUndo(); page.clip.notes.push_back ({ pitch, start, 0.12, 0.8f, 1.0f });
+            std::sort (page.clip.notes.begin(), page.clip.notes.end(), [] (const auto& a, const auto& b) { return a.start < b.start; });
+            page.proc.setMelodyClip (page.clip); page.refreshClip(); page.updateHint();
         }
         void paint (juce::Graphics& g) override
         {
@@ -197,7 +221,7 @@ private:
             if (page.clip.notes.empty())
             { g.setColour (led.withAlpha (0.6f)); g.setFont (juce::Font (juce::FontOptions (16.0f))); g.drawText ("Analyze a reference to reveal its notes", p, juce::Justification::centred); }
         }
-        MelodyPage& page;
+        MelodyPage& page; bool dragging = false;
     };
     struct SampleRangeView final : juce::Component
     {
@@ -233,7 +257,7 @@ private:
     MelodyClip clip; juce::ValueTree previousState; int selected = -1; SampleRangeView sampleView { *this };
     std::optional<MelodyClip> undoClip;
     std::unique_ptr<Worker> worker; std::unique_ptr<juce::FileChooser> chooser;
-    juce::TextButton analyze { "ANALYZE" }, play { "PLAY MELODY" }, samplePlay { "PLAY SAMPLE" }, stop { "STOP" }, save { "EXPORT MIDI" };
+    juce::TextButton analyze { "ANALYZE" }, play { "PLAY MELODY" }, samplePlay { "PLAY SAMPLE" }, stop { "STOP" }, save { "EXPORT MIDI" }, importMidi { "IMPORT MIDI" };
     DragButton drag;
     juce::TextButton lower { "NOTE -" }, higher { "NOTE +" }, remove { "DELETE NOTE" };
     juce::TextButton midiFromSynth { "MIDI = SYNTH" }, midiFull { "FULL TRACK MIDI" };
@@ -347,6 +371,20 @@ private:
                 if (! safe || fc.getResult() == juce::File()) return;
                 const auto file = fc.getResult().withFileExtension ("mid");
                 safe->hint.setText (safe->clip.writeMidi (file) ? "MIDI exported: " + file.getFileName() : "Could not write MIDI file.", juce::dontSendNotification);
+            });
+    }
+    void chooseMidiImport()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Import MIDI melody", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*.mid;*.midi");
+        juce::Component::SafePointer<MelodyPage> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+            [safe] (const juce::FileChooser& fc)
+            {
+                if (! safe || ! fc.getResult().existsAsFile()) return;
+                auto imported = MelodyClip::readMidi (fc.getResult());
+                if (imported.notes.empty()) { safe->hint.setText ("No note events found in that MIDI file.", juce::dontSendNotification); return; }
+                safe->rememberUndo(); safe->clip = std::move (imported); safe->proc.setMelodyClip (safe->clip); safe->refreshClip();
+                safe->hint.setText ("Imported " + juce::String ((int) safe->clip.notes.size()) + " notes from MIDI. Click, drag or double-click in the piano roll to edit.", juce::dontSendNotification);
             });
     }
     void timerCallback() override

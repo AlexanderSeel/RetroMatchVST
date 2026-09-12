@@ -193,7 +193,7 @@ Candidate A/B/C reproduces the exact rack that was scored, including layers/glob
 
 ## E3. Factory content target
 
-- [ ] Target **300+ reviewed, genuinely distinct** presets across keys, mallets/bells, strings, pads/textures, leads/plucks, bass, percussion, cinematic atmospheres and sequences/arps.
+- [~] Target **300+ reviewed, genuinely distinct** presets across keys, mallets/bells, strings, pads/textures, leads/plucks, bass, percussion, cinematic atmospheres and sequences/arps; deterministic generated families and new Sequence sound-design roles exist, but subjective review/signoff remains open.
 - [x] Store category/subcategory/tags, recommended octave/range and useful macro labels for every factory entry; the browser searches tags and author metadata.
 - [~] Preset-page audition now uses a bounded short offline RMS/peak estimate to normalize the trigger level without modifying stored patch gain; final loudness-normalized browsing targets and subjective content review remain open.
 - [x] Safety-render every factory patch across representative notes/velocities; factory-library regressions reject non-finite/severely clipped output and missing assets.
@@ -217,11 +217,14 @@ Candidate A/B/C reproduces the exact rack that was scored, including layers/glob
 
 ## F3. UI/persistence/content
 
-- [x] Sequencer UI exposes the active pattern and editing controls as a dedicated top-level editor tab, with 16-step paging, zoom control and dedicated probability/ratchet/macro controls.
+- [x] Sequencer UI exposes the active pattern and editing controls as a dedicated top-level editor tab, with 16-step paging, zoom control and dedicated probability/ratchet/macro controls; the step surface is now a graphical pitch/velocity/macro lane editor rather than a row of action buttons.
 - [x] Copy/paste/duplicate/rotate/reverse/invert/constrained-randomize and bounded humanize transforms are implemented.
-- [x] Curated reusable pattern library independent of synth presets now provides twelve bounded starting patterns and a sequencer UI loader; the top-level tab, Sequence-family factory demonstrations and user-authored XML pattern files are present.
+- [x] Curated reusable pattern library independent of synth presets provides twelve bounded starting patterns and a sequencer UI loader; factory Sequence entries now cover note-gated bass, held-chord pads, motion-only atmosphere/riser, probabilistic texture and layer-targeted motion.
 - [x] Active sequence state, macro destinations/interpolation/rates and all step data are persisted with the plug-in state; standalone pattern XML save/load and `.rmpack` inclusion through the self-contained `.rmsynth` asset are implemented.
 - [x] MIDI output remains deferred while the internal sequencer transport is stabilized.
+- [~] Add Global/Main Instance/Layer Instance sequencer scopes with note-gated start semantics and per-instance parameter application; scope selection and DSP application are now real and persisted, while independent clocks/phrases per instance remain open.
+- [x] Add a true MOTION ONLY sequencer output mode: the pattern clock and macro lanes continue to evolve the active sound while sequencer note emission is suppressed, with persisted state and safe release when switching modes.
+- [x] Add bounded reference-driven sequencer inference: temporal RMS/spectral motion can generate a disabled MOTION ONLY lane suggestion for review, while short/one-shot/static references are rejected instead of being forced into sequencing.
 
 ---
 

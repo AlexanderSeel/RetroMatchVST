@@ -9,6 +9,7 @@
 #include "ModuleRack.h"
 #include "DspRoutingPlan.h"
 #include "TempoSync.h"
+#include "../Sequencer/StepSequencer.h"
 
 enum class ModSource : int
 {
@@ -247,6 +248,13 @@ public:
 class SynthEngine
 {
 public:
+    struct SequencerModulation
+    {
+        std::array<float, RetroMatchSequencer::modulationLaneCount> values {{ 0.5f, 0.5f }};
+        std::array<RetroMatchSequencer::MacroDestination, RetroMatchSequencer::modulationLaneCount> destinations {{ RetroMatchSequencer::MacroDestination::none, RetroMatchSequencer::MacroDestination::none }};
+        // -1 = main only, -2 = every rendered instance, >= 0 = one layer.
+        int targetLayer = -1;
+    };
     SynthEngine();
     void prepare (double sampleRate, int samplesPerBlock, int channels, bool withLayers = true);
     void setParameters (const VoiceParameters&);
@@ -259,6 +267,7 @@ public:
             if (layerEngines[i]) layerEngines[i]->setRandomSeed (baseSeed + (int64) (i + 1) * 7919);
     }
     void render (juce::AudioBuffer<float>&, juce::MidiBuffer&);
+    void setSequencerModulation (const SequencerModulation& value) noexcept { sequencerModulation = value; }
     void setRoutingPlan (const DspRouting::Plan& plan) noexcept
     {
         routingPlan = plan.valid() ? plan : DspRouting::Plan {};
@@ -297,6 +306,7 @@ public:
 private:
     juce::Synthesiser synth;
     std::array<std::unique_ptr<SynthEngine>, VoiceParameters::extraLayerCount> layerEngines;
+    SequencerModulation sequencerModulation;
     std::array<bool, VoiceParameters::extraLayerCount> layerActive {};
     juce::AudioBuffer<float> layerScratch;
     juce::AudioBuffer<float> parallelFxScratch;
