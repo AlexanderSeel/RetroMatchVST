@@ -435,6 +435,15 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
         repaint();
     };
     for (auto* button : { &savePatch, &loadPatch, &exportPreview, &keyboardToggle }) addAndMakeVisible (*button);
+    panicButton.setTooltip ("Global panic: immediately release all active synth, sequencer, melody and editor notes.");
+    panicButton.onClick = [this] { proc.panicAllNotesOff(); };
+    addAndMakeVisible (panicButton);
+    cpuUsageLabel.setText ("CPU 0%", juce::dontSendNotification);
+    cpuUsageLabel.setJustificationType (juce::Justification::centred);
+    cpuUsageLabel.setColour (juce::Label::textColourId, juce::Colour (0xffb7c5c8));
+    cpuUsageLabel.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+    cpuUsageLabel.setTooltip ("Smoothed audio-thread load for the current block size, including synthesis, layers and global effects.");
+    addAndMakeVisible (cpuUsageLabel);
 
     masterOutputLabel.setText ("MASTER OUT", juce::dontSendNotification);
     masterOutputLabel.setJustificationType (juce::Justification::centred);
@@ -447,6 +456,18 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     masterOutput.setTooltip ("Global master output trim. This is independent from each patch OUTPUT and stays unchanged while browsing presets.");
     masterOutputAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "masterOutputGain", masterOutput);
     addAndMakeVisible (masterOutputLabel); addAndMakeVisible (masterOutput); addAndMakeVisible (masterMeter);
+
+    analogCharacterLabel.setText ("ANALOG", juce::dontSendNotification);
+    analogCharacterLabel.setJustificationType (juce::Justification::centred);
+    analogCharacterLabel.setColour (juce::Label::textColourId, goldColour (*this));
+    analogCharacterLabel.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
+    analogCharacter.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    analogCharacter.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 16);
+    analogCharacter.textFromValueFunction = [] (double value) { return juce::String (juce::roundToInt (value * 100.0)) + " %"; };
+    analogCharacter.valueFromTextFunction = [] (const juce::String& text) { return juce::jlimit (0.0, 1.0, text.getDoubleValue() / 100.0); };
+    analogCharacter.setTooltip ("Global analogue character. Adds controlled oscillator-era warmth, slew, harmonic asymmetry and bandwidth shaping to the complete synth rack. 0% is clean/digital; 100% is strongest vintage colour.");
+    analogCharacterAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "analogCharacter", analogCharacter);
+    addAndMakeVisible (analogCharacterLabel); addAndMakeVisible (analogCharacter);
 
     styleTextLabel (resynthStrategyLabel, "METHOD");
     styleTextLabel (resynthComplexityLabel, "DEPTH");
@@ -1343,12 +1364,18 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     loadPatch.setBounds (header.removeFromRight (actionW).reduced (3, 15));
     header.removeFromRight (6);
 
+    panicButton.setBounds (header.removeFromRight (78).reduced (3, 15));
+
     auto masterArea = header.removeFromRight (172).reduced (3, 5);
     masterOutputLabel.setBounds (masterArea.removeFromTop (14));
     auto masterBody = masterArea.reduced (1, 0);
     masterOutput.setBounds (masterBody.removeFromLeft (76).reduced (2, 0));
     masterBody.removeFromLeft (4);
     masterMeter.setBounds (masterBody.reduced (1, 3));
+    auto analogArea = header.removeFromRight (104).reduced (3, 5);
+    analogCharacterLabel.setBounds (analogArea.removeFromTop (14));
+    analogCharacter.setBounds (analogArea.reduced (4, 0));
+    cpuUsageLabel.setBounds (header.removeFromRight (66).reduced (3, 20));
     header.removeFromRight (8);
     subtitle.setBounds (header.reduced (8, 0));
     outer.removeFromTop (10);
@@ -1466,13 +1493,17 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     footer.removeFromTop (3);
     status.setBounds (footer);
 
-    const int candidateGap = 7;
-    const int cardH = juce::jmax (34, (w.getHeight() - candidateGap * 2) / 3);
-    candidateA.setBounds (w.removeFromTop (cardH));
-    w.removeFromTop (candidateGap);
-    candidateB.setBounds (w.removeFromTop (cardH));
-    w.removeFromTop (candidateGap);
-    candidateC.setBounds (w);
+    // Candidate decisions are a fixed-height stacked group. Dividing all
+    // remaining workspace height made A/B/C become unreadably shallow when
+    // the editor was shortened, while wasting space in a tall editor.
+    const int candidateGap = 6;
+    const int candidateHeight = 46;
+    auto candidateRows = w.removeFromBottom (candidateHeight * 3 + candidateGap * 2);
+    candidateA.setBounds (candidateRows.removeFromTop (candidateHeight));
+    candidateRows.removeFromTop (candidateGap);
+    candidateB.setBounds (candidateRows.removeFromTop (candidateHeight));
+    candidateRows.removeFromTop (candidateGap);
+    candidateC.setBounds (candidateRows.removeFromTop (candidateHeight));
 
     layoutPages();
 }
@@ -2101,6 +2132,9 @@ void RetroMatchSynthAudioProcessorEditor::timerCallback()
     lfoScope.repaint();
     outputMeter.repaint();
     masterMeter.repaint();
+    const float cpu = proc.getCpuUsagePercent();
+    cpuUsageLabel.setText ("CPU " + juce::String (cpu, 0) + "%", juce::dontSendNotification);
+    cpuUsageLabel.setColour (juce::Label::textColourId, cpu > 85.0f ? juce::Colour (0xffff9673) : juce::Colour (0xffb7c5c8));
 }
 
 void RetroMatchSynthAudioProcessorEditor::updateLightPalette()

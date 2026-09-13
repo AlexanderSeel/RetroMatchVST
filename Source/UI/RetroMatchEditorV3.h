@@ -226,9 +226,14 @@ private:
     juce::TextButton savePatch { "SAVE PATCH" }, loadPatch { "LOAD PATCH" }, exportPreview { "EXPORT WAV" };
     juce::TextButton keyboardToggle { "KEYS" };
     juce::TextButton lightSwitch { "LED: MINT" };
+    juce::TextButton panicButton { "PANIC" };
+    juce::Label cpuUsageLabel;
     juce::Slider masterOutput;
     juce::Label masterOutputLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterOutputAttachment;
+    juce::Slider analogCharacter;
+    juce::Label analogCharacterLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> analogCharacterAttachment;
     juce::Label resynthStrategyLabel, resynthComplexityLabel, resynthAdvice;
     juce::ComboBox resynthStrategyChoice, resynthComplexityChoice;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> resynthStrategyAttachment, resynthComplexityAttachment;

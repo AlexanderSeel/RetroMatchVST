@@ -48,6 +48,26 @@ bool hasUsableVisualInk (const juce::Image& image, const juce::String& name,
     }
     return true;
 }
+
+bool containsPatchMapColour (const juce::Image& image, juce::Colour expected, const juce::String& name)
+{
+    int matches = 0;
+    for (int y = 0; y < image.getHeight(); y += 3)
+        for (int x = 0; x < image.getWidth(); x += 3)
+        {
+            const auto pixel = image.getPixelAt (x, y);
+            if (std::abs (pixel.getRed() - expected.getRed()) < 28
+                && std::abs (pixel.getGreen() - expected.getGreen()) < 28
+                && std::abs (pixel.getBlue() - expected.getBlue()) < 28)
+                ++matches;
+        }
+    if (matches < 8)
+    {
+        std::cerr << "UI visual test failed: " << name << " is missing a patch-map instance marker.\n";
+        return false;
+    }
+    return true;
+}
 }
 
 int main (int argc, char** argv)
@@ -220,7 +240,28 @@ int main (int argc, char** argv)
         processor->processBlock (audio, midi);
         juce::MessageManager::getInstance()->runDispatchLoopUntil (4);
     }
+    if (! std::isfinite (processor->getCpuUsagePercent()) || processor->getCpuUsagePercent() < 0.0f) return 55;
+    processor->panicAllNotesOff();
+    midi.clear();
+    processor->processBlock (audio, midi);
+    if (! std::isfinite (processor->getCpuUsagePercent())) return 56;
     if (! capture ("02-signal-mint")) return 7;
+
+    // Both presentations must render the same authored instance markers. The
+    // large map may fit/re-scale its viewport, but it must not rebuild a
+    // different signal topology or silently drop an instance.
+    SignalLabPage compactSignal (*processor, false);
+    SignalLabPage largeSignal (*processor, true);
+    compactSignal.setSize (920, 620);
+    largeSignal.setSize (1320, 760);
+    const auto compactMap = compactSignal.createComponentSnapshot (compactSignal.getLocalBounds());
+    const auto largeMap = largeSignal.createComponentSnapshot (largeSignal.getLocalBounds());
+    if (! hasUsableVisualInk (compactMap, "08-signal-map-compact", 920, 620, 0.02)
+        || ! hasUsableVisualInk (largeMap, "09-signal-map-large", 1320, 760, 0.02)) return 53;
+    const juce::uint32 mapColours[] { 0xff54f5d1, 0xffffbd65, 0xffc9a0ff };
+    for (const auto colour : mapColours)
+        if (! containsPatchMapColour (compactMap, juce::Colour (colour), "08-signal-map-compact")
+            || ! containsPatchMapColour (largeMap, juce::Colour (colour), "09-signal-map-large")) return 54;
     tabs->setCurrentTabIndex (tabs->getTabNames().indexOf ("MELODY"));
     bool foundLightSwitch = false;
     for (int i = 0; i < editor->getNumChildComponents(); ++i)

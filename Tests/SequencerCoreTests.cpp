@@ -226,14 +226,14 @@ int main()
             return fail ("macro lane interpolation, polymetric rate, or destination metadata is incorrect");
 
         settings.macroLaneRate = {{ -10.0f, 10.0f }};
-        settings.macroDestination = {{ (MacroDestination) 99, (MacroDestination) -1 }};
+        settings.macroDestination = {{ MacroDestination::chorusMix, (MacroDestination) -1 }};
         settings.outputMode = (OutputMode) 99;
         settings.targetScope = (TargetScope) 99;
         settings.targetLayer = 99;
         core.setSettings (settings);
         if (core.getSettings().macroLaneRate[0] != 0.25f
             || core.getSettings().macroLaneRate[1] != 4.0f
-            || core.getSettings().macroDestination[0] != MacroDestination::wavetablePosition
+            || core.getSettings().macroDestination[0] != MacroDestination::chorusMix
             || core.getSettings().macroDestination[1] != MacroDestination::none
             || core.getSettings().outputMode != OutputMode::motionOnly
             || core.getSettings().targetScope != TargetScope::layerInstance

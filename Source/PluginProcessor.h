@@ -261,6 +261,8 @@ public:
     void noteOffFromEditor (int midiNote, float velocity = 0.0f);
     void allEditorNotesOff();
     float getBrowserAuditionGain (const VoiceParameters&) const;
+    void panicAllNotesOff() noexcept;
+    float getCpuUsagePercent() const noexcept { return cpuUsagePercent.load (std::memory_order_relaxed); }
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
@@ -291,7 +293,10 @@ private:
     std::atomic<bool> midiLearning { false };
     std::atomic<float> outputPeakLeft { 0.0f };
     std::atomic<float> outputPeakRight { 0.0f };
+    std::atomic<float> cpuUsagePercent { 0.0f };
+    std::atomic<bool> panicRequested { false };
     std::atomic<std::uint64_t> nonFiniteSampleCount { 0 };
+    std::array<float, 2> globalAnalogState {};
     // Transient Compare correction state. It intentionally stays out of APVTS/session
     // automation until KEEP explicitly promotes the adjusted voice into the working patch.
     std::array<CompareFineTune::Values, 3> compareFineTuneValuesByCandidate {};

@@ -29,7 +29,11 @@ enum class RestartMode { never, transportStart, firstNote };
 enum class Mode { up, down, upDown, downUp, playedOrder, chord, random, walk, pattern };
 enum class OutputMode { notesAndMotion, motionOnly };
 enum class TargetScope { global, mainInstance, layerInstance };
-enum class MacroDestination { none, cutoff, resonance, pitch, amplitude, wavetablePosition };
+enum class MacroDestination
+{
+    none, cutoff, resonance, pitch, amplitude, wavetablePosition, wavetableWarp,
+    fmAmount, wavefold, attack, decay, release, stereoWidth, reverbMix, delayMix, chorusMix
+};
 enum class MacroInterpolation { hold, linear, smooth, random };
 
 struct Step

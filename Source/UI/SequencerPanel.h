@@ -24,7 +24,7 @@ public:
 
         for (auto* c : std::array<juce::Component*, 20> { &enabled, &mode, &outputMode, &targetScope, &targetLayer, &division, &bpm, &length, &swing, &latch, &noteGate,
                                                            &rootNote, &octaveRange, &restartMode, &previousPage, &nextPage,
-                                                           &randomize, &reverse, &clear, &patternTemplate })
+                                                           &randomize, &reverse, &clear, &patternMenu })
             addAndMakeVisible (*c);
         addAndMakeVisible (rotateLeft); addAndMakeVisible (rotateRight);
         for (auto* c : { &macroDestination1, &macroDestination2, &macroInterpolation1, &macroInterpolation2 })
@@ -45,7 +45,8 @@ public:
         restartMode.addItemList ({ "FREE RUN", "TRANSPORT", "FIRST NOTE" }, 1);
         for (int i = 0; i < RetroMatchSequencer::patternTemplateCount; ++i)
             patternTemplate.addItem (RetroMatchSequencer::makePatternTemplate (i).name, i + 1);
-        patternTemplate.setTooltip ("Load a reusable sequencer pattern independent of the current synth preset. Loading replaces the editable steps.");
+        patternMenu.setButtonText ("PATTERN MENU");
+        patternMenu.setTooltip ("Choose a reusable pattern grouped by musical use: bass, arpeggio, groove or atmosphere.");
         for (int midiNote = 0; midiNote < 128; ++midiNote)
             rootNote.addItem ("ROOT " + juce::MidiMessage::getMidiNoteName (midiNote, true, true, 3), midiNote + 1);
         bpm.setRange (20.0, 400.0, 1.0); bpm.setTextValueSuffix (" BPM");
@@ -111,7 +112,7 @@ public:
         macro1.setTooltip ("Step modulation lane 1 value.");
         macro2.setTooltip ("Step modulation lane 2 value.");
         for (auto* destination : { &macroDestination1, &macroDestination2 })
-            destination->addItemList ({ "OFF", "CUTOFF", "RESONANCE", "PITCH", "AMPLITUDE", "WAVETABLE" }, 1);
+            destination->addItemList ({ "OFF", "CUTOFF", "RESONANCE", "PITCH", "AMPLITUDE", "WAVETABLE", "WT WARP", "FM AMOUNT", "WAVEFOLD", "ATTACK", "DECAY", "RELEASE", "WIDTH", "REVERB", "DELAY", "CHORUS" }, 1);
         for (auto* interpolation : { &macroInterpolation1, &macroInterpolation2 })
             interpolation->addItemList ({ "HOLD", "LINEAR", "SMOOTH", "RANDOM" }, 1);
         for (auto* rate : { &macroRate1, &macroRate2 })
@@ -162,6 +163,19 @@ public:
             loadState(); status.setText ("MOTION FIT READY - REVIEW LANES, THEN ARM", juce::dontSendNotification);
         };
         patternTemplate.onChange = [this] { loadPatternTemplate (patternTemplate.getSelectedId() - 1); };
+        patternMenu.onClick = [this]
+        {
+            juce::PopupMenu bass, arp, groove, atmosphere, menu;
+            bass.addItem (101, "Minor Pulse"); bass.addItem (103, "Fifth Drive");
+            arp.addItem (102, "Major Arp"); arp.addItem (109, "Minor Climb"); arp.addItem (106, "Odd Steps"); arp.addItem (112, "Polymetric Five");
+            groove.addItem (104, "Trance Gate"); groove.addItem (108, "Euclidean Bloom"); groove.addItem (110, "Chord Stabs"); groove.addItem (107, "Percussive Rest");
+            atmosphere.addItem (100, "Empty"); atmosphere.addItem (105, "Broken Bells");
+            menu.addSubMenu ("BASS / PULSE", bass); menu.addSubMenu ("ARP / MELODY", arp);
+            menu.addSubMenu ("GATE / GROOVE", groove); menu.addSubMenu ("ATMOSPHERE / TEXTURE", atmosphere);
+            juce::Component::SafePointer<SequencerPanel> safeThis (this);
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&patternMenu), [safeThis] (int result)
+            { if (safeThis != nullptr && result >= 100) safeThis->loadPatternTemplate (result - 100); });
+        };
 
         auto stepChanged = [this] { commitSelectedStep(); };
         rest.onClick = stepChanged; tie.onClick = stepChanged; glide.onClick = stepChanged;
@@ -195,7 +209,7 @@ public:
         auto tools = area.removeFromTop (30);
         octaveRange.setBounds (tools.removeFromLeft (82).reduced (2)); restartMode.setBounds (tools.removeFromLeft (110).reduced (2));
         previousPage.setBounds (tools.removeFromLeft (58).reduced (2)); nextPage.setBounds (tools.removeFromLeft (58).reduced (2));
-        patternTemplate.setBounds (tools.removeFromLeft (112).reduced (2));
+        patternMenu.setBounds (tools.removeFromLeft (112).reduced (2));
         randomize.setBounds (tools.removeFromLeft (94).reduced (2)); reverse.setBounds (tools.removeFromLeft (76).reduced (2));
         rotateLeft.setBounds (tools.removeFromLeft (76).reduced (2)); rotateRight.setBounds (tools.removeFromLeft (76).reduced (2));
         clear.setBounds (tools.removeFromLeft (62).reduced (2));
@@ -269,6 +283,7 @@ private:
     juce::Slider zoom;
     std::unique_ptr<juce::FileChooser> patternChooser;
     juce::ComboBox patternTemplate;
+    juce::TextButton patternMenu;
     std::array<juce::TextButton, stepsPerPage> stepButtons;
     juce::Rectangle<int> stepGridBounds;
     juce::Slider pitch, octave, velocity, gate, probability, modulationProbability, ratchet, microTiming, macro1, macro2;
@@ -340,8 +355,8 @@ private:
         settings.rootNote = juce::jlimit (0, 127, rootNote.getSelectedId() - 1);
         settings.octaveRange = juce::jlimit (1, 4, octaveRange.getSelectedId());
         settings.restartMode = (RetroMatchSequencer::RestartMode) juce::jlimit (0, 2, restartMode.getSelectedId() - 1);
-        settings.macroDestination = {{ (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 5, macroDestination1.getSelectedId() - 1),
-                                       (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 5, macroDestination2.getSelectedId() - 1) }};
+        settings.macroDestination = {{ (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 15, macroDestination1.getSelectedId() - 1),
+                                       (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 15, macroDestination2.getSelectedId() - 1) }};
         settings.macroInterpolation = {{ (RetroMatchSequencer::MacroInterpolation) juce::jlimit (0, 3, macroInterpolation1.getSelectedId() - 1),
                                           (RetroMatchSequencer::MacroInterpolation) juce::jlimit (0, 3, macroInterpolation2.getSelectedId() - 1) }};
         settings.macroLaneRate = {{ (float) macroRate1.getValue(), (float) macroRate2.getValue() }};
@@ -542,8 +557,8 @@ private:
             settings.rootNote = juce::jlimit (0, 127, (int) state.getProperty ("rootNote", 60));
             settings.octaveRange = juce::jlimit (1, 4, (int) state.getProperty ("octaveRange", 1));
             settings.restartMode = (RetroMatchSequencer::RestartMode) juce::jlimit (0, 2, (int) state.getProperty ("restartMode", 2));
-            settings.macroDestination = {{ (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 5, (int) state.getProperty ("macroDestination1", 0)),
-                                           (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 5, (int) state.getProperty ("macroDestination2", 0)) }};
+            settings.macroDestination = {{ (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 15, (int) state.getProperty ("macroDestination1", 0)),
+                                           (RetroMatchSequencer::MacroDestination) juce::jlimit (0, 15, (int) state.getProperty ("macroDestination2", 0)) }};
             settings.macroInterpolation = {{ (RetroMatchSequencer::MacroInterpolation) juce::jlimit (0, 3, (int) state.getProperty ("macroInterpolation1", 0)),
                                               (RetroMatchSequencer::MacroInterpolation) juce::jlimit (0, 3, (int) state.getProperty ("macroInterpolation2", 0)) }};
             settings.macroLaneRate = {{ juce::jlimit (0.25f, 4.0f, (float) state.getProperty ("macroRate1", 1.0f)),

@@ -114,6 +114,7 @@ Compare is a semantic residual-correction surface, not a second synthesizer. Eve
 - [x] Add an explicit reset-after-arbitrary-edits regression proving the immutable baseline is restored parameter-equivalently.
 - [x] Add approximate level-invariance assertions for controls that should not act as loudness controls, especially Width/Brightness.
 - [x] Add concise UI help/tooltips documenting each control's actual dimension/unit.
+- [x] Keep the A/B/C candidate decisions as a fixed-height stacked row group anchored above the morph/status footer, so candidate cards remain readable at short editor heights and use tall layouts efficiently.
 
 ### Compare acceptance
 
@@ -196,6 +197,8 @@ Candidate A/B/C reproduces the exact rack that was scored, including layers/glob
 - [~] Target **300+ reviewed, genuinely distinct** presets across keys, mallets/bells, strings, pads/textures, leads/plucks, bass, percussion, cinematic atmospheres and sequences/arps; deterministic generated families and new Sequence sound-design roles exist, but subjective review/signoff remains open.
 - [x] Store category/subcategory/tags, recommended octave/range and useful macro labels for every factory entry; the browser searches tags and author metadata.
 - [~] Preset-page audition now uses a bounded short offline RMS/peak estimate to normalize the trigger level without modifying stored patch gain; final loudness-normalized browsing targets and subjective content review remain open.
+- [x] Add a global Analog Character macro: a persisted, automation-safe 0..1 control colours the complete synthesized rack with bounded warmth/slew/bandwidth shaping while preserving the clean 0% endpoint; the header exposes it beside Master Output and factory content carries authored values across clean/digital and warm/vintage directions.
+- [x] Add global performance controls: a lock-free audio-thread panic request releases active notes and stops melody playback, and a smoothed block-time CPU percentage is exposed beside the master controls without changing the automation surface.
 - [x] Safety-render every factory patch across representative notes/velocities; factory-library regressions reject non-finite/severely clipped output and missing assets.
 
 ---
@@ -212,14 +215,15 @@ Candidate A/B/C reproduces the exact rack that was scored, including layers/glob
 ## F2. Step and modulation data
 
 - [x] Per-step pitch/degree, octave, velocity/accent, gate, rest, tie, probability, ratchet, bounded micro-timing, optional glide and macro values.
-- [x] Two per-step macro lanes and independent modulation probability are bounded, editable and persisted, with regression coverage proving neutral macro fallback does not suppress notes; destinations bind to the live voice parameter frame and support Hold/Linear/Smooth/bounded-random interpolation.
+- [x] Two per-step macro lanes and independent modulation probability are bounded, editable and persisted, with regression coverage proving neutral macro fallback does not suppress notes; destinations bind to the live voice parameter frame for filter, pitch/gain, wavetable, FM, wavefold, envelope timing, width and effect sends, and support Hold/Linear/Smooth/bounded-random interpolation.
 - [x] Per-step note probability and independent modulation probability are implemented and persisted; macro lane rate multipliers are bounded and polymetric.
 
 ## F3. UI/persistence/content
 
 - [x] Sequencer UI exposes the active pattern and editing controls as a dedicated top-level editor tab, with 16-step paging, zoom control and dedicated probability/ratchet/macro controls; the step surface is now a graphical pitch/velocity/macro lane editor rather than a row of action buttons.
 - [x] Copy/paste/duplicate/rotate/reverse/invert/constrained-randomize and bounded humanize transforms are implemented.
-- [x] Curated reusable pattern library independent of synth presets provides twelve bounded starting patterns and a sequencer UI loader; factory Sequence entries now cover note-gated bass, held-chord pads, motion-only atmosphere/riser, probabilistic texture and layer-targeted motion.
+- [x] Curated reusable pattern library independent of synth presets provides twelve bounded starting patterns and a sequencer UI loader; factory Sequence entries now rotate through ten distinct authored phrase families covering note-gated bass, held-chord pads, syncopation, risers, grooves, motion-only atmosphere, probabilistic texture, multiple arpeggiator directions and layer-targeted motion, with varied evolving-synthesis destinations.
+- [x] Group reusable patterns into musical-use submenus (Bass/Pulse, Arp/Melody, Gate/Groove and Atmosphere/Texture), and author note-gated MOTION ONLY depth lanes into selected Bass, Pad, Texture, Drone, Lead, Pluck and Layered Pad factory presets.
 - [x] Active sequence state, macro destinations/interpolation/rates and all step data are persisted with the plug-in state; standalone pattern XML save/load and `.rmpack` inclusion through the self-contained `.rmsynth` asset are implemented.
 - [x] MIDI output remains deferred while the internal sequencer transport is stabilized.
 - [~] Add Global/Main Instance/Layer Instance sequencer scopes with note-gated start semantics and per-instance parameter application; scope selection and DSP application are now real and persisted, while independent clocks/phrases per instance remain open.
@@ -264,7 +268,7 @@ Each direction must map to an explicit bounded set of synthesis/routing dimensio
 - [ ] pluginval/auval coverage where practical.
 - [~] The optional UI preview is registered with CTest and includes a legacy pre-module preset fixture verifying migration/reset of newer rack state; additional released-schema fixtures remain open.
 - [~] The optional editor preview now performs a 24-cycle factory/sequence load, note-render, finite-audio and state-round-trip transition soak; longer graph-edit/background-worker/preset-browser host soaks remain open.
-- [x] The editor preview renders representative wide and minimum-size UI snapshots and rejects invalid viewport sizes, collapsed/blank pages and suspicious full-frame paint coverage; `scripts/update-ui-example.py` promotes the tested primary snapshot into the README asset.
+- [x] The editor preview renders representative wide and minimum-size UI snapshots and rejects invalid viewport sizes, collapsed/blank pages and suspicious full-frame paint coverage; compact and large Signal Map snapshots also verify shared instance markers, and `scripts/update-ui-example.py` promotes the tested primary snapshot into the README asset.
 - [~] Live output and OfflineRenderer now have final non-finite firewalls; live invalid-sample counts are exposed atomically, and smoke/factory plus full-rack regressions now assert zero non-finite samples and bounded clipping/headroom, while native release validation remains open.
 - [ ] Final listening pass on reference fixtures and representative factory content.
 

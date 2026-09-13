@@ -30,6 +30,32 @@ inline const char* characterName (int variation) noexcept
 {
     return variation < 10 ? "Core" : (variation < 20 ? "Motion" : "Dimension");
 }
+
+inline float analogCharacterForPreset (int index) noexcept
+{
+    // Factory content intentionally demonstrates the global character macro:
+    // digital/FM families stay restrained, while bass, texture, drone and
+    // layered families expose progressively warmer authored starting points.
+    static constexpr float handAuthored[] { 0.62f, 0.24f, 0.18f, 0.36f, 0.48f,
+                                            0.72f, 0.14f, 0.28f, 0.58f, 0.30f };
+    if (index >= 0 && index < 10)
+        return handAuthored[index];
+    const int generated = juce::jmax (0, index - 10);
+    const int family = juce::jlimit (0, familyCount - 1, generated / variationsPerFamily);
+    const int variation = generated % variationsPerFamily;
+    static constexpr float familyBase[] { 0.68f, 0.28f, 0.34f, 0.52f, 0.46f,
+                                           0.60f, 0.22f, 0.20f, 0.74f, 0.48f };
+    return juce::jlimit (0.0f, 1.0f, familyBase[family] + (variation % 10) * 0.018f - (variation / 10) * 0.012f);
+}
+
+inline bool usesMotionSequencer (int family, int variation) noexcept
+{
+    // Motion-only sequencing is authored into sound-design families where a
+    // held note benefits from evolving tone, not into every static patch.
+    return family != 4
+        && ((family == 0 || family == 3 || family == 5 || family == 8 || family == 9) && variation >= 18)
+        || ((family == 2 || family == 6) && variation >= 24);
+}
 }
 
 inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
@@ -63,6 +89,8 @@ inline const std::vector<FactoryPresetInfo> factoryPresetCatalog = [] {
                 + (variation >= 6 && (family == 2 || family == 3 || family == 4 || family == 5 || family == 6 || family == 8 || family == 9)
                     ? " MSEG motion is part of the authored sound." : "")
                 + (family == 4 ? " Includes an enabled note-gated 16-step phrase or motion lane with macro destinations; it never starts without a played note." : "")
+                + (family != 4 && FactoryPresetDesign::usesMotionSequencer (family, variation)
+                    ? " Includes a note-gated motion lane that evolves the held sound without adding a second melody." : "")
                 + (variation >= 8 ? " Layer roles remain independently editable in the Instance Rack." : "") });
         }
     int sequenceOrdinal = 0;

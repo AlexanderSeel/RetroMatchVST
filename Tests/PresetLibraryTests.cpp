@@ -49,6 +49,9 @@ int main()
             return fail ("factory preset names are not unique");
 
         const auto p = makeFactoryPreset (index);
+        const float analog = FactoryPresetDesign::analogCharacterForPreset (index);
+        if (! finite (analog) || analog < 0.0f || analog > 1.0f)
+            return fail ("factory preset analog character was outside its bounded range");
         if (! finite (p.cutoff) || ! finite (p.resonance) || ! finite (p.outputGainDb)
             || ! finite (p.attack) || ! finite (p.decay) || ! finite (p.sustain) || ! finite (p.release))
             return fail ("factory preset produced non-finite synthesis parameters");

@@ -59,7 +59,7 @@ Settings Core::sanitizedSettings (Settings value) noexcept
     value.targetLayer = bounded (0, 6, value.targetLayer);
     for (int lane = 0; lane < modulationLaneCount; ++lane)
     {
-        value.macroDestination[(std::size_t) lane] = (MacroDestination) bounded (0, 5, (int) value.macroDestination[(std::size_t) lane]);
+        value.macroDestination[(std::size_t) lane] = (MacroDestination) bounded (0, 15, (int) value.macroDestination[(std::size_t) lane]);
         value.macroInterpolation[(std::size_t) lane] = (MacroInterpolation) bounded (0, 3, (int) value.macroInterpolation[(std::size_t) lane]);
         value.macroLaneRate[(std::size_t) lane] = bounded (0.25f, 4.0f, value.macroLaneRate[(std::size_t) lane]);
     }

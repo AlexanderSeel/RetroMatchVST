@@ -821,6 +821,16 @@ void SynthEngine::render (juce::AudioBuffer<float>& audio, juce::MidiBuffer& mid
                     case RetroMatchSequencer::MacroDestination::pitch: p.masterTuneCents += (value - 0.5f) * 2400.0f; break;
                     case RetroMatchSequencer::MacroDestination::amplitude: p.mainLayerGain *= value * 2.0f; break;
                     case RetroMatchSequencer::MacroDestination::wavetablePosition: p.wavetablePosition = value; break;
+                    case RetroMatchSequencer::MacroDestination::wavetableWarp: p.wavetableWarp = value * 2.0f - 1.0f; break;
+                    case RetroMatchSequencer::MacroDestination::fmAmount: p.fmAmount = value * 0.65f; break;
+                    case RetroMatchSequencer::MacroDestination::wavefold: p.wavefold = value; break;
+                    case RetroMatchSequencer::MacroDestination::attack: p.attack = 0.001f + value * 4.999f; break;
+                    case RetroMatchSequencer::MacroDestination::decay: p.decay = 0.001f + value * 4.999f; break;
+                    case RetroMatchSequencer::MacroDestination::release: p.release = 0.001f + value * 7.999f; break;
+                    case RetroMatchSequencer::MacroDestination::stereoWidth: p.stereoWidth = value * 2.0f; break;
+                    case RetroMatchSequencer::MacroDestination::reverbMix: p.reverbMix = value; break;
+                    case RetroMatchSequencer::MacroDestination::delayMix: p.delayMix = value; break;
+                    case RetroMatchSequencer::MacroDestination::chorusMix: p.chorusMix = value; break;
                     case RetroMatchSequencer::MacroDestination::none: break;
                 }
             }

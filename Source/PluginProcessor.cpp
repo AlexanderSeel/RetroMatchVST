@@ -54,7 +54,7 @@ namespace
 bool isGlobalRackOrClockParameter (const juce::String& id)
 {
     if (id.startsWith ("layer") || id.startsWith ("globalFxModule") || id == "mainLayerGain" || id == "oversamplingQuality" || id == "resynthInstances"
-        || id == "masterOutputGain" || id == "resynthStrategy" || id == "resynthComplexity")
+        || id == "masterOutputGain" || id == "analogCharacter" || id == "resynthStrategy" || id == "resynthComplexity")
         return true;
     if (id == "tempoSource" || id == "manualBpm" || id == "chorusSync" || id == "chorusDivision"
         || id == "delaySync" || id == "delayDivision" || id == "msegSync" || id == "msegDivision")
@@ -603,6 +603,7 @@ juce::ValueTree stateWithPost10Defaults (const juce::XmlElement& xml)
     setDefault ("resynthStrategy", 0);
     setDefault ("resynthComplexity", 0);
     setDefault ("masterOutputGain", 0.0f);
+    setDefault ("analogCharacter", 0.0f);
     setDefault ("tempoSource", 1);
     setDefault ("manualBpm", 120.0f);
     for (int i = 1; i <= 4; ++i)
@@ -640,6 +641,7 @@ void RetroMatchSynthAudioProcessor::prepareToPlay (double sr, int bs)
     referenceLatencyDelay.prepare (spec);
     referenceLatencyDelay.setDelay ((float) engine.getLatencySamples());
     referenceLatencyDelay.reset();
+    globalAnalogState.fill (0.0f);
 }
 
 bool RetroMatchSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& l) const
@@ -848,6 +850,7 @@ void RetroMatchSynthAudioProcessor::delayReferenceForLatency (juce::AudioBuffer<
 void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
 {
     juce::ScopedNoDenormals noDenormals;
+    const auto processStart = juce::Time::getHighResolutionTicks();
     b.clear();
     for (const auto metadata : m)
     {
@@ -886,6 +889,8 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
         const juce::ScopedTryLock lock (editorMidiLock);
         if (lock.isLocked()) { renderMidi.addEvents (editorMidi, 0, -1, 0); editorMidi.clear(); }
     }
+    if (panicRequested.exchange (false, std::memory_order_acq_rel))
+        renderMidi.addEvent (juce::MidiMessage::allNotesOff (1), 0);
     melodyTransport.process (renderMidi, b.getNumSamples(), getSampleRate(), hostPlaying, hostJustStarted, bpm);
     effectiveBpm.store (bpm, std::memory_order_relaxed);
 
@@ -923,6 +928,36 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
             case RetroMatchSequencer::MacroDestination::wavetablePosition:
                 renderParameters.wavetablePosition = value;
                 break;
+            case RetroMatchSequencer::MacroDestination::wavetableWarp:
+                renderParameters.wavetableWarp = value * 2.0f - 1.0f;
+                break;
+            case RetroMatchSequencer::MacroDestination::fmAmount:
+                renderParameters.fmAmount = value * 0.65f;
+                break;
+            case RetroMatchSequencer::MacroDestination::wavefold:
+                renderParameters.wavefold = value;
+                break;
+            case RetroMatchSequencer::MacroDestination::attack:
+                renderParameters.attack = 0.001f + value * 4.999f;
+                break;
+            case RetroMatchSequencer::MacroDestination::decay:
+                renderParameters.decay = 0.001f + value * 4.999f;
+                break;
+            case RetroMatchSequencer::MacroDestination::release:
+                renderParameters.release = 0.001f + value * 7.999f;
+                break;
+            case RetroMatchSequencer::MacroDestination::stereoWidth:
+                renderParameters.stereoWidth = value * 2.0f;
+                break;
+            case RetroMatchSequencer::MacroDestination::reverbMix:
+                renderParameters.reverbMix = value;
+                break;
+            case RetroMatchSequencer::MacroDestination::delayMix:
+                renderParameters.delayMix = value;
+                break;
+            case RetroMatchSequencer::MacroDestination::chorusMix:
+                renderParameters.chorusMix = value;
+                break;
             case RetroMatchSequencer::MacroDestination::none:
                 break;
         }
@@ -957,6 +992,39 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
         }
         globalModuleRack.process (b, globalModules, 0, effectiveBpm.load (std::memory_order_relaxed));
         globalModuleRack.process (b, globalModules, 1, effectiveBpm.load (std::memory_order_relaxed));
+    }
+
+    // Global era character: one bounded colour stage after the complete synth
+    // rack and before reference mixing. At zero this is bit-transparent; at
+    // one it adds controlled asymmetric saturation and bandwidth/slew that
+    // moves the whole instrument toward a warm 60s/70s/80s analogue response.
+    const float analog = juce::jlimit (0.0f, 1.0f, apvts.getRawParameterValue ("analogCharacter")->load());
+    if (analog > 0.0001f)
+    {
+        const float drive = 1.0f + analog * 2.2f;
+        const float normalizer = std::tanh (drive);
+        const float cutoff = 18500.0f - analog * 8500.0f;
+        const float coefficient = std::exp (-juce::MathConstants<float>::twoPi * cutoff
+                                            / (float) juce::jmax (8000.0, getSampleRate()));
+        for (int ch = 0; ch < juce::jmin (2, b.getNumChannels()); ++ch)
+        {
+            auto* samples = b.getWritePointer (ch);
+            float state = globalAnalogState[(size_t) ch];
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const float input = samples[i];
+                const float asymmetric = input + analog * 0.075f * input * input;
+                const float saturated = std::tanh (asymmetric * drive) / juce::jmax (0.001f, normalizer);
+                const float coloured = juce::jmap (analog, input, saturated);
+                state = coloured + coefficient * (state - coloured);
+                samples[i] = state;
+            }
+            globalAnalogState[(size_t) ch] = state;
+        }
+    }
+    else
+    {
+        globalAnalogState.fill (0.0f);
     }
 
     if (mode == ReferenceAuditionMode::referenceOnly) b.clear();
@@ -1018,6 +1086,12 @@ void RetroMatchSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& b, j
         outputPeakRight.store (juce::jmax (right, previousRight * 0.88f), std::memory_order_relaxed);
     }
     visualAudio.push (b);
+    const double blockSeconds = b.getNumSamples() / juce::jmax (1.0, getSampleRate());
+    const double elapsedSeconds = (double) (juce::Time::getHighResolutionTicks() - processStart)
+                                / juce::Time::getHighResolutionTicksPerSecond();
+    const float measured = (float) (100.0 * elapsedSeconds / juce::jmax (1.0e-6, blockSeconds));
+    const float previousCpu = cpuUsagePercent.load (std::memory_order_relaxed);
+    cpuUsagePercent.store (juce::jlimit (0.0f, 999.0f, previousCpu * 0.86f + measured * 0.14f), std::memory_order_relaxed);
 }
 
 float RetroMatchSynthAudioProcessor::midiNoteToHz (int midiNote)
@@ -1453,6 +1527,13 @@ void RetroMatchSynthAudioProcessor::allEditorNotesOff()
     const juce::ScopedLock lock (editorMidiLock);
     editorMidi.clear();
     editorMidi.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+}
+
+void RetroMatchSynthAudioProcessor::panicAllNotesOff() noexcept
+{
+    panicRequested.store (true, std::memory_order_release);
+    melodyTransport.stop();
+    allEditorNotesOff();
 }
 
 void RetroMatchSynthAudioProcessor::applyMatchResult (const MatchResult& result)
@@ -1939,6 +2020,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout RetroMatchSynthAudioProcesso
         juce::StringArray { "Classic / legacy 1-3", "Studio / 4 instances", "Deep / 6 instances", "Maximum / 8 instances" }, 0));
     l.add (std::make_unique<P> ("masterOutputGain", "Master Output",
         juce::NormalisableRange<float> (-36.0f, 12.0f, 0.1f), 0.0f));
+    l.add (std::make_unique<P> ("analogCharacter", "Analog Character",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
 
     // Append-only whole-synth bus parameters. Kept after all existing parameters so
     // established automation indices remain stable. Each slot can be a filter or FX.
@@ -1970,6 +2053,7 @@ void RetroMatchSynthAudioProcessor::applyPresetParameters (const VoiceParameters
     for (auto* parameter : getParameters())
         if (auto* identified = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
             if (identified->paramID != "oversamplingQuality" && identified->paramID != "masterOutputGain"
+                && identified->paramID != "analogCharacter"
                 && identified->paramID != "resynthStrategy" && identified->paramID != "resynthComplexity")
                 parameter->setValueNotifyingHost (parameter->getDefaultValue());
     for (int i = 0; i < VoiceParameters::extraLayerCount; ++i) clearLayer (i);
@@ -1993,8 +2077,15 @@ void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
     if (! juce::isPositiveAndBelow (index, (int) factoryPresetCatalog.size())) return;
     discardMagicPreview();
     applyPresetParameters (makeFactoryPreset (index), factoryPresetCatalog[(size_t) index].name);
+    if (auto* analog = apvts.getParameter ("analogCharacter"))
+        analog->setValueNotifyingHost (FactoryPresetDesign::analogCharacterForPreset (index));
 
-    if (factoryPresetCatalog[(size_t) index].category != "Sequence") return;
+    const bool isSequencePreset = factoryPresetCatalog[(size_t) index].category == "Sequence";
+    const int generatedIndex = juce::jmax (0, index - 10);
+    const int presetFamily = juce::jlimit (0, FactoryPresetDesign::familyCount - 1,
+                                           generatedIndex / FactoryPresetDesign::variationsPerFamily);
+    const int presetVariation = generatedIndex % FactoryPresetDesign::variationsPerFamily;
+    if (! isSequencePreset && ! FactoryPresetDesign::usesMotionSequencer (presetFamily, presetVariation)) return;
 
     auto settings = melodyTransport.getSequencerSettings();
     settings.enabled = true;
@@ -2005,7 +2096,7 @@ void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
     settings.length = 16;
     settings.internalBpm = 112.0 + (index % 5) * 6.0;
     const int variation = (index - 10) % FactoryPresetDesign::variationsPerFamily;
-    settings.outputMode = variation == 2 || variation == 3 || variation == 5 || variation >= 20
+    settings.outputMode = ! isSequencePreset || variation == 2 || variation == 3 || variation == 5 || variation >= 20
                         ? RetroMatchSequencer::OutputMode::motionOnly : RetroMatchSequencer::OutputMode::notesAndMotion;
     settings.targetScope = variation >= 14 && variation % 3 == 2
                          ? RetroMatchSequencer::TargetScope::layerInstance
@@ -2014,25 +2105,57 @@ void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
                              : RetroMatchSequencer::TargetScope::mainInstance;
     const int availableLayers = FactoryPresetDesign::companionCountForVariation (variation);
     settings.targetLayer = availableLayers > 0 ? (variation / 5) % availableLayers : 0;
-    settings.mode = variation == 1 ? RetroMatchSequencer::Mode::chord
-                  : variation == 5 ? RetroMatchSequencer::Mode::random
+    const int patternStyle = variation % 10;
+    settings.mode = patternStyle == 1 ? RetroMatchSequencer::Mode::chord
+                  : patternStyle == 5 ? RetroMatchSequencer::Mode::random
+                  : patternStyle == 6 ? RetroMatchSequencer::Mode::up
+                  : patternStyle == 7 ? RetroMatchSequencer::Mode::down
+                  : patternStyle == 8 ? RetroMatchSequencer::Mode::upDown
+                  : patternStyle == 9 ? RetroMatchSequencer::Mode::playedOrder
                   : RetroMatchSequencer::Mode::pattern;
     settings.division = variation == 3 ? RetroMatchSequencer::Division::eighth
                      : variation >= 20 ? RetroMatchSequencer::Division::eighthDotted
                      : RetroMatchSequencer::Division::sixteenth;
     settings.length = variation == 3 ? 32 : variation >= 20 ? 24 : 16;
-    settings.macroDestination = variation == 3
-        ? std::array<RetroMatchSequencer::MacroDestination, 2> {{ RetroMatchSequencer::MacroDestination::pitch, RetroMatchSequencer::MacroDestination::wavetablePosition }}
-        : variation == 4 || variation >= 20
-            ? std::array<RetroMatchSequencer::MacroDestination, 2> {{ RetroMatchSequencer::MacroDestination::resonance, RetroMatchSequencer::MacroDestination::amplitude }}
-            : std::array<RetroMatchSequencer::MacroDestination, 2> {{ RetroMatchSequencer::MacroDestination::cutoff, RetroMatchSequencer::MacroDestination::wavetablePosition }};
+    using MacroDestination = RetroMatchSequencer::MacroDestination;
+    settings.macroDestination = {{ MacroDestination::cutoff, MacroDestination::wavetablePosition }};
+    switch (patternStyle)
+    {
+        case 1: settings.macroDestination = {{ MacroDestination::attack, MacroDestination::cutoff }}; break;
+        case 2: settings.macroDestination = {{ MacroDestination::wavetablePosition, MacroDestination::wavetableWarp }}; break;
+        case 3: settings.macroDestination = {{ MacroDestination::pitch, MacroDestination::wavetablePosition }}; break;
+        case 4: settings.macroDestination = {{ MacroDestination::resonance, MacroDestination::amplitude }}; break;
+        case 5: settings.macroDestination = {{ MacroDestination::wavefold, MacroDestination::reverbMix }}; break;
+        case 6: settings.macroDestination = {{ MacroDestination::decay, MacroDestination::fmAmount }}; break;
+        case 7: settings.macroDestination = {{ MacroDestination::release, MacroDestination::stereoWidth }}; break;
+        case 8: settings.macroDestination = {{ MacroDestination::delayMix, MacroDestination::chorusMix }}; break;
+        case 9: settings.macroDestination = {{ MacroDestination::fmAmount, MacroDestination::cutoff }}; break;
+        default: break;
+    }
+    if (variation >= 20)
+        settings.macroDestination = {{ MacroDestination::resonance, MacroDestination::amplitude }};
     settings.macroInterpolation = variation == 3
         ? std::array<RetroMatchSequencer::MacroInterpolation, 2> {{ RetroMatchSequencer::MacroInterpolation::linear, RetroMatchSequencer::MacroInterpolation::linear }}
         : std::array<RetroMatchSequencer::MacroInterpolation, 2> {{ RetroMatchSequencer::MacroInterpolation::smooth, RetroMatchSequencer::MacroInterpolation::linear }};
     settings.macroLaneRate = variation >= 20 ? std::array<float, 2> {{ 0.5f, 2.0f }} : std::array<float, 2> {{ 1.0f, 0.5f }};
     melodyTransport.setSequencerSettings (settings);
 
-    const std::array<int, 16> motif {{ 0, 3, 7, 10, 12, 10, 7, 3, 0, -2, 5, 7, 10, 7, 5, 2 }};
+    // Ten distinct phrase families are rotated through the 30 variations:
+    // bass ostinato, chord pulse, syncopation, riser, groove, texture and
+    // several arpeggiator directions. This keeps adjacent presets musically
+    // different instead of merely changing macro destinations.
+    const std::array<std::array<int, 16>, 10> motifs {{
+        {{ 0, 0, 7, 0, 10, 0, 7, 0, 0, 0, 5, 0, 7, 0, 10, 0 }},
+        {{ 0, 4, 7, 12, 7, 4, 0, 4, 0, 4, 7, 11, 7, 4, 0, 4 }},
+        {{ 0, 3, 0, 7, 10, 0, 3, 12, 0, -2, 0, 5, 7, 0, 10, 0 }},
+        {{ 0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28, 31, 33, 36 }},
+        {{ 0, 7, 5, 7, 0, 10, 7, 12, 0, 7, 5, 7, 2, 10, 7, 14 }},
+        {{ 0, 12, -5, 7, 3, 10, -2, 14, 0, 9, -7, 12, 5, 16, 2, 19 }},
+        {{ 0, 0, 3, 0, 7, 0, 10, 0, 12, 0, 10, 0, 7, 0, 3, 0 }},
+        {{ 0, 5, 7, 5, 12, 5, 10, 5, 0, 5, 7, 5, 14, 5, 10, 5 }},
+        {{ 0, 7, 12, 7, 16, 12, 7, 4, 0, 4, 7, 12, 19, 16, 12, 7 }},
+        {{ 0, -5, 7, 2, 12, 5, 14, 7, 19, 12, 24, 14, 7, 2, 12, 0 }}
+    }};
     juce::ValueTree sequenceState ("SEQUENCER");
     sequenceState.setProperty ("schema", 2, nullptr); sequenceState.setProperty ("enabled", true, nullptr);
     sequenceState.setProperty ("mode", (int) settings.mode, nullptr); sequenceState.setProperty ("outputMode", (int) settings.outputMode, nullptr); sequenceState.setProperty ("targetScope", (int) settings.targetScope, nullptr); sequenceState.setProperty ("targetLayer", settings.targetLayer, nullptr); sequenceState.setProperty ("division", (int) settings.division, nullptr);
@@ -2043,16 +2166,25 @@ void RetroMatchSynthAudioProcessor::loadFactoryPreset (int index)
     for (int i = 0; i < RetroMatchSequencer::maxSteps; ++i)
     {
         RetroMatchSequencer::Step step;
-        step.rest = i >= settings.length;
-        step.semitone = motif[(size_t) (i % motif.size())];
-        step.octave = variation == 3 ? i / 12 : ((i == 4 || i == 12) ? 1 : 0);
-        step.velocity = 0.72f + (i % 4 == 0 ? 0.22f : 0.0f);
-        step.gate = i % 4 == 3 ? 0.55f : 0.82f;
-        step.probability = i % 7 == 6 ? 0.72f : 1.0f;
+        step.rest = i >= settings.length
+                 || (patternStyle == 2 && (i == 1 || i == 6 || i == 9 || i == 14))
+                 || (patternStyle == 4 && (i == 3 || i == 11));
+        step.semitone = motifs[(size_t) patternStyle][(size_t) (i % 16)];
+        step.octave = patternStyle == 3 ? juce::jmin (2, i / 6) : ((i == 4 || i == 12) ? 1 : 0);
+        step.velocity = juce::jlimit (0.55f, 0.98f, 0.64f + (i % (patternStyle == 0 ? 4 : 3) == 0 ? 0.25f : 0.0f)
+                                             + (patternStyle == 5 && (i & 1) != 0 ? 0.08f : 0.0f));
+        step.gate = patternStyle == 0 ? (i % 4 == 3 ? 0.55f : 0.82f)
+                                      : patternStyle == 2 ? (i & 1 ? 0.42f : 0.92f)
+                                      : patternStyle == 3 ? 0.68f : 0.76f + (i % 4 == 0 ? 0.12f : 0.0f);
+        step.probability = patternStyle == 5 ? (i % 5 == 4 ? 0.58f : 0.86f)
+                                             : (patternStyle == 2 && (i % 8 == 7) ? 0.78f : 1.0f);
         step.ratchet = variation >= 20 && i % 4 == 3 ? 2 : (i % 8 == 7 ? 2 : 1);
-        step.macro = variation == 3
+        step.macro = patternStyle == 3
             ? std::array<float, 2> {{ (float) i / juce::jmax (1, settings.length - 1), (float) i / juce::jmax (1, settings.length - 1) }}
-            : std::array<float, 2> {{ (float) (i % 8) / 7.0f, (float) ((i * 3) % 8) / 7.0f }};
+            : patternStyle == 0
+                ? std::array<float, 2> {{ (float) (i % 4) / 3.0f, (float) ((i / 4) % 4) / 3.0f }}
+                : std::array<float, 2> {{ (float) ((i * (patternStyle + 2)) % 9) / 8.0f,
+                                          (float) ((i * 3 + patternStyle) % 9) / 8.0f }};
         melodyTransport.setSequencerStep (i, step);
         juce::ValueTree child ("STEP");
         child.setProperty ("index", i, nullptr); child.setProperty ("enabled", step.enabled, nullptr); child.setProperty ("rest", step.rest, nullptr);
@@ -2072,7 +2204,7 @@ void RetroMatchSynthAudioProcessor::randomizePreset()
     auto& random = juce::Random::getSystemRandom(); const auto seed = random.nextInt64();
     const int family = random.nextInt (10);
     const int variation = 5 + random.nextInt (5);
-    const int presetIndex = 10 + family * 10 + variation;
+    const int presetIndex = 10 + family * FactoryPresetDesign::variationsPerFamily + variation;
     auto patch = SoundMatcher::makeVariation (makeFactoryPreset (presetIndex), seed, 0.06f + random.nextFloat() * 0.08f);
     patch.outputGainDb = juce::jlimit (-10.0f, -5.0f, patch.outputGainDb);
     patch.noiseMix = juce::jmin (patch.noiseMix, 0.15f);
