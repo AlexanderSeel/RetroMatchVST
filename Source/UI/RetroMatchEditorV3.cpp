@@ -438,7 +438,7 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
     panicButton.setTooltip ("Global panic: immediately release all active synth, sequencer, melody and editor notes.");
     panicButton.onClick = [this] { proc.panicAllNotesOff(); };
     addAndMakeVisible (panicButton);
-    cpuUsageLabel.setText ("CPU 0%", juce::dontSendNotification);
+    cpuUsageLabel.setText ("CPU 0.00%", juce::dontSendNotification);
     cpuUsageLabel.setJustificationType (juce::Justification::centred);
     cpuUsageLabel.setColour (juce::Label::textColourId, juce::Colour (0xffb7c5c8));
     cpuUsageLabel.setFont (juce::Font (juce::FontOptions (9.0f, juce::Font::bold)));
@@ -1496,17 +1496,18 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     footer.removeFromTop (3);
     status.setBounds (footer);
 
-    // Candidate decisions are a fixed-height stacked group. Dividing all
-    // remaining workspace height made A/B/C become unreadably shallow when
-    // the editor was shortened, while wasting space in a tall editor.
+    // Candidate decisions use a responsive three-column dock. This keeps the
+    // three alternatives visible together and uses the workspace width rather
+    // than consuming three separate vertical rows.
     const int candidateGap = 5;
-    const int candidateHeight = 54;
-    auto candidateRows = w.removeFromBottom (candidateHeight * 3 + candidateGap * 2);
-    candidateA.setBounds (candidateRows.removeFromTop (candidateHeight));
-    candidateRows.removeFromTop (candidateGap);
-    candidateB.setBounds (candidateRows.removeFromTop (candidateHeight));
-    candidateRows.removeFromTop (candidateGap);
-    candidateC.setBounds (candidateRows.removeFromTop (candidateHeight));
+    const int candidateHeight = 94;
+    auto candidateColumns = w.removeFromBottom (candidateHeight);
+    const int candidateWidth = juce::jmax (1, (candidateColumns.getWidth() - candidateGap * 2) / 3);
+    candidateA.setBounds (candidateColumns.removeFromLeft (candidateWidth));
+    candidateColumns.removeFromLeft (candidateGap);
+    candidateB.setBounds (candidateColumns.removeFromLeft (candidateWidth));
+    candidateColumns.removeFromLeft (candidateGap);
+    candidateC.setBounds (candidateColumns);
 
     layoutPages();
 }
@@ -2136,7 +2137,7 @@ void RetroMatchSynthAudioProcessorEditor::timerCallback()
     outputMeter.repaint();
     masterMeter.repaint();
     const float cpu = proc.getCpuUsagePercent();
-    cpuUsageLabel.setText ("CPU " + juce::String (cpu, 0) + "%", juce::dontSendNotification);
+    cpuUsageLabel.setText ("CPU " + juce::String (cpu, 2) + "%", juce::dontSendNotification);
     cpuUsageLabel.setColour (juce::Label::textColourId, cpu > 85.0f ? juce::Colour (0xffff9673) : juce::Colour (0xffb7c5c8));
 }
 

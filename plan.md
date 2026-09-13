@@ -115,7 +115,7 @@ Compare is a semantic residual-correction surface, not a second synthesizer. Eve
 - [x] Add approximate level-invariance assertions for controls that should not act as loudness controls, especially Width/Brightness.
 - [x] Add concise UI help/tooltips documenting each control's actual dimension/unit.
 - [x] Keep the A/B/C candidate decisions as a fixed-height stacked row group anchored above the morph/status footer, so candidate cards remain readable at short editor heights and use tall layouts efficiently.
-- [x] Keep A/B/C as readable full-width rows with a fixed 54 px height and place them in the bottom workspace dock; the large reference editor now has a taller waveform and a dedicated, readable action area rather than compressing its three primary actions into the footer.
+- [x] Keep A/B/C as readable equal-width columns in a responsive bottom workspace dock, with enough height for scores and metric bars; the large reference editor now has a taller waveform and a dedicated, readable action area rather than compressing its three primary actions into the footer.
 
 ### Compare acceptance
 
