@@ -860,7 +860,10 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
             return;
         }
         auto* content = new ReferenceEditorDialog (proc);
-        content->setSize (1120, 680);
+        // Give the detailed editor enough vertical room for readable knobs and
+        // full-height action buttons; it remains resizable down to a compact
+        // but usable layout through the dialog limits below.
+        content->setSize (1240, 780);
         juce::DialogWindow::LaunchOptions options;
         options.content.setOwned (content);
         options.dialogTitle = "RM-01  /  LARGE REFERENCE EDITOR";
@@ -869,7 +872,7 @@ RetroMatchSynthAudioProcessorEditor::RetroMatchSynthAudioProcessorEditor (RetroM
         options.useNativeTitleBar = true;
         options.resizable = true;
         options.componentToCentreAround = this;
-        if (auto* window = options.launchAsync()) window->setResizeLimits (820, 520, 1600, 1000);
+        if (auto* window = options.launchAsync()) window->setResizeLimits (820, 680, 1600, 1000);
     };
     referenceRegion.onRegion = [this] (double first, double last, bool commit)
     {
@@ -1496,8 +1499,8 @@ void RetroMatchSynthAudioProcessorEditor::resized()
     // Candidate decisions are a fixed-height stacked group. Dividing all
     // remaining workspace height made A/B/C become unreadably shallow when
     // the editor was shortened, while wasting space in a tall editor.
-    const int candidateGap = 6;
-    const int candidateHeight = 46;
+    const int candidateGap = 5;
+    const int candidateHeight = 54;
     auto candidateRows = w.removeFromBottom (candidateHeight * 3 + candidateGap * 2);
     candidateA.setBounds (candidateRows.removeFromTop (candidateHeight));
     candidateRows.removeFromTop (candidateGap);

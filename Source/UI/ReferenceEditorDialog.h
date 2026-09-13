@@ -185,7 +185,11 @@ public:
     {
         auto area = getLocalBounds().reduced (18);
         area.removeFromTop (50);
-        const int waveH = juce::jlimit (245, 350, (int) std::round (area.getHeight() * 0.44));
+        // The large editor uses the same selection semantics and visual
+        // language as ReferenceRegion, but gives the waveform enough height
+        // to inspect transients and the fade envelope without compressing the
+        // controls below it.
+        const int waveH = juce::jlimit (260, 390, (int) std::round (area.getHeight() * 0.43));
         waveform.setBounds (area.removeFromTop (waveH).reduced (1));
         area.removeFromTop (8);
 
@@ -205,7 +209,7 @@ public:
         pan.setBounds (viewRow.reduced (2, 0));
 
         area.removeFromTop (7);
-        toneSectionBounds = area.removeFromTop (148).toFloat();
+        toneSectionBounds = area.removeFromTop (170).toFloat();
         auto tone = toneSectionBounds.toNearestInt().reduced (9, 7);
         tone.removeFromTop (22);
         const int cells = 7;
@@ -222,7 +226,7 @@ public:
         }
 
         area.removeFromTop (7);
-        auto utility = area.removeFromTop (40);
+        auto utility = area.removeFromTop (44);
         normalizePreview.setBounds (utility.removeFromLeft (198).reduced (2));
         fullSelection.setBounds (utility.removeFromLeft (120).reduced (2));
         fitSelection.setBounds (utility.removeFromLeft (120).reduced (2));
@@ -231,11 +235,11 @@ public:
         resetEdits.setBounds (utility.removeFromLeft (105).reduced (2));
 
         area.removeFromTop (5);
-        actionSectionBounds = area.removeFromTop (86).toFloat();
+        actionSectionBounds = area.removeFromTop (104).toFloat();
         auto actions = actionSectionBounds.toNearestInt().reduced (9, 6);
         actions.removeFromTop (22);
         // Never collapse a primary action into a thin text strip.
-        if (actions.getHeight() > 42) actions = actions.withHeight (juce::jmax (36, actions.getHeight()));
+        if (actions.getHeight() > 42) actions = actions.withHeight (juce::jmax (40, actions.getHeight()));
         const int third = actions.getWidth() / 3;
         applyResynth.setBounds (actions.removeFromLeft (third).reduced (2));
         useForMidi.setBounds (actions.removeFromLeft (third).reduced (2));
